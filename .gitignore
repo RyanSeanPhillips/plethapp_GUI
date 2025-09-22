@@ -1,0 +1,48 @@
+@"
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE/project
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build/packaging
+build/
+dist/
+*.spec
+
+# Data/outputs (do NOT back these up)
+Pleth_App_analysis/
+*.npz
+*_bundle.npz
+*_means_by_time.csv
+*_breaths.csv
+*.csv
+
+# Raw data (do NOT back these up)
+*.abf
+
+# Ignore any folder literally named 'old' or 'images' anywhere
+**/old/**
+# **/images/**
+
+# Keep the app icon (even if you later move it into an images folder)
+!assets/plethapp_thumbnail.ico
+"@ | Set-Content -Encoding UTF8 .gitignore
