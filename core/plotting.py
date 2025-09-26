@@ -54,6 +54,7 @@ class PlotHost(QWidget):
         self.scatter_offsets = None
         self.scatter_expmins = None
         self.scatter_expoffs = None
+        self._sigh_artist = None
 
         #Continuious Breath metrics
         self.ax_y2 = None
@@ -598,43 +599,124 @@ class PlotHost(QWidget):
 
 
 
-    def update_sighs(self, t, y, size=140, offset_frac=0.03):
-        """Draw yellow stars slightly above given (t,y) points."""
-        if not self.fig.axes:
+    # def update_sighs(self, t, y, size=140, offset_frac=0.03):
+    #     """Draw yellow stars slightly above given (t,y) points."""
+    #     if not self.fig.axes:
+    #         return
+    #     ax = self.fig.axes[0]
+
+    #     # compute small vertical offset relative to current y-span
+    #     ymin, ymax = ax.get_ylim()
+    #     dy = (ymax - ymin) * float(offset_frac if offset_frac is not None else 0.03)
+    #     y_plot = (np.asarray(y, dtype=float) + dy)
+
+    #     if self.scatter_sighs is None or self.scatter_sighs.axes is not ax:
+    #         self.scatter_sighs = ax.scatter(
+    #             np.asarray(t, dtype=float),
+    #             y_plot,
+    #             s=size,
+    #             marker="*",
+    #             color="yellow",
+    #             edgecolors="black",
+    #             linewidths=0.6,
+    #             zorder=6,
+    #             clip_on=False,
+    #         )
+    #     else:
+    #         self.scatter_sighs.set_offsets(np.c_[np.asarray(t, dtype=float), y_plot])
+
+    #     # keep stars “above” even if limits change later
+    #     ax.figure.canvas.draw_idle()
+
+    # def clear_sighs(self):
+    #     if self.scatter_sighs is not None:
+    #         try:
+    #             self.scatter_sighs.remove()
+    #         except Exception:
+    #             pass
+    #         self.scatter_sighs = None
+    #         if self.fig:
+    #             self.fig.canvas.draw_idle()
+
+
+
+    # def update_sighs(self, t, y, size=90, color="#f7c948"):
+    #     """
+    #     Draw star markers at given points on the main axis.
+    #     """
+    #     if not hasattr(self, "fig") or not self.fig.axes:
+    #         return
+    #     ax = self.fig.axes[0]
+
+    #     # remove previous
+    #     try:
+    #         if self._sigh_artist is not None:
+    #             self._sigh_artist.remove()
+    #     except Exception:
+    #         pass
+    #     self._sigh_artist = None
+
+    #     # draw hollow star for visibility over traces
+    #     self._sigh_artist = ax.scatter(
+    #         t, y,
+    #         marker="*",
+    #         s=size,
+    #         facecolors="none",
+    #         edgecolors=color,
+    #         linewidths=1.8,
+    #         zorder=7,
+    #     )
+    #     self.canvas.draw_idle()
+
+
+    def update_sighs(self, t, y, size=90, color="#ff9f1a", edge=None, filled=True):
+        """
+        Draw star markers at given points on the main axis.
+        """
+        if not hasattr(self, "fig") or not self.fig.axes:
             return
         ax = self.fig.axes[0]
 
-        # compute small vertical offset relative to current y-span
-        ymin, ymax = ax.get_ylim()
-        dy = (ymax - ymin) * float(offset_frac if offset_frac is not None else 0.03)
-        y_plot = (np.asarray(y, dtype=float) + dy)
+        # remove previous
+        try:
+            if self._sigh_artist is not None:
+                self._sigh_artist.remove()
+        except Exception:
+            pass
+        self._sigh_artist = None
 
-        if self.scatter_sighs is None or self.scatter_sighs.axes is not ax:
-            self.scatter_sighs = ax.scatter(
-                np.asarray(t, dtype=float),
-                y_plot,
-                s=size,
-                marker="*",
-                color="yellow",
-                edgecolors="black",
-                linewidths=0.6,
-                zorder=6,
-                clip_on=False,
-            )
-        else:
-            self.scatter_sighs.set_offsets(np.c_[np.asarray(t, dtype=float), y_plot])
+        face = (color if filled else "none")
+        if edge is None:
+            edge = color
 
-        # keep stars “above” even if limits change later
-        ax.figure.canvas.draw_idle()
+        self._sigh_artist = ax.scatter(
+            t, y,
+            marker="*",
+            s=size,
+            facecolors=face,
+            edgecolors=edge,
+            linewidths=1.5,
+            zorder=8,
+        )
+        self.canvas.draw_idle()
 
     def clear_sighs(self):
-        if self.scatter_sighs is not None:
-            try:
-                self.scatter_sighs.remove()
-            except Exception:
-                pass
-            self.scatter_sighs = None
-            if self.fig:
-                self.fig.canvas.draw_idle()
+        try:
+            if self._sigh_artist is not None:
+                self._sigh_artist.remove()
+        except Exception:
+            pass
+        self._sigh_artist = None
+        if hasattr(self, "canvas"):
+            self.canvas.draw_idle()
 
-    
+
+    def clear_sighs(self):
+        try:
+            if self._sigh_artist is not None:
+                self._sigh_artist.remove()
+        except Exception:
+            pass
+        self._sigh_artist = None
+        if hasattr(self, "canvas"):
+            self.canvas.draw_idle()
