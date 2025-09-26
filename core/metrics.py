@@ -30,6 +30,9 @@ METRIC_SPECS: List[Tuple[str, str]] = [
     ("Vent proxy (insp area / cycle dur)",    "vent_proxy"),
     ("d/dt (1st derivative)",                 "d1"),
     ("d²/dt² (2nd derivative)",               "d2"),
+    ("Eupnic breathing regions",              "eupnic"),
+    ("Apnea detection",                       "apnea"),
+    ("Breathing regularity score (RMSSD)",    "regularity"),
 ]
 
 
@@ -610,6 +613,290 @@ def compute_d2(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np
     return np.gradient(d1, t)
 
 
+################################################################################
+##### Eupnic Breathing Detection
+################################################################################
+
+def _sliding_window_cv(signal: np.ndarray, t: np.ndarray, window_sec: float) -> np.ndarray:
+    """
+    Compute coefficient of variation (CV = std/mean) efficiently using scipy.ndimage.
+    Falls back to simple decimation if scipy not available.
+    Returns array same length as signal with CV at each point.
+    """
+    N = len(signal)
+    cv = np.full(N, np.nan, dtype=float)
+
+    if N < 2 or window_sec <= 0:
+        return cv
+
+    # For efficiency with large datasets, use a decimated approach
+    # Sample every ~0.1 seconds instead of every sample
+    dt_mean = np.mean(np.diff(t)) if len(t) > 1 else 1.0
+    decimate_factor = max(1, int(0.1 / dt_mean))  # Sample every ~0.1s
+
+    # Create decimated indices
+    indices = np.arange(0, N, decimate_factor)
+    if indices[-1] != N - 1:
+        indices = np.append(indices, N - 1)  # Always include last point
+
+    window_samples = max(2, int(window_sec / dt_mean))
+    half_window = window_samples // 2
+
+    # Compute CV only at decimated points
+    for idx in indices:
+        start = max(0, idx - half_window)
+        end = min(N, idx + half_window + 1)
+
+        window_data = signal[start:end]
+        valid_data = window_data[~np.isnan(window_data)]
+
+        if len(valid_data) >= 3:  # Need at least 3 points for meaningful CV
+            mean_val = np.mean(valid_data)
+            std_val = np.std(valid_data, ddof=1)
+            if mean_val > 0:
+                cv[idx] = std_val / mean_val
+
+    # Forward-fill CV values between computed points
+    last_valid = np.nan
+    for i in range(N):
+        if not np.isnan(cv[i]):
+            last_valid = cv[i]
+        elif not np.isnan(last_valid):
+            cv[i] = last_valid
+
+    return cv
+
+
+def _merge_nearby_regions(mask: np.ndarray, t: np.ndarray, max_gap_sec: float = 0.5) -> np.ndarray:
+    """
+    Merge nearby True regions in a boolean mask if gaps are smaller than max_gap_sec.
+    """
+    if np.sum(mask) == 0:
+        return mask.copy()
+
+    # Find transitions
+    diff_mask = np.diff(mask.astype(int))
+    starts = np.where(diff_mask == 1)[0] + 1  # Start of True regions
+    ends = np.where(diff_mask == -1)[0] + 1   # End of True regions
+
+    # Handle edge cases
+    if mask[0]:
+        starts = np.concatenate([[0], starts])
+    if mask[-1]:
+        ends = np.concatenate([ends, [len(mask)]])
+
+    if len(starts) == 0 or len(ends) == 0:
+        return mask.copy()
+
+    # Merge regions with small gaps
+    merged_mask = np.zeros_like(mask, dtype=bool)
+
+    current_start = starts[0]
+    current_end = ends[0]
+
+    for i in range(1, len(starts)):
+        gap_duration = t[starts[i]] - t[current_end - 1] if current_end < len(t) and starts[i] < len(t) else float('inf')
+
+        if gap_duration <= max_gap_sec:
+            # Merge with current region
+            current_end = ends[i]
+        else:
+            # Finalize current region and start new one
+            merged_mask[current_start:current_end] = True
+            current_start = starts[i]
+            current_end = ends[i]
+
+    # Finalize last region
+    merged_mask[current_start:current_end] = True
+
+    return merged_mask
+
+
+def _filter_duration(mask: np.ndarray, t: np.ndarray, min_duration_sec: float) -> np.ndarray:
+    """
+    Keep only True regions that last at least min_duration_sec.
+    """
+    if np.sum(mask) == 0:
+        return mask.copy()
+
+    # Find connected regions
+    diff_mask = np.diff(mask.astype(int))
+    starts = np.where(diff_mask == 1)[0] + 1
+    ends = np.where(diff_mask == -1)[0] + 1
+
+    # Handle edge cases
+    if mask[0]:
+        starts = np.concatenate([[0], starts])
+    if mask[-1]:
+        ends = np.concatenate([ends, [len(mask)]])
+
+    if len(starts) == 0 or len(ends) == 0:
+        return np.zeros_like(mask, dtype=bool)
+
+    # Filter by duration
+    filtered_mask = np.zeros_like(mask, dtype=bool)
+
+    for start, end in zip(starts, ends):
+        if start < len(t) and end <= len(t):
+            duration = t[end - 1] - t[start] if end > start else 0
+            if duration >= min_duration_sec:
+                filtered_mask[start:end] = True
+
+    return filtered_mask
+
+
+def detect_eupnic_regions(
+    t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None,
+    freq_threshold_hz: float = 5.0,
+    min_duration_sec: float = 2.0
+) -> np.ndarray:
+    """
+    Detect regions of eupnic (normal, regular) breathing.
+
+    Simplified eupnic breathing criteria:
+    - Respiratory rate below freq_threshold_hz
+    - Sustained for at least 2 seconds
+
+    Returns:
+        Binary array (0/1) same length as y, where 1 indicates eupnic breathing
+    """
+    N = len(y)
+    eupnic_mask = np.zeros(N, dtype=bool)
+
+    # Early exit for insufficient data
+    if N < 100 or onsets is None or len(onsets) < 3:
+        return eupnic_mask.astype(float)
+
+    # Get instantaneous frequency
+    freq_hz = compute_if(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs)
+
+    # Step 1: Apply frequency threshold (only criterion now)
+    freq_valid = (freq_hz > 0) & (freq_hz < freq_threshold_hz) & (~np.isnan(freq_hz))
+
+    if np.sum(freq_valid) == 0:
+        return eupnic_mask.astype(float)
+
+    # Step 2: Pre-filter chunks by minimum duration (must be ≥ 2s to qualify for merging)
+    prefiltered_mask = _filter_duration(freq_valid, t, min_duration_sec)
+
+    # Step 3: Merge nearby pre-qualified regions (fill small gaps between long chunks)
+    final_mask = _merge_nearby_regions(prefiltered_mask, t, max_gap_sec=0.5)
+
+    return final_mask.astype(float)
+
+
+def detect_apneas(
+    t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None,
+    min_apnea_duration_sec: float = 0.5
+) -> np.ndarray:
+    """
+    Detect apneic periods (absence of breathing) longer than threshold.
+
+    Apnea criteria:
+    - Gap between consecutive breath onsets > min_apnea_duration_sec
+    - Marked as binary signal where 1 = apneic period
+
+    Returns:
+        Binary array (0/1) same length as y, where 1 indicates apnea
+    """
+    N = len(y)
+    apnea_mask = np.zeros(N, dtype=bool)
+
+    # Early exit for insufficient data
+    if N < 10 or onsets is None or len(onsets) < 2:
+        return apnea_mask.astype(float)
+
+    onsets = np.asarray(onsets, dtype=int)
+
+    # Find gaps between consecutive onsets
+    for i in range(len(onsets) - 1):
+        onset_current = int(onsets[i])
+        onset_next = int(onsets[i + 1])
+
+        # Calculate gap duration
+        if onset_next < len(t) and onset_current < len(t):
+            gap_duration = t[onset_next] - t[onset_current]
+
+            # If gap is longer than threshold, mark as apnea
+            if gap_duration > min_apnea_duration_sec:
+                # Mark the gap region (from current onset to next onset)
+                start_idx = max(0, onset_current)
+                end_idx = min(N, onset_next)
+                apnea_mask[start_idx:end_idx] = True
+
+    return apnea_mask.astype(float)
+
+
+def compute_regularity_score(
+    t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None
+) -> np.ndarray:
+    """
+    Compute breathing regularity score using RMSSD (Root Mean Square of Successive Differences).
+
+    Lower values = more regular breathing patterns.
+    Higher values = more irregular/variable breathing patterns.
+
+    Returns:
+        Stepwise-constant array over breath cycles, where each cycle gets a regularity score
+        based on a sliding window of recent frequency measurements.
+    """
+    N = len(y)
+
+    # Early exit for insufficient data
+    if N < 100 or onsets is None or len(onsets) < 3:
+        return np.full(N, np.nan, dtype=float)
+
+    # Get instantaneous frequency signal
+    freq_hz = compute_if(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs)
+
+    # Extract valid frequency values (skip NaNs and zeros)
+    valid_mask = (freq_hz > 0) & (~np.isnan(freq_hz))
+    if np.sum(valid_mask) < 3:
+        return np.full(N, np.nan, dtype=float)
+
+    # Compute RMSSD in sliding windows across breath cycles
+    onsets = np.asarray(onsets, dtype=int)
+    spans = _spans_from_bounds(onsets, N)
+    regularity_values = []
+
+    window_size = 5  # Number of consecutive cycles to analyze
+
+    for i in range(len(onsets)):
+        # Define window of cycles around current cycle
+        start_cycle = max(0, i - window_size // 2)
+        end_cycle = min(len(onsets), i + window_size // 2 + 1)
+
+        if end_cycle - start_cycle < 3:  # Need at least 3 cycles for meaningful RMSSD
+            regularity_values.append(np.nan)
+            continue
+
+        # Extract frequency values for cycles in window
+        window_freqs = []
+        for j in range(start_cycle, end_cycle):
+            cycle_start = onsets[j]
+            cycle_end = onsets[j + 1] if j + 1 < len(onsets) else N
+
+            # Get frequency value for this cycle (should be constant across cycle)
+            cycle_freq_vals = freq_hz[cycle_start:cycle_end]
+            valid_cycle_freqs = cycle_freq_vals[~np.isnan(cycle_freq_vals)]
+
+            if len(valid_cycle_freqs) > 0:
+                window_freqs.append(valid_cycle_freqs[0])  # Take first valid value (they should all be the same)
+
+        # Compute RMSSD for this window
+        if len(window_freqs) >= 3:
+            freq_diffs = np.diff(window_freqs)
+            rmssd = np.sqrt(np.mean(freq_diffs**2))
+            regularity_values.append(float(rmssd))
+        else:
+            regularity_values.append(np.nan)
+
+    # Extend to match number of spans (including final span)
+    if len(regularity_values) < len(spans):
+        regularity_values.append(regularity_values[-1] if regularity_values else np.nan)
+
+    return _step_fill(N, spans, regularity_values)
+
 
 # Registry: key -> function
 METRICS: Dict[str, Callable] = {
@@ -623,4 +910,7 @@ METRICS: Dict[str, Callable] = {
     "vent_proxy": compute_vent_proxy,
     "d1":         compute_d1,
     "d2":         compute_d2,
+    "eupnic":     detect_eupnic_regions,
+    "apnea":      detect_apneas,
+    "regularity": compute_regularity_score,
 }

@@ -640,12 +640,58 @@ def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
                 if k_d1_first is not None:
                     expmins.append(int(k_d1_first))
 
-            # ---- Exp offset (NEW rule):
-            # First y ZC after offset but strictly before the next peak.
+            # ---- Exp offset (ENHANCED rule):
+            # Choose the earlier of:
+            # 1) First y ZC after offset but before next peak
+            # 2) First dy ZC after expiratory peak (plus padding) with y closer to zero and before next onset
+
+            # Find the expiratory peak (minimum amplitude) for this cycle
+            exp_peak_idx = None
+            exp_peak_val = None
+            if pk_next - pk_curr >= 2:
+                exp_peak_idx = int(pk_curr + 1 + int(np.argmin(y[pk_curr + 1:pk_next])))
+                exp_peak_val = y[exp_peak_idx]
+
+            # Method 1: First y ZC after offset but before next peak
             i_end_peak = min(pk_next, N)
             k_y = _first_zc_after_from_zc(zc_y, i_start - 1, i_end_peak)
             if k_y is not None and k_y < pk_next:
-                expoffs.append(int(k_y))
+                k_y_valid = k_y
+            else:
+                k_y_valid = None
+
+            # Method 2: First dy ZC after expiratory peak (plus padding) with amplitude constraint
+            k_dy_valid = None
+            if exp_peak_idx is not None and exp_peak_val is not None:
+                # Add small padding after expiratory peak to avoid finding the peak itself
+                padding_samples = max(1, int(0.010 * sr_hz))  # 10ms padding
+                search_start = max(i_start, exp_peak_idx + padding_samples)
+                i_end_onset = min(int(on[i + 1]), N) if i + 1 < len(on) else N
+
+                # For negative expiratory peaks, we want y values closer to zero (less negative)
+                # Set threshold as 50% of the way from expiratory peak toward zero
+                if exp_peak_val < 0:
+                    threshold_closer_to_zero = 0.5 * exp_peak_val  # 50% of negative value = closer to zero
+                else:
+                    threshold_closer_to_zero = 0.5 * exp_peak_val  # 50% of positive value
+
+                # Find dy zero crossings after expiratory peak + padding and before next onset
+                dy_crossings = zc_dy[(zc_dy >= search_start - 1) & (zc_dy <= i_end_onset)]
+
+                for zc_idx in dy_crossings:
+                    crossing_point = int(zc_idx + 1)  # Right side of crossing
+                    if crossing_point < len(y):
+                        y_val = y[crossing_point]
+                        # Check if y value is closer to zero than the threshold
+                        if (exp_peak_val < 0 and y_val > threshold_closer_to_zero) or \
+                           (exp_peak_val >= 0 and y_val < threshold_closer_to_zero):
+                            k_dy_valid = crossing_point
+                            break  # Take the first one that meets criteria
+
+            # Choose the earlier of the two valid methods
+            candidates = [k for k in [k_y_valid, k_dy_valid] if k is not None]
+            if candidates:
+                expoffs.append(int(min(candidates)))
             else:
                 # fallback: trough between current and next peak
                 if pk_next - pk_curr >= 2:

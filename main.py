@@ -596,6 +596,9 @@ class MainWindow(QMainWindow):
                 max_points=None
             )
 
+            # Clear any existing region overlays (will be recomputed if needed)
+            self.plot_host.clear_region_overlays()
+
             # Overlay peaks for the current sweep (if computed)
             pks = getattr(st, "peaks_by_sweep", {}).get(s, None)
             if pks is not None and len(pks):
@@ -681,6 +684,38 @@ class MainWindow(QMainWindow):
             else:
                 self.plot_host.clear_y2()
                 self.plot_host.fig.tight_layout()
+
+            # ---- Automatic Region Overlays (Eupnea & Apnea) ----
+            try:
+                # Compute eupnea and apnea masks for this sweep
+                br = getattr(st, "breath_by_sweep", {}).get(s, None)
+                if br and len(t) > 100:  # Only if we have breath data and sufficient points
+                    # Extract breath events
+                    pks = getattr(st, "peaks_by_sweep", {}).get(s, None)
+                    on_idx = br.get("onsets", [])
+                    off_idx = br.get("offsets", [])
+                    ex_idx = br.get("expmins", [])
+                    exoff_idx = br.get("expoffs", [])
+
+                    # Compute eupnea regions (breathing < 5Hz for ≥ 2s)
+                    eupnea_mask = metrics.METRICS["eupnic"](
+                        t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx
+                    )
+
+                    # Compute apnea regions (gaps > 0.5s between breaths)
+                    apnea_mask = metrics.METRICS["apnea"](
+                        t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx
+                    )
+
+                    # Apply the overlays using plot time (with stim normalization if applicable)
+                    self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask)
+                else:
+                    self.plot_host.clear_region_overlays()
+            except Exception as e:
+                # Graceful fallback if overlay computation fails
+                print(f"Warning: Could not compute region overlays: {e}")
+                self.plot_host.clear_region_overlays()
+
             self._refresh_threshold_lines()
 
             # If this sweep is omitted, dim the plot and hide markers

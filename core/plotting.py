@@ -710,13 +710,79 @@ class PlotHost(QWidget):
         if hasattr(self, "canvas"):
             self.canvas.draw_idle()
 
+    # ------- Region overlays (eupnea/apnea) -------
+    def update_region_overlays(self, t, eupnea_mask, apnea_mask):
+        """
+        Add horizontal line overlays for eupnea (thin black) and apnea (thin red) regions.
 
-    def clear_sighs(self):
-        try:
-            if self._sigh_artist is not None:
-                self._sigh_artist.remove()
-        except Exception:
-            pass
-        self._sigh_artist = None
-        if hasattr(self, "canvas"):
-            self.canvas.draw_idle()
+        Args:
+            t: time array
+            eupnea_mask: binary array (0/1) indicating eupnic regions
+            apnea_mask: binary array (0/1) indicating apneic regions
+        """
+        self.clear_region_overlays()
+
+        if self.ax_main is None:
+            return
+
+        # Get current y-axis limits to position the overlay lines
+        ylim = self.ax_main.get_ylim()
+        y_eupnea = ylim[1] - 0.01 * (ylim[1] - ylim[0])  # 99% of y-range (near top)
+        y_apnea = ylim[0] + 0.01 * (ylim[1] - ylim[0])   # 1% of y-range (near bottom)
+
+        # Storage for overlay artists
+        if not hasattr(self, '_region_overlays'):
+            self._region_overlays = []
+
+        # Add eupnea regions (thin black lines at top)
+        if eupnea_mask is not None and len(eupnea_mask) == len(t):
+            eupnea_regions = self._extract_regions(t, eupnea_mask)
+            for start_t, end_t in eupnea_regions:
+                line = self.ax_main.plot([start_t, end_t], [y_eupnea, y_eupnea],
+                                       color='#2e7d32', linewidth=1.5, alpha=0.8, zorder=10)[0]
+                self._region_overlays.append(line)
+
+        # Add apnea regions (thin red lines at bottom)
+        if apnea_mask is not None and len(apnea_mask) == len(t):
+            apnea_regions = self._extract_regions(t, apnea_mask)
+            for start_t, end_t in apnea_regions:
+                line = self.ax_main.plot([start_t, end_t], [y_apnea, y_apnea],
+                                       color='red', linewidth=1.5, alpha=0.8, zorder=10)[0]
+                self._region_overlays.append(line)
+
+        self.canvas.draw_idle()
+
+    def _extract_regions(self, t, mask):
+        """Extract continuous regions where mask == 1."""
+        import numpy as np
+        regions = []
+        if len(mask) == 0:
+            return regions
+
+        # Find transitions
+        diff_mask = np.diff(mask.astype(int))
+        starts = np.where(diff_mask == 1)[0] + 1  # Start of True regions
+        ends = np.where(diff_mask == -1)[0] + 1   # End of True regions
+
+        # Handle edge cases
+        if mask[0]:
+            starts = np.concatenate([[0], starts])
+        if mask[-1]:
+            ends = np.concatenate([ends, [len(mask)]])
+
+        # Convert indices to time values
+        for start_idx, end_idx in zip(starts, ends):
+            if start_idx < len(t) and end_idx <= len(t):
+                regions.append((t[start_idx], t[end_idx - 1]))
+
+        return regions
+
+    def clear_region_overlays(self):
+        """Clear all region overlay lines."""
+        if hasattr(self, '_region_overlays'):
+            for artist in self._region_overlays:
+                try:
+                    artist.remove()
+                except Exception:
+                    pass
+            self._region_overlays.clear()
