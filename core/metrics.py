@@ -87,6 +87,52 @@ def _trapz_seg(t: np.ndarray, y: np.ndarray, i0: int, i1: int) -> float:
     return float(np.trapz(y[i0c:i1c + 1], t[i0c:i1c + 1]))
 
 
+def _safe_array_access(arr: np.ndarray, index: int, default_value=None):
+    """
+    Safely access array element with bounds checking.
+    Returns default_value (or NaN) if index is out of bounds.
+    """
+    if arr is None or len(arr) == 0:
+        return np.nan if default_value is None else default_value
+    if 0 <= index < len(arr):
+        return arr[index]
+    return np.nan if default_value is None else default_value
+
+
+def _robust_cycle_bounds(onsets, offsets, peaks, i, N):
+    """
+    Robustly determine cycle boundaries for index i, handling missing data.
+    Returns (cycle_start, cycle_end, has_valid_onset, has_valid_offset).
+    """
+    # Default cycle boundaries based on available data
+    if onsets is not None and len(onsets) > i:
+        cycle_start = int(onsets[i])
+        has_valid_onset = True
+        if i + 1 < len(onsets):
+            cycle_end = int(onsets[i + 1])
+        else:
+            cycle_end = N  # Last cycle extends to end
+    elif peaks is not None and len(peaks) > i:
+        # Fallback to peak-based boundaries
+        pk_curr = int(peaks[i])
+        cycle_start = max(0, pk_curr - int(0.5 * 20))  # Assume ~20Hz sampling, 0.5s before peak
+        has_valid_onset = False
+        if i + 1 < len(peaks):
+            pk_next = int(peaks[i + 1])
+            cycle_end = pk_next
+        else:
+            cycle_end = min(N, pk_curr + int(0.5 * 20))  # 0.5s after peak
+    else:
+        # No usable data
+        return 0, N, False, False
+
+    # Check for valid offset
+    has_valid_offset = (offsets is not None and len(offsets) > i and
+                       cycle_start < int(offsets[i]) <= cycle_end)
+
+    return cycle_start, cycle_end, has_valid_onset, has_valid_offset
+
+
 # ---------- STUB COMPUTATIONS (return NaNs for now) ----------
 
 ################################################################################
@@ -350,13 +396,14 @@ def compute_area_insp(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None
 #     vals.append(vals[-1] if len(vals) else np.nan)
 #     return _step_fill(N, spans, vals)
 
-def compute_area_exp(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np.ndarray:
+def compute_area_exp(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None, debug=False) -> np.ndarray:
     """
     Expiratory area per cycle: integral of y from inspiratory offset -> expiratory offset.
     Returns a stepwise-constant array over onset→next-onset spans.
 
     If an expiratory offset for a cycle is missing or invalid, that cycle is NaN.
-    (Optionally, you could fall back to next onset if you want the old behavior.)
+    If any input values (t, y) contain NaN, returns NaN for that cycle.
+    If expiratory minimum is positive (above baseline), returns 0 (no valid expiratory phase).
     """
     N = len(y)
     out = np.full(N, np.nan, dtype=float)
@@ -371,36 +418,86 @@ def compute_area_exp(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None)
     spans = _spans_from_bounds(on, N)
 
     vals: list[float] = []
+    failure_count = 0
+
     for i in range(len(on) - 1):
         i0 = int(on[i])         # onset (start of cycle)
         i1 = int(on[i + 1])     # next onset (end of cycle)
 
         # need a valid inspiratory offset for this cycle
         if i >= len(off):
+            if debug:
+                print(f"  Area_exp cycle {i}: FAILED - missing insp offset (i={i}, len(off)={len(off)})")
             vals.append(np.nan)
+            failure_count += 1
             continue
         oi = int(off[i])
 
         # need a valid expiratory offset for this cycle
         if i >= len(exo):
+            if debug:
+                print(f"  Area_exp cycle {i}: FAILED - missing exp offset (i={i}, len(exo)={len(exo)})")
             vals.append(np.nan)
+            failure_count += 1
             continue
         ei = int(exo[i])
 
+        # Get expiratory minimum for this cycle (if available)
+        exp_min_val = None
+        if expmins is not None and i < len(expmins):
+            exp_min_idx = int(expmins[i])
+            if 0 <= exp_min_idx < len(y):
+                exp_min_val = y[exp_min_idx]
+
+        # If expiratory peak is positive, there's no valid expiratory phase
+        if exp_min_val is not None and exp_min_val > 0:
+            if debug:
+                print(f"  Area_exp cycle {i}: Set to 0 (exp_min={exp_min_val:.6f} > 0, no valid expiratory phase)")
+            vals.append(0.0)
+            continue
+
         # guards: oi must be inside cycle, and expoff must be after oi and before next onset
         if not (i0 <= oi < i1) or not (oi < ei <= i1):
+            if debug:
+                print(f"  Area_exp cycle {i}: FAILED - bounds check")
+                print(f"    Onset: {i0}, Next onset: {i1}")
+                print(f"    Insp offset: {oi} (valid: {i0 <= oi < i1})")
+                print(f"    Exp offset: {ei} (valid: {oi < ei <= i1})")
             vals.append(np.nan)
+            failure_count += 1
             continue
 
         # trapezoid integral over [oi, ei] (inclusive of ei via +1 end)
         left  = max(0, oi)
         right = min(N, ei + 1)
         if right - left < 2:
+            if debug:
+                print(f"  Area_exp cycle {i}: FAILED - integration window too small")
+                print(f"    left={left}, right={right}, width={right-left}")
             vals.append(np.nan)
+            failure_count += 1
             continue
 
-        area = float(np.trapz(y[left:right], t[left:right]))
+        # Check for NaN values in the integration window
+        t_seg = t[left:right]
+        y_seg = y[left:right]
+        if np.any(np.isnan(t_seg)) or np.any(np.isnan(y_seg)):
+            if debug:
+                print(f"  Area_exp cycle {i}: FAILED - NaN in integration window")
+            vals.append(np.nan)
+            failure_count += 1
+            continue
+
+        area = float(np.trapz(y_seg, t_seg))
         vals.append(area)
+
+        if debug and area == 0.0:
+            print(f"  Area_exp cycle {i}: Zero area calculated")
+            print(f"    Integration window: [{oi}, {ei}] ({right-left} points)")
+            print(f"    y range: [{y_seg.min():.6f}, {y_seg.max():.6f}]")
+
+    if debug and failure_count > 0:
+        print(f"  Area_exp: {failure_count}/{len(on)-1} cycles failed")
 
     # extend last span with last value
     vals.append(vals[-1] if len(vals) else np.nan)
@@ -493,11 +590,13 @@ def compute_ti(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np
 #     vals.append(vals[-1] if len(vals) else np.nan)
 #     return _step_fill(N, spans, vals)
 
-def compute_te(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np.ndarray:
+def compute_te(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None, debug=False) -> np.ndarray:
     """
     Te per cycle (seconds): time from inspiratory offset -> expiratory offset.
     Returns a stepwise-constant array over onset→next-onset spans.
     If either offset or expiratory offset for a cycle is missing/invalid, that cycle is NaN.
+    If expiratory minimum is positive (above baseline), returns 0 (no valid expiratory phase).
+    If calculated Te is ≤ 0, returns 0 (not NaN).
     """
     N = len(y)
     out = np.full(N, np.nan, dtype=float)
@@ -514,24 +613,66 @@ def compute_te(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np
     spans = _spans_from_bounds(on, N)
 
     vals: list[float] = []
+    failure_count = 0
+
     for i in range(len(on) - 1):
         i0 = int(on[i])         # onset (start of cycle)
         i1 = int(on[i + 1])     # next onset (end of cycle)
 
         if i >= len(off) or i >= len(exo):
+            if debug:
+                print(f"  Te cycle {i}: FAILED - missing offset/expoff (i={i}, len(off)={len(off)}, len(exo)={len(exo)})")
             vals.append(np.nan)
+            failure_count += 1
             continue
 
         oi = int(off[i])        # inspiratory offset
         ei = int(exo[i])        # expiratory offset
 
+        # Get expiratory minimum for this cycle (if available)
+        exp_min_val = None
+        if expmins is not None and i < len(expmins):
+            exp_min_idx = int(expmins[i])
+            if 0 <= exp_min_idx < len(y):
+                exp_min_val = y[exp_min_idx]
+
+        # If expiratory peak is positive, there's no valid expiratory phase
+        if exp_min_val is not None and exp_min_val > 0:
+            if debug:
+                print(f"  Te cycle {i}: Set to 0 (exp_min={exp_min_val:.6f} > 0, no valid expiratory phase)")
+            vals.append(0.0)
+            continue
+
+        # Check for NaN values in the time array
+        if np.isnan(t[oi]) or np.isnan(t[ei]):
+            if debug:
+                print(f"  Te cycle {i}: FAILED - NaN in time array (t[{oi}]={t[oi]}, t[{ei}]={t[ei]})")
+            vals.append(np.nan)
+            failure_count += 1
+            continue
+
         # Guards: offset inside cycle; expoff strictly after offset and before/equal next onset
         if not (i0 <= oi < i1) or not (oi < ei <= i1):
+            if debug:
+                print(f"  Te cycle {i}: FAILED - bounds check")
+                print(f"    Onset: {i0}, Next onset: {i1}")
+                print(f"    Insp offset: {oi} (valid: {i0 <= oi < i1})")
+                print(f"    Exp offset: {ei} (valid: {oi < ei <= i1})")
             vals.append(np.nan)
+            failure_count += 1
             continue
 
         dt = float(t[ei] - t[oi])
-        vals.append(dt if dt > 0 else np.nan)
+        # If Te is ≤ 0, clamp to 0 (not NaN)
+        result = max(0.0, dt)
+        vals.append(result)
+
+        if debug and result == 0.0:
+            print(f"  Te cycle {i}: Clamped to 0 (calculated dt={dt:.6f})")
+            print(f"    t[{oi}]={t[oi]:.6f}, t[{ei}]={t[ei]:.6f}")
+
+    if debug and failure_count > 0:
+        print(f"  Te: {failure_count}/{len(on)-1} cycles failed")
 
     # Extend last span with last value
     vals.append(vals[-1] if vals else np.nan)
@@ -898,15 +1039,33 @@ def compute_regularity_score(
     return _step_fill(N, spans, regularity_values)
 
 
+# Debug wrappers for diagnostic output
+def compute_te_debug(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None):
+    """Wrapper to enable debug output for Te calculation."""
+    print("\n=== DEBUG: Te Calculation ===")
+    result = compute_te(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs, debug=True)
+    print("=============================\n")
+    return result
+
+def compute_area_exp_debug(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None):
+    """Wrapper to enable debug output for expiratory area calculation."""
+    print("\n=== DEBUG: Expiratory Area Calculation ===")
+    result = compute_area_exp(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs, debug=True)
+    print("==========================================\n")
+    return result
+
+# Set this to True to enable detailed diagnostic output for Te and area_exp
+ENABLE_DEBUG_OUTPUT = True
+
 # Registry: key -> function
 METRICS: Dict[str, Callable] = {
     "if":         compute_if,
     "amp_insp":   compute_amp_insp,
     "amp_exp":    compute_amp_exp,
     "area_insp":  compute_area_insp,
-    "area_exp":   compute_area_exp,
+    "area_exp":   compute_area_exp_debug if ENABLE_DEBUG_OUTPUT else compute_area_exp,
     "ti":         compute_ti,
-    "te":         compute_te,
+    "te":         compute_te_debug if ENABLE_DEBUG_OUTPUT else compute_te,
     "vent_proxy": compute_vent_proxy,
     "d1":         compute_d1,
     "d2":         compute_d2,
@@ -914,3 +1073,12 @@ METRICS: Dict[str, Callable] = {
     "apnea":      detect_apneas,
     "regularity": compute_regularity_score,
 }
+
+# Optional: Enable robust metrics mode
+# Uncomment the following lines to use enhanced robust metrics with fallback strategies
+# try:
+#     from core.robust_metrics import enhance_metrics_with_robust_fallbacks
+#     METRICS = enhance_metrics_with_robust_fallbacks(METRICS)
+#     print("Enhanced metrics with robust fallbacks enabled.")
+# except ImportError:
+#     print("Robust metrics module not available. Using standard metrics.")

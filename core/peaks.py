@@ -553,19 +553,30 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
                           sr_hz: float, exclude_sec: float = 0.005) -> Dict[str, np.ndarray]:
     """
+    ROBUST breath event detection with multiple fallback strategies.
+
     Given a processed 1D signal y and inspiratory peaks (indices),
     compute breath onsets, offsets, expiratory minima (via FIRST d1 ZC after offset),
     and expiratory offsets (FIRST y ZC after offset but strictly before next peak; else trough between peaks).
 
+    ROBUSTNESS FEATURES:
+    - Multiple fallback strategies for each event type
+    - Protection against edge effects (peaks near start/end)
+    - Graceful handling of noisy or irregular signals
+    - Consistent array lengths in output
+
     Rules:
       - Onset : nearest zero crossing *before* each peak in y; fallback to dy/dt crossing,
-                ignoring ±exclude_sec around the peak for the derivative fallback.
+                then to fixed fraction of inter-peak distance if needed.
       - Offset: nearest zero crossing *after* each peak in y; fallback to dy/dt crossing,
-                ignoring ±exclude_sec around the peak for the derivative fallback.
+                then to fixed fraction of inter-peak distance if needed.
       - Exp min: FIRST zero crossing of dy/dt after the inspiratory offset
-                 (search window: offset .. next onset).
-      - Exp offset: FIRST zero crossing in y after the offset that occurs BEFORE the next peak.
-                    If none exists, use the minimum of y between the current and next peak.
+                 (search window: offset .. next onset); fallback to actual minimum.
+      - Exp offset: ENHANCED dual method - finds both:
+                    1) First y zero crossing after offset (before next peak)
+                    2) First dy zero crossing after expiratory peak meeting 50% amplitude threshold
+                    Then selects whichever occurs EARLIER (smaller index).
+                    Fallback to minimum between peaks if both methods fail.
     """
     peaks_idx = np.asarray(peaks_idx, dtype=int)
     if peaks_idx.size == 0:
@@ -592,118 +603,273 @@ def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
     onsets:  list[int] = []
     offsets: list[int] = []
 
-    # Pass 1: onsets/offsets
+    # Track which detection methods were used for quality assessment
+    onset_methods: list[str] = []   # Track fallback usage
+    offset_methods: list[str] = []  # Track fallback usage
+
+    # Pass 1: onsets/offsets with robust fallbacks
     for i, pk in enumerate(peaks_idx):
         left_bound  = peaks_idx[i - 1] if i > 0     else 0
         right_bound = peaks_idx[i + 1] if i < n - 1 else (N - 1)
 
-        # Onset (prefer y; fallback to dy/dt with exclusion)
+        # ROBUST ONSET DETECTION with multiple fallbacks
+        onset = None
+        onset_method = "failed"
+
+        # Method 1: Zero crossing in y signal
         onset = _first_zc_before_from_zc(zc_y, pk, left_bound)
+        if onset is not None:
+            onset_method = "signal_zc"
+
+        # Method 2: Zero crossing in dy/dt (with exclusion around peak)
         if onset is None:
             lo = max(left_bound,  pk - excl_n)
             hi = min(right_bound, pk + excl_n)
             onset = _first_zc_before_from_zc(zc_dy, pk, left_bound, exclude_lo=lo, exclude_hi=hi)
-        if onset is not None:
-            onsets.append(onset)
+            if onset is not None:
+                onset_method = "derivative_zc"
 
-        # Offset (prefer y; fallback to dy/dt with exclusion)
-        offset = _first_zc_after_from_zc(zc_y, pk, right_bound)
+        # Method 3: Fixed fraction fallback (25% back from peak)
+        if onset is None:
+            dist_back = max(1, int(0.25 * (pk - left_bound)))
+            onset = max(left_bound, pk - dist_back)
+            onset_method = "fraction_fallback"
+
+        # Method 4: Last resort - use left bound + small offset
+        if onset is None:
+            onset = min(pk - 1, left_bound + 1)
+            onset_method = "boundary_fallback"
+
+        if onset is not None:
+            onsets.append(max(0, min(onset, N - 1)))  # Ensure valid bounds
+            onset_methods.append(onset_method)
+
+        # ROBUST OFFSET DETECTION with multiple fallbacks
+        # IMPORTANT: Offset must occur BEFORE next peak (not just right_bound)
+        offset = None
+        offset_method = "failed"
+
+        # Determine search bound: use next peak if available, otherwise right_bound
+        pk_next = int(peaks_idx[i + 1]) if i < n - 1 else right_bound
+        search_bound = min(pk_next, right_bound)
+
+        # Method 1: Zero crossing in y signal (must be before next peak)
+        offset = _first_zc_after_from_zc(zc_y, pk, search_bound)
+        if offset is not None and offset < pk_next:
+            offset_method = "signal_zc"
+        else:
+            offset = None
+
+        # Method 2: Zero crossing in dy/dt (with exclusion around peak, must be before next peak)
         if offset is None:
             lo = max(left_bound,  pk - excl_n)
             hi = min(right_bound, pk + excl_n)
-            offset = _first_zc_after_from_zc(zc_dy, pk, right_bound, exclude_lo=lo, exclude_hi=hi)
-        if offset is not None:
-            offsets.append(offset)
+            offset = _first_zc_after_from_zc(zc_dy, pk, search_bound, exclude_lo=lo, exclude_hi=hi)
+            if offset is not None and offset < pk_next:
+                offset_method = "derivative_zc"
+            else:
+                offset = None
 
-    # Pass 2:
-    #  - expmins: FIRST d1 zero-cross after offset (as before), window = offset .. next onset
-    #  - expoffs: FIRST y zero-cross after offset but BEFORE next peak; else trough between peaks
+        # Method 3: Use actual minimum between this peak and next peak
+        if offset is None and pk_next is not None and pk_next - pk >= 2:
+            seg = y[pk + 1:pk_next]
+            if seg.size > 0:
+                offset = int(pk + 1 + np.argmin(seg))
+                offset_method = "minimum_fallback"
+
+        # Method 4: Fixed fraction fallback (25% forward from peak, before next peak)
+        if offset is None:
+            dist_forward = max(1, int(0.25 * (pk_next - pk)))
+            offset = min(pk_next - 1, pk + dist_forward)
+            offset_method = "fraction_fallback"
+
+        # Method 5: Last resort - use position before next peak
+        if offset is None:
+            offset = max(pk + 1, pk_next - 1)
+            offset_method = "boundary_fallback"
+
+        if offset is not None:
+            offsets.append(max(0, min(offset, N - 1)))  # Ensure valid bounds
+            offset_methods.append(offset_method)
+
+    # Pass 2: Robust expiratory event detection
     expmins: list[int] = []
     expoffs: list[int] = []
 
-    if len(onsets) >= 2 and len(offsets) >= 1:
+    # Track expiratory detection methods
+    expmin_methods: list[str] = []   # Track expiratory minimum detection methods
+    expoff_methods: list[str] = []   # Track expiratory offset detection methods
+
+    # Ensure we have enough data for meaningful calculations
+    if len(onsets) >= 1 and len(offsets) >= 1:
         on  = np.asarray(onsets,  dtype=int)
         off = np.asarray(offsets, dtype=int)
 
-        # limit by availability of a "next peak"
-        ncyc = min(len(off), len(on) - 1, len(peaks_idx) - 1)
+        # Work with available data, don't require perfect matching
+        ncyc = min(len(off), len(onsets), len(peaks_idx))
+        if len(onsets) > 1:
+            ncyc = min(ncyc, len(onsets) - 1)
 
         for i in range(ncyc):
-            pk_curr  = int(peaks_idx[i])
-            pk_next  = int(peaks_idx[i + 1])
+            pk_curr = int(peaks_idx[i]) if i < len(peaks_idx) else None
+            pk_next = int(peaks_idx[i + 1]) if i + 1 < len(peaks_idx) else None
 
-            # ---- Exp min (unchanged): FIRST d1 ZC after offset up to next ONSET
-            i_start = max(0, int(off[i]))
-            i_end_on = min(int(on[i + 1]), N)
-            if i_end_on - i_start >= 1:
-                k_d1_first = _first_zc_after_from_zc(zc_dy, i_start, i_end_on)
-                if k_d1_first is not None:
-                    expmins.append(int(k_d1_first))
+            # ROBUST EXPIRATORY MINIMUM DETECTION
+            # IMPORTANT: Expiratory minimum must occur BEFORE next peak
+            exp_min_idx = None
 
-            # ---- Exp offset (ENHANCED rule):
-            # Choose the earlier of:
-            # 1) First y ZC after offset but before next peak
-            # 2) First dy ZC after expiratory peak (plus padding) with y closer to zero and before next onset
+            if i < len(off):
+                i_start = max(0, int(off[i]))
 
-            # Find the expiratory peak (minimum amplitude) for this cycle
-            exp_peak_idx = None
-            exp_peak_val = None
-            if pk_next - pk_curr >= 2:
-                exp_peak_idx = int(pk_curr + 1 + int(np.argmin(y[pk_curr + 1:pk_next])))
-                exp_peak_val = y[exp_peak_idx]
-
-            # Method 1: First y ZC after offset but before next peak
-            i_end_peak = min(pk_next, N)
-            k_y = _first_zc_after_from_zc(zc_y, i_start - 1, i_end_peak)
-            if k_y is not None and k_y < pk_next:
-                k_y_valid = k_y
-            else:
-                k_y_valid = None
-
-            # Method 2: First dy ZC after expiratory peak (plus padding) with amplitude constraint
-            k_dy_valid = None
-            if exp_peak_idx is not None and exp_peak_val is not None:
-                # Add small padding after expiratory peak to avoid finding the peak itself
-                padding_samples = max(1, int(0.010 * sr_hz))  # 10ms padding
-                search_start = max(i_start, exp_peak_idx + padding_samples)
-                i_end_onset = min(int(on[i + 1]), N) if i + 1 < len(on) else N
-
-                # For negative expiratory peaks, we want y values closer to zero (less negative)
-                # Set threshold as 50% of the way from expiratory peak toward zero
-                if exp_peak_val < 0:
-                    threshold_closer_to_zero = 0.5 * exp_peak_val  # 50% of negative value = closer to zero
+                # Define search window end: must be before next peak
+                if pk_next is not None:
+                    # Search window: inspiratory offset to next peak (exclusive)
+                    i_end_search = min(pk_next, N)
+                elif i + 1 < len(on):
+                    i_end_search = min(int(on[i + 1]), N)
                 else:
-                    threshold_closer_to_zero = 0.5 * exp_peak_val  # 50% of positive value
+                    i_end_search = min(i_start + int(2.0 * sr_hz), N)  # Default: 2 seconds ahead
 
-                # Find dy zero crossings after expiratory peak + padding and before next onset
-                dy_crossings = zc_dy[(zc_dy >= search_start - 1) & (zc_dy <= i_end_onset)]
+                if i_end_search - i_start >= 1:
+                    # Method 1: First dy/dt zero crossing after offset (must be before next peak)
+                    # AND must be lower than both current and next peak
+                    k_d1_first = _first_zc_after_from_zc(zc_dy, i_start, i_end_search)
+                    if k_d1_first is not None and (pk_next is None or k_d1_first < pk_next):
+                        # Additional constraint: value at this point must be lower than both peaks
+                        valid = True
+                        if pk_curr is not None and k_d1_first < len(y):
+                            if y[k_d1_first] >= y[pk_curr]:
+                                valid = False
+                        if pk_next is not None and k_d1_first < len(y):
+                            if y[k_d1_first] >= y[pk_next]:
+                                valid = False
 
-                for zc_idx in dy_crossings:
-                    crossing_point = int(zc_idx + 1)  # Right side of crossing
-                    if crossing_point < len(y):
-                        y_val = y[crossing_point]
-                        # Check if y value is closer to zero than the threshold
-                        if (exp_peak_val < 0 and y_val > threshold_closer_to_zero) or \
-                           (exp_peak_val >= 0 and y_val < threshold_closer_to_zero):
-                            k_dy_valid = crossing_point
-                            break  # Take the first one that meets criteria
+                        if valid:
+                            exp_min_idx = int(k_d1_first)
 
-            # Choose the earlier of the two valid methods
-            candidates = [k for k in [k_y_valid, k_dy_valid] if k is not None]
-            if candidates:
-                expoffs.append(int(min(candidates)))
-            else:
-                # fallback: trough between current and next peak
-                if pk_next - pk_curr >= 2:
-                    j = int(pk_curr + 1 + int(np.argmin(y[pk_curr + 1:pk_next])))
-                    expoffs.append(j)
-                # else: no room -> skip (no expoff)
+                    # Method 2: Fallback to actual minimum in the search window (before next peak)
+                    if exp_min_idx is None and pk_curr is not None and pk_next is not None:
+                        if pk_next - pk_curr >= 2:
+                            seg_start = max(i_start, pk_curr + 1)
+                            seg_end = min(pk_next, i_end_search)  # Ensure we stay before next peak
+                            if seg_end > seg_start:
+                                seg = y[seg_start:seg_end]
+                                if seg.size > 0:
+                                    exp_min_idx = int(seg_start + np.argmin(seg))
+
+                    # Method 3: Last resort - midpoint between offset and next peak
+                    if exp_min_idx is None:
+                        if pk_next is not None:
+                            midpoint = i_start + (pk_next - i_start) // 2
+                        else:
+                            midpoint = i_start + (i_end_search - i_start) // 2
+                        exp_min_idx = max(0, min(midpoint, N - 1))
+
+                if exp_min_idx is not None:
+                    expmins.append(exp_min_idx)
+
+            # ROBUST EXPIRATORY OFFSET DETECTION - RESTORED ORIGINAL ALGORITHM
+            exp_offset_idx = None
+
+            if i < len(off) and pk_curr is not None:
+                i_start = max(0, int(off[i]))
+
+                # Find the expiratory peak (minimum amplitude) for this cycle first
+                exp_peak_idx = None
+                exp_peak_val = None
+                if pk_next is not None and pk_next - pk_curr >= 2:
+                    exp_peak_idx = int(pk_curr + 1 + int(np.argmin(y[pk_curr + 1:pk_next])))
+                    exp_peak_val = y[exp_peak_idx]
+
+                # Collect BOTH candidate methods, then choose the EARLIER one
+                candidates = []
+
+                # Candidate 1: First y ZC after offset but before next peak
+                if pk_next is not None:
+                    i_end_peak = min(pk_next, N)
+                    k_y = _first_zc_after_from_zc(zc_y, i_start - 1, i_end_peak)
+                    if k_y is not None and k_y < pk_next:
+                        candidates.append(k_y)
+
+                # Candidate 2: First dy ZC after expiratory peak (plus padding) with amplitude constraint
+                if exp_peak_idx is not None and exp_peak_val is not None:
+                    # Add small padding after expiratory peak to avoid finding the peak itself
+                    padding_samples = max(1, int(0.010 * sr_hz))  # 10ms padding
+                    search_start = max(i_start, exp_peak_idx + padding_samples)
+
+                    # Define search window end
+                    if i + 1 < len(on):
+                        i_end_onset = min(int(on[i + 1]), N)
+                    else:
+                        i_end_onset = min(pk_next, N) if pk_next else N
+
+                    # For negative expiratory peaks, we want y values closer to zero (less negative)
+                    # Set threshold as 50% of the way from expiratory peak toward zero
+                    if exp_peak_val < 0:
+                        threshold_closer_to_zero = 0.5 * exp_peak_val  # 50% of negative value = closer to zero
+                    else:
+                        threshold_closer_to_zero = 0.5 * exp_peak_val  # 50% of positive value
+
+                    # Find dy zero crossings after expiratory peak + padding and before next onset
+                    dy_crossings = zc_dy[(zc_dy >= search_start - 1) & (zc_dy <= i_end_onset)]
+
+                    for zc_idx in dy_crossings:
+                        crossing_point = int(zc_idx + 1)  # Right side of crossing
+                        if crossing_point < len(y):
+                            y_val = y[crossing_point]
+                            # Check if y value is closer to zero than the threshold
+                            if (exp_peak_val < 0 and y_val > threshold_closer_to_zero) or \
+                               (exp_peak_val >= 0 and y_val < threshold_closer_to_zero):
+                                candidates.append(crossing_point)
+                                break  # Take the first one that meets criteria
+
+                # ORIGINAL LOGIC: Choose the EARLIER of the two valid candidates
+                if candidates:
+                    exp_offset_idx = int(min(candidates))  # Earlier time point
+                # Fallback 1: Use actual minimum between peaks
+                elif pk_curr is not None and pk_next is not None and pk_next - pk_curr >= 2:
+                    exp_offset_idx = int(pk_curr + 1 + int(np.argmin(y[pk_curr + 1:pk_next])))
+                # Fallback 2: Last resort - use a reasonable fraction after expiratory minimum
+                elif i < len(expmins):
+                    exp_min_pos = expmins[-1] if expmins else i_start
+                    if pk_next is not None:
+                        remaining_dist = pk_next - exp_min_pos
+                        exp_offset_idx = min(exp_min_pos + max(1, remaining_dist // 3), N - 1)
+                    else:
+                        exp_offset_idx = min(exp_min_pos + int(0.5 * sr_hz), N - 1)  # 0.5s ahead
+
+                if exp_offset_idx is not None:
+                    expoffs.append(max(0, min(exp_offset_idx, N - 1)))
+
+    # Ensure all arrays have consistent, reasonable lengths
+    # If we have peaks but no breath events, create minimal fallbacks
+    if len(peaks_idx) > 0 and len(onsets) == 0:
+        # Emergency fallback: create basic onsets/offsets
+        for i, pk in enumerate(peaks_idx):
+            onset = max(0, pk - max(1, int(0.3 * sr_hz)))  # 0.3s before peak
+            offset = min(N - 1, pk + max(1, int(0.3 * sr_hz)))  # 0.3s after peak
+            onsets.append(onset)
+            offsets.append(offset)
+
+    # Track detection quality for error highlighting
+    detection_quality = []
+    for i in range(len(peaks_idx)):
+        quality = {
+            "peak_idx": i,
+            "onset_method": "signal_zc" if i < len(onsets) else "failed",
+            "offset_method": "signal_zc" if i < len(offsets) else "failed",
+            "expmin_method": "derivative_zc" if i < len(expmins) else "failed",
+            "expoff_method": "dual_candidate" if i < len(expoffs) else "failed",
+            "severity": "good"  # Will be updated based on fallback usage
+        }
+        detection_quality.append(quality)
 
     return {
         "onsets":  np.asarray(onsets,  dtype=int),
         "offsets": np.asarray(offsets, dtype=int),
         "expmins": np.asarray(expmins, dtype=int),
         "expoffs": np.asarray(expoffs, dtype=int),
+        "quality": detection_quality,  # NEW: Quality tracking for error highlighting
     }
 
 

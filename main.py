@@ -140,6 +140,16 @@ class MainWindow(QMainWindow):
         # Default for refractory period / min peak distance (seconds)
         self.MinPeakDistValue.setText("0.05")
 
+        # Default values for eupnea and apnea thresholds
+        self.EupneaThresh.setText("5.0")  # Hz - breathing below this is eupnea
+        self.ApneaThresh.setText("0.5")   # seconds - gaps longer than this are apnea
+        self.OutlierSD.setText("3.0")     # SD - standard deviations for outlier detection
+
+        # Connect signals for eupnea/apnea/outlier threshold changes to trigger redraw
+        self.EupneaThresh.textChanged.connect(self._on_region_threshold_changed)
+        self.ApneaThresh.textChanged.connect(self._on_region_threshold_changed)
+        self.OutlierSD.textChanged.connect(self._on_region_threshold_changed)
+
         # --- y2 metric dropdown (choices only; plotting later) ---
         self.y2plot_dropdown.clear()
         self.state.y2_values_by_sweep.clear()
@@ -410,6 +420,22 @@ class MainWindow(QMainWindow):
             if new_an != st.analyze_chan:
                 st.analyze_chan = new_an
                 st.proc_cache.clear()
+
+                # Clear all previously detected peaks, sighs, and breath events
+                st.peaks_by_sweep.clear()
+                st.sigh_by_sweep.clear()
+                if hasattr(st, 'breath_by_sweep'):
+                    st.breath_by_sweep.clear()
+
+                # Clear manual edits (omitted points, ranges, and sweeps)
+                st.omitted_points.clear()
+                st.omitted_ranges.clear()
+                if hasattr(st, 'omitted_sweeps'):
+                    st.omitted_sweeps.clear()
+
+                # Refresh the omit button label since sweep omissions were cleared
+                self._refresh_omit_button_label()
+
                 something_changed = True
 
         # ---- Apply stim channel (if pending) ----
@@ -697,18 +723,63 @@ class MainWindow(QMainWindow):
                     ex_idx = br.get("expmins", [])
                     exoff_idx = br.get("expoffs", [])
 
-                    # Compute eupnea regions (breathing < 5Hz for ≥ 2s)
-                    eupnea_mask = metrics.METRICS["eupnic"](
-                        t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx
+                    # Get eupnea and apnea thresholds from UI (with defaults)
+                    eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+                    apnea_thresh = self._parse_float(self.ApneaThresh) or 0.5    # seconds
+
+                    # Compute eupnea regions using UI threshold
+                    eupnea_mask = metrics.detect_eupnic_regions(
+                        t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx,
+                        freq_threshold_hz=eupnea_thresh
                     )
 
-                    # Compute apnea regions (gaps > 0.5s between breaths)
-                    apnea_mask = metrics.METRICS["apnea"](
-                        t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx
+                    # Compute apnea regions using UI threshold
+                    apnea_mask = metrics.detect_apneas(
+                        t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx,
+                        min_apnea_duration_sec=apnea_thresh
                     )
+
+                    # Identify problematic breaths using outlier detection
+                    outlier_mask = None
+                    failure_mask = None
+                    try:
+                        from core.breath_outliers import identify_problematic_breaths
+                        import numpy as np
+
+                        # Convert indices to arrays (handle both lists and arrays)
+                        peaks_arr = np.array(pks) if pks is not None and len(pks) > 0 else np.array([])
+                        onsets_arr = np.array(on_idx) if on_idx is not None and len(on_idx) > 0 else np.array([])
+                        offsets_arr = np.array(off_idx) if off_idx is not None and len(off_idx) > 0 else np.array([])
+                        expmins_arr = np.array(ex_idx) if ex_idx is not None and len(ex_idx) > 0 else np.array([])
+                        expoffs_arr = np.array(exoff_idx) if exoff_idx is not None and len(exoff_idx) > 0 else np.array([])
+
+                        # Get all computed metrics for this sweep
+                        metrics_dict = {}
+                        for metric_key in ["if", "amp_insp", "amp_exp", "ti", "te", "area_insp", "area_exp"]:
+                            if metric_key in metrics.METRICS:
+                                metric_arr = metrics.METRICS[metric_key](
+                                    t, y, st.sr_hz, peaks_arr, onsets_arr, offsets_arr, expmins_arr, expoffs_arr
+                                )
+                                metrics_dict[metric_key] = metric_arr
+
+                        # Get outlier threshold from UI (with default)
+                        outlier_sd = self._parse_float(self.OutlierSD) or 3.0  # SD
+
+                        # Identify problematic breaths (returns separate masks for outliers and failures)
+                        outlier_mask, failure_mask = identify_problematic_breaths(
+                            t, y, st.sr_hz, peaks_arr, onsets_arr, offsets_arr,
+                            expmins_arr, expoffs_arr, metrics_dict, outlier_threshold=outlier_sd
+                        )
+
+                    except Exception as outlier_error:
+                        print(f"Warning: Could not detect breath outliers: {outlier_error}")
+                        import traceback
+                        traceback.print_exc()
 
                     # Apply the overlays using plot time (with stim normalization if applicable)
-                    self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask)
+                    # outlier_mask = orange highlighting for statistical outliers
+                    # failure_mask = red highlighting for calculation failures (NaN values)
+                    self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask, outlier_mask, failure_mask)
                 else:
                     self.plot_host.clear_region_overlays()
             except Exception as e:
@@ -757,6 +828,14 @@ class MainWindow(QMainWindow):
         """
         self._threshold_value = self._parse_float(self.ThreshVal)  # None if invalid/empty
         self._refresh_threshold_lines()
+
+    def _on_region_threshold_changed(self, *_):
+        """
+        Called whenever eupnea or apnea threshold values change.
+        Redraws the current sweep to update region overlays.
+        """
+        # Simply redraw current sweep, which will use the new threshold values
+        self.redraw_main_plot()
 
     def _refresh_threshold_lines(self):
         """
@@ -4778,9 +4857,9 @@ class MainWindow(QMainWindow):
                     for s in range(Y.shape[1]):
                         ax1.plot(t_ds_csv, Y[:, s], lw=0.8, alpha=0.45)
                 if have_stim:
-                    ax1.axvspan(0.0, stim_dur, color="#4c78a8", alpha=0.12)
-                    ax1.axvline(0.0, color="#4c78a8", lw=1.0, alpha=0.6)
-                    ax1.axvline(stim_dur, color="#4c78a8", lw=1.0, alpha=0.6, ls="--")
+                    ax1.axvspan(0.0, stim_dur, color="#2E5090", alpha=0.25)
+                    ax1.axvline(0.0, color="#2E5090", lw=1.0, alpha=0.8)
+                    ax1.axvline(stim_dur, color="#2E5090", lw=1.0, alpha=0.8, ls="--")
                 _plot_sigh_time_stars(ax1, sigh_times_rel)  # NEW
                 ax1.set_title(f"{label} — all sweeps{title_suffix}")
                 if r == nrows - 1:
@@ -4801,9 +4880,9 @@ class MainWindow(QMainWindow):
                     ax2.fill_between(t_ds_csv, mean - sem, mean + sem, alpha=0.25, linewidth=0)
 
                 if have_stim:
-                    ax2.axvspan(0.0, stim_dur, color="#4c78a8", alpha=0.12)
-                    ax2.axvline(0.0, color="#4c78a8", lw=1.0, alpha=0.6)
-                    ax2.axvline(stim_dur, color="#4c78a8", lw=1.0, alpha=0.6, ls="--")
+                    ax2.axvspan(0.0, stim_dur, color="#2E5090", alpha=0.25)
+                    ax2.axvline(0.0, color="#2E5090", lw=1.0, alpha=0.8)
+                    ax2.axvline(stim_dur, color="#2E5090", lw=1.0, alpha=0.8, ls="--")
                 _plot_sigh_time_stars(ax2, sigh_times_rel)  # NEW
                 ax2.set_title(f"{label} — mean ± SEM{title_suffix}")
                 if r == nrows - 1:

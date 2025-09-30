@@ -240,7 +240,7 @@ class PlotHost(QWidget):
         # Optional shaded spans
         for (t0, t1) in (spans_s or []):
             if t1 > t0:
-                self.ax_main.axvspan(t0, t1, alpha=0.15)
+                self.ax_main.axvspan(t0, t1, color="#2E5090", alpha=0.25)
 
         if title:
             self.ax_main.set_title(title)
@@ -279,7 +279,7 @@ class PlotHost(QWidget):
         trans = self.ax_main.get_xaxis_transform()  # x in data, y in axes (0..1)
         for (t0, t1) in spans_s:
             if t1 > t0:
-                p = self.ax_main.axvspan(t0, t1, ymin=0.0, ymax=1.0, alpha=0.15, transform=trans)
+                p = self.ax_main.axvspan(t0, t1, ymin=0.0, ymax=1.0, color="#2E5090", alpha=0.25, transform=trans)
                 self._span_patches.append(p)
         self.canvas.draw_idle()
 
@@ -409,20 +409,33 @@ class PlotHost(QWidget):
             t_exoff=None, y_exoff=None,
             size=30):
         """
-        Onsets  : green triangles up
-        Offsets : orange triangles down
-        Exp. min: blue squares
-        Exp. off: purple diamonds
+        Onsets  : green triangles up (at signal value)
+        Offsets : orange triangles down (at signal value)
+        Exp. min: blue squares (vertically offset below signal)
+        Exp. off: purple diamonds (vertically offset further below signal)
+
+        Vertical offsetting helps visualize when markers overlap at same location.
         """
         if not self.fig.axes:
             return
         ax = self.fig.axes[0]
 
-        def _upd(scatter_attr, tx, ty, color, marker):
+        # Get y-axis range for computing vertical offsets
+        ylim = ax.get_ylim()
+        y_range = ylim[1] - ylim[0]
+
+        # Vertical offset amounts (as fraction of y-range)
+        # Just enough to distinguish overlapping markers
+        offset_expmin = -0.001 * y_range   # 0.1% below signal
+        offset_expoff = +0.001 * y_range   # 0.1% above signal
+
+        def _upd(scatter_attr, tx, ty, color, marker, y_offset=0):
             import numpy as np
             pts = None
             if tx is not None and ty is not None and len(tx) > 0:
-                pts = np.column_stack([tx, ty])
+                # Apply vertical offset
+                ty_offset = np.asarray(ty) + y_offset
+                pts = np.column_stack([tx, ty_offset])
             sc = getattr(self, scatter_attr)
             if pts is None:
                 if sc is not None:
@@ -432,21 +445,16 @@ class PlotHost(QWidget):
                 return
             if sc is None or sc.axes is not ax:
                 setattr(self, scatter_attr,
-                        ax.scatter(pts[:, 0], pts[:, 1], s=size, c=color, marker=marker, zorder=3))
+                        ax.scatter(pts[:, 0], pts[:, 1], s=size, c=color, marker=marker,
+                                 zorder=5, edgecolors='white', linewidths=0.5))
             else:
                 sc.set_offsets(pts)
 
-        _upd("scatter_onsets",  t_on,   y_on,   "limegreen", "^")
-        _upd("scatter_offsets", t_off,  y_off,  "orange",    "v")
-        _upd("scatter_expmins", t_exp,  y_exp,  "blue",      "s")
-        _upd("scatter_expoffs", t_exoff,y_exoff,EXPOFF_COLOR,"D")
-
-        self.canvas.draw_idle()
-
-
-        _upd("scatter_onsets",  t_on,  y_on,  "limegreen", "^")
-        _upd("scatter_offsets", t_off, y_off, "orange",    "v")
-        _upd("scatter_expmins", t_exp, y_exp, "blue",      "s")
+        # Plot markers with vertical offsets
+        _upd("scatter_onsets",  t_on,   y_on,   "limegreen", "^", y_offset=0)           # No offset
+        _upd("scatter_offsets", t_off,  y_off,  "orange",    "v", y_offset=0)           # No offset
+        _upd("scatter_expmins", t_exp,  y_exp,  "blue",      "s", y_offset=offset_expmin)  # 3% below
+        _upd("scatter_expoffs", t_exoff,y_exoff,EXPOFF_COLOR,"D", y_offset=offset_expoff)  # 6% below
 
         self.canvas.draw_idle()
 
@@ -710,15 +718,18 @@ class PlotHost(QWidget):
         if hasattr(self, "canvas"):
             self.canvas.draw_idle()
 
-    # ------- Region overlays (eupnea/apnea) -------
-    def update_region_overlays(self, t, eupnea_mask, apnea_mask):
+    # ------- Region overlays (eupnea/apnea/problems) -------
+    def update_region_overlays(self, t, eupnea_mask, apnea_mask, outlier_mask=None, failure_mask=None):
         """
-        Add horizontal line overlays for eupnea (thin black) and apnea (thin red) regions.
+        Add horizontal line overlays for eupnea (green lines), apnea (red lines),
+        outliers (orange background), and calculation failures (red background).
 
         Args:
             t: time array
             eupnea_mask: binary array (0/1) indicating eupnic regions
             apnea_mask: binary array (0/1) indicating apneic regions
+            outlier_mask: binary array (0/1) indicating outlier breath cycles (orange)
+            failure_mask: binary array (0/1) indicating calculation failure cycles (red)
         """
         self.clear_region_overlays()
 
@@ -750,13 +761,57 @@ class PlotHost(QWidget):
                                        color='red', linewidth=1.5, alpha=0.8, zorder=10)[0]
                 self._region_overlays.append(line)
 
+        # Add outlier regions (orange background) - full height, visible rectangles
+        if outlier_mask is not None and len(outlier_mask) == len(t):
+            outlier_regions = self._extract_regions(t, outlier_mask)
+            print(f"Debug: Found {len(outlier_regions)} outlier regions")
+            for start_t, end_t in outlier_regions:
+                width = end_t - start_t
+                # Ensure minimum width for visibility (0.1 seconds)
+                if width < 0.1:
+                    mid = (start_t + end_t) / 2
+                    start_t = mid - 0.05
+                    end_t = mid + 0.05
+                print(f"  Outlier region: {start_t:.3f} to {end_t:.3f} (width={end_t-start_t:.3f}s)")
+                # Full-height rectangle with orange color
+                span = self.ax_main.axvspan(start_t, end_t,
+                                          color='#FFA500', alpha=0.25,
+                                          zorder=1, linewidth=0)
+                self._region_overlays.append(span)
+
+        # Add failure regions (red background) - full height, visible rectangles
+        if failure_mask is not None and len(failure_mask) == len(t):
+            failure_regions = self._extract_regions(t, failure_mask)
+            print(f"Debug: Found {len(failure_regions)} calculation failure regions")
+            for start_t, end_t in failure_regions:
+                width = end_t - start_t
+                # Ensure minimum width for visibility (0.1 seconds)
+                if width < 0.1:
+                    mid = (start_t + end_t) / 2
+                    start_t = mid - 0.05
+                    end_t = mid + 0.05
+                print(f"  Failure region: {start_t:.3f} to {end_t:.3f} (width={end_t-start_t:.3f}s)")
+                # Full-height rectangle with red color (stronger than outliers)
+                span = self.ax_main.axvspan(start_t, end_t,
+                                          color='#FF0000', alpha=0.30,
+                                          zorder=2, linewidth=0)  # zorder=2 so red shows over orange
+                self._region_overlays.append(span)
+
         self.canvas.draw_idle()
 
     def _extract_regions(self, t, mask):
-        """Extract continuous regions where mask == 1."""
+        """Extract continuous regions where mask == 1 or mask == True."""
         import numpy as np
         regions = []
-        if len(mask) == 0:
+
+        if len(mask) == 0 or len(t) == 0:
+            return regions
+
+        # Ensure mask is boolean
+        mask = np.asarray(mask, dtype=bool)
+
+        # Check if there are any True values
+        if not np.any(mask):
             return regions
 
         # Find transitions
@@ -770,10 +825,22 @@ class PlotHost(QWidget):
         if mask[-1]:
             ends = np.concatenate([ends, [len(mask)]])
 
-        # Convert indices to time values
+        # Convert indices to time values with bounds checking
         for start_idx, end_idx in zip(starts, ends):
-            if start_idx < len(t) and end_idx <= len(t):
-                regions.append((t[start_idx], t[end_idx - 1]))
+            start_idx = int(start_idx)
+            end_idx = int(end_idx)
+
+            if start_idx < 0 or start_idx >= len(t):
+                continue
+            if end_idx < 0 or end_idx > len(t):
+                end_idx = len(t)
+
+            # Get time values (use end_idx-1 since end_idx is exclusive)
+            start_t = float(t[start_idx])
+            end_t = float(t[min(end_idx - 1, len(t) - 1)])
+
+            if end_t > start_t:  # Ensure valid region
+                regions.append((start_t, end_t))
 
         return regions
 
