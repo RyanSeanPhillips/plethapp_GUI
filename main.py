@@ -193,6 +193,9 @@ class MainWindow(QMainWindow):
         #wire save analyzed data button
         self.SaveAnalyzedDataButton.clicked.connect(self.on_save_analyzed_clicked)
 
+        # Wire view summary button to show PDF preview
+        self.ViewSummary_pushButton.clicked.connect(self.on_view_summary_clicked)
+
 
 
         # Defaults: 0.5–20 Hz band, all off initially
@@ -1982,117 +1985,12 @@ class MainWindow(QMainWindow):
 
 
     def on_save_analyzed_clicked(self):
-        st = self.state
-        if not getattr(st, "in_path", None):
-            QMessageBox.information(self, "Save analyzed data", "Open an ABF first.")
-            return
+        """Save analyzed data to disk after prompting for location/name."""
+        self._export_all_analyzed_data(preview_only=False)
 
-        # --- Build an auto stim string from current sweep metrics, if available ---
-        def _auto_stim_from_metrics() -> str:
-            s = max(0, min(getattr(st, "sweep_idx", 0), self._sweep_count()-1))
-            m = st.stim_metrics_by_sweep.get(s, {}) if getattr(st, "stim_metrics_by_sweep", None) else {}
-            if not m:
-                return ""
-            def _ri(x):
-                try: return int(round(float(x)))
-                except Exception: return None
-
-            f = _ri(m.get("freq_hz"))
-            d = _ri(m.get("duration_s"))
-            pw_s = m.get("pulse_width_s")
-            n_pulses = m.get("n_pulses", None)
-
-            if f is not None and d is not None and pw_s is not None:
-                pw_str = f"{_ri(pw_s)}s" if pw_s >= 1.0 else f"{_ri(pw_s * 1000)}ms"
-                return f"{f}Hz{d}s{pw_str}"
-
-            if pw_s is not None and (n_pulses == 1 or f is None):
-                return f"{_ri(pw_s)}sPulse" if pw_s >= 1.0 else f"{_ri(pw_s * 1000)}msPulse"
-            return ""
-
-        abf_stem = st.in_path.stem
-        chan = st.analyze_chan or ""
-        auto_stim = _auto_stim_from_metrics()
-
-        # --- Name builder dialog (with auto stim suggestion) ---
-        dlg = self.SaveMetaDialog(abf_name=abf_stem, channel=chan, parent=self, auto_stim=auto_stim)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        vals = dlg.values()
-        suggested = self._sanitize_token(vals["preview"]) or "analysis"
-        want_picker = bool(vals.get("choose_dir", False))
-
-        target_exact = "Pleth_App_analysis"          # <- required folder name (lowercase 'a')
-        target_lower = target_exact.lower()
-
-        def _nearest_analysis_ancestor(p: Path) -> Path | None:
-            # Return the closest ancestor (including self) named Pleth_App_analysis (case-insensitive)
-            for cand in [p] + list(p.parents):
-                if cand.name.lower() == target_lower:
-                    return cand
-            return None
-
-        if want_picker:
-            # User chooses a folder; we keep your previous smart logic here.
-            default_root = Path(self.settings.value("save_root", str(st.in_path.parent)))
-            chosen = QFileDialog.getExistingDirectory(
-                self,
-                "Choose a folder (files may go into an existing 'Pleth_App_analysis' here)",
-                str(default_root)
-            )
-            if not chosen:
-                return
-            chosen_path = Path(chosen)
-
-            # 1) If chosen folder is inside an ancestor named Pleth_App_analysis → save THERE (the ancestor)
-            anc = _nearest_analysis_ancestor(chosen_path)
-            if anc is not None:
-                final_dir = anc
-            else:
-                # 2) If the chosen folder already contains 'Pleth_App_analysis' or 'Pleth_App_Analysis' subfolder → use it
-                sub_exact   = chosen_path / "Pleth_App_analysis"
-                sub_variant = chosen_path / "Pleth_App_Analysis"
-                if sub_exact.is_dir():
-                    final_dir = sub_exact
-                elif sub_variant.is_dir():
-                    final_dir = sub_variant
-                else:
-                    # 3) Otherwise, create Pleth_App_analysis directly under the chosen folder
-                    final_dir = chosen_path / target_exact
-                    try:
-                        final_dir.mkdir(parents=True, exist_ok=True)
-                    except Exception as e:
-                        QMessageBox.critical(self, "Save analyzed data", f"Could not create folder:\n{final_dir}\n\n{e}")
-                        return
-
-            # Remember the last *picker* root only when the picker is used
-            self.settings.setValue("save_root", str(chosen_path))
-
-        else:
-            # UNCHECKED: Always use the CURRENT ABF DIRECTORY (not a remembered one)
-            base_root = st.in_path.parent if getattr(st, "in_path", None) else Path.cwd()
-            final_dir = base_root / target_exact
-            try:
-                final_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                QMessageBox.critical(self, "Save analyzed data", f"Could not create folder:\n{final_dir}\n\n{e}")
-                return
-            # IMPORTANT: Do NOT overwrite 'save_root' here — we don't want to "remember" anything for the unchecked case.
-
-        # Set base name + meta, then export
-        self._save_dir = final_dir
-        self._save_base = suggested
-        self._save_meta = vals
-
-        base_path = self._save_dir / self._save_base
-        print(f"[save] base path set: {base_path}")
-        try:
-            self.statusbar.showMessage(f"Saving to: {base_path}", 4000)
-        except Exception:
-            pass
-
-        self._export_all_analyzed_data()
+    def on_view_summary_clicked(self):
+        """Display interactive preview of the PDF summary without saving."""
+        self._export_all_analyzed_data(preview_only=True)
 
 
     # metrics we won't include in CSV exports
@@ -3573,8 +3471,13 @@ class MainWindow(QMainWindow):
     #     except Exception:
     #         pass
 
-    def _export_all_analyzed_data(self):
+    def _export_all_analyzed_data(self, preview_only=False):
         """
+        Exports (or previews) analyzed data.
+
+        If preview_only=True: Shows interactive PDF preview dialog without saving files.
+        If preview_only=False: Prompts for location/name and exports files.
+
         Exports:
         1) <base>_bundle.npz
             - Downsampled processed trace (kept sweeps only)
@@ -3593,17 +3496,126 @@ class MainWindow(QMainWindow):
                 RAW blocks:  ALL | BASELINE | STIM | POST
                 NORM blocks: ALL | BASELINE | STIM | POST
             - Includes `is_sigh` column (1 if any sigh peak in that breath interval)
+
+        4) <base>_summary.pdf (or preview dialog if preview_only=True)
         """
         import numpy as np, csv, json
         from PyQt6.QtWidgets import QApplication
 
         st = self.state
-        if not getattr(self, "_save_dir", None) or not getattr(self, "_save_base", None):
-            QMessageBox.warning(self, "Save analyzed data", "Choose a save location/name first.")
+        if not getattr(st, "in_path", None):
+            QMessageBox.information(self, "View Summary" if preview_only else "Save analyzed data", "Open an ABF first.")
             return
         if st.t is None or not st.analyze_chan or st.analyze_chan not in st.sweeps:
-            QMessageBox.warning(self, "Save analyzed data", "No analyzed data available.")
+            QMessageBox.warning(self, "View Summary" if preview_only else "Save analyzed data", "No analyzed data available.")
             return
+
+        # -------------------- Prompt for save location (skip if preview_only) --------------------
+        if not preview_only:
+            # --- Build an auto stim string from current sweep metrics, if available ---
+            def _auto_stim_from_metrics() -> str:
+                s = max(0, min(getattr(st, "sweep_idx", 0), self._sweep_count()-1))
+                m = st.stim_metrics_by_sweep.get(s, {}) if getattr(st, "stim_metrics_by_sweep", None) else {}
+                if not m:
+                    return ""
+                def _ri(x):
+                    try: return int(round(float(x)))
+                    except Exception: return None
+
+                f = _ri(m.get("freq_hz"))
+                d = _ri(m.get("duration_s"))
+                pw_s = m.get("pulse_width_s")
+                n_pulses = m.get("n_pulses", None)
+
+                if f is not None and d is not None and pw_s is not None:
+                    pw_str = f"{_ri(pw_s)}s" if pw_s >= 1.0 else f"{_ri(pw_s * 1000)}ms"
+                    return f"{f}Hz{d}s{pw_str}"
+
+                if pw_s is not None and (n_pulses == 1 or f is None):
+                    return f"{_ri(pw_s)}sPulse" if pw_s >= 1.0 else f"{_ri(pw_s * 1000)}msPulse"
+                return ""
+
+            abf_stem = st.in_path.stem
+            chan = st.analyze_chan or ""
+            auto_stim = _auto_stim_from_metrics()
+
+            # --- Name builder dialog (with auto stim suggestion) ---
+            dlg = self.SaveMetaDialog(abf_name=abf_stem, channel=chan, parent=self, auto_stim=auto_stim)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            vals = dlg.values()
+            suggested = self._sanitize_token(vals["preview"]) or "analysis"
+            want_picker = bool(vals.get("choose_dir", False))
+
+            target_exact = "Pleth_App_analysis"          # <- required folder name (lowercase 'a')
+            target_lower = target_exact.lower()
+
+            def _nearest_analysis_ancestor(p: Path) -> Path | None:
+                # Return the closest ancestor (including self) named Pleth_App_analysis (case-insensitive)
+                for cand in [p] + list(p.parents):
+                    if cand.name.lower() == target_lower:
+                        return cand
+                return None
+
+            if want_picker:
+                # User chooses a folder; we keep your previous smart logic here.
+                default_root = Path(self.settings.value("save_root", str(st.in_path.parent)))
+                chosen = QFileDialog.getExistingDirectory(
+                    self,
+                    "Choose a folder (files may go into an existing 'Pleth_App_analysis' here)",
+                    str(default_root)
+                )
+                if not chosen:
+                    return
+                chosen_path = Path(chosen)
+
+                # 1) If chosen folder is inside an ancestor named Pleth_App_analysis → save THERE (the ancestor)
+                anc = _nearest_analysis_ancestor(chosen_path)
+                if anc is not None:
+                    final_dir = anc
+                else:
+                    # 2) If the chosen folder already contains 'Pleth_App_analysis' or 'Pleth_App_Analysis' subfolder → use it
+                    sub_exact   = chosen_path / "Pleth_App_analysis"
+                    sub_variant = chosen_path / "Pleth_App_Analysis"
+                    if sub_exact.is_dir():
+                        final_dir = sub_exact
+                    elif sub_variant.is_dir():
+                        final_dir = sub_variant
+                    else:
+                        # 3) Otherwise, create Pleth_App_analysis directly under the chosen folder
+                        final_dir = chosen_path / target_exact
+                        try:
+                            final_dir.mkdir(parents=True, exist_ok=True)
+                        except Exception as e:
+                            QMessageBox.critical(self, "Save analyzed data", f"Could not create folder:\n{final_dir}\n\n{e}")
+                            return
+
+                # Remember the last *picker* root only when the picker is used
+                self.settings.setValue("save_root", str(chosen_path))
+
+            else:
+                # UNCHECKED: Always use the CURRENT ABF DIRECTORY (not a remembered one)
+                base_root = st.in_path.parent if getattr(st, "in_path", None) else Path.cwd()
+                final_dir = base_root / target_exact
+                try:
+                    final_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    QMessageBox.critical(self, "Save analyzed data", f"Could not create folder:\n{final_dir}\n\n{e}")
+                    return
+                # IMPORTANT: Do NOT overwrite 'save_root' here — we don't want to "remember" anything for the unchecked case.
+
+            # Set base name + meta, then export
+            self._save_dir = final_dir
+            self._save_base = suggested
+            self._save_meta = vals
+
+            base_path = self._save_dir / self._save_base
+            print(f"[save] base path set: {base_path}")
+            try:
+                self.statusbar.showMessage(f"Saving to: {base_path}", 4000)
+            except Exception:
+                pass
 
         # -------------------- knobs --------------------
         DS_TARGET_HZ    = 50.0
@@ -3691,259 +3703,234 @@ class MainWindow(QMainWindow):
                 if y2 is not None and len(y2) == N:
                     y2_ds_by_key[k][:, col] = y2[ds_idx]
 
-        # -------------------- (1) NPZ bundle (downsampled) --------------------
-        base     = self._save_dir / self._save_base
-        npz_path = base.with_name(base.name + "_bundle.npz")
-
-        # Pack stim spans in KEPT order (align with columns)
-        stim_obj = np.empty(S, dtype=object)
-        for col, s in enumerate(kept_sweeps):
-            spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
-            stim_obj[col] = np.array(spans, dtype=float).reshape(-1, 2) if spans else np.empty((0, 2), dtype=float)
-
-        peaks_obj = np.array(peaks_by_sweep, dtype=object)
-        on_obj    = np.array(on_by_sweep,  dtype=object)
-        off_obj   = np.array(off_by_sweep, dtype=object)
-        exm_obj   = np.array(exm_by_sweep, dtype=object)
-        exo_obj   = np.array(exo_by_sweep, dtype=object)
-        sigh_obj  = np.array(sigh_by_sweep, dtype=object)
-
-        y2_kwargs_ds = {f"y2_{k}_ds": y2_ds_by_key[k] for k in all_keys}
-
-        meta = {
-            "analyze_channel": st.analyze_chan,
-            "sr_hz": float(st.sr_hz),
-            "n_sweeps_total": int(n_sweeps),
-            "n_sweeps_kept": int(S),
-            "kept_sweeps": [int(s) for s in kept_sweeps],                  # original indices
-            "omitted_sweeps": sorted(int(x) for x in getattr(st, "omitted_sweeps", set())),
-            "abf_path": str(getattr(st, "in_path", "")),
-            "ui_meta": getattr(self, "_save_meta", {}),
-            "excluded_for_csv": sorted(list(self._EXCLUDE_FOR_CSV)),
-            "ds_target_hz": float(DS_TARGET_HZ),
-            "ds_step": int(ds_step),
-            "csv_time_zero": float(csv_t0),
-            "csv_includes_traces": bool(INCLUDE_TRACES),
-            "norm_window_s": float(NORM_BASELINE_WINDOW_S),
-        }
-
-        np.savez_compressed(
-            npz_path,
-            t_ds=t_ds_raw,
-            Y_proc_ds=Y_proc_ds,
-            peaks_by_sweep=peaks_obj,
-            onsets_by_sweep=on_obj,
-            offsets_by_sweep=off_obj,
-            expmins_by_sweep=exm_obj,
-            expoffs_by_sweep=exo_obj,
-            sigh_idx_by_sweep=sigh_obj,
-            stim_spans_by_sweep=stim_obj,
-            meta_json=json.dumps(meta),
-            **y2_kwargs_ds,
-        )
-
-        # -------------------- helpers for normalization (time CSV) --------------------
-        def _per_sweep_baseline_for_time(A_ds: np.ndarray) -> np.ndarray:
-            """
-            A_ds: (M,S) downsampled metric matrix.
-            Returns b[S]: mean over last NORM_BASELINE_WINDOW_S before 0; fallback to first W after 0.
-            """
-            b = np.full((A_ds.shape[1],), np.nan, dtype=float)
-            mask_pre  = (t_ds_csv >= -NORM_BASELINE_WINDOW_S) & (t_ds_csv < 0.0)
-            mask_post = (t_ds_csv >=  0.0) & (t_ds_csv <= NORM_BASELINE_WINDOW_S)
-            for sidx in range(A_ds.shape[1]):
-                col = A_ds[:, sidx]
-                vals = col[mask_pre]
-                vals = vals[np.isfinite(vals)]
-                if vals.size == 0:
-                    vals = col[mask_post]
+        # -------------------- Save files (skip if preview_only) --------------------
+        if not preview_only:
+            # -------------------- (1) NPZ bundle (downsampled) --------------------
+            base     = self._save_dir / self._save_base
+            npz_path = base.with_name(base.name + "_bundle.npz")
+    
+            # Pack stim spans in KEPT order (align with columns)
+            stim_obj = np.empty(S, dtype=object)
+            for col, s in enumerate(kept_sweeps):
+                spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
+                stim_obj[col] = np.array(spans, dtype=float).reshape(-1, 2) if spans else np.empty((0, 2), dtype=float)
+    
+            peaks_obj = np.array(peaks_by_sweep, dtype=object)
+            on_obj    = np.array(on_by_sweep,  dtype=object)
+            off_obj   = np.array(off_by_sweep, dtype=object)
+            exm_obj   = np.array(exm_by_sweep, dtype=object)
+            exo_obj   = np.array(exo_by_sweep, dtype=object)
+            sigh_obj  = np.array(sigh_by_sweep, dtype=object)
+    
+            y2_kwargs_ds = {f"y2_{k}_ds": y2_ds_by_key[k] for k in all_keys}
+    
+            meta = {
+                "analyze_channel": st.analyze_chan,
+                "sr_hz": float(st.sr_hz),
+                "n_sweeps_total": int(n_sweeps),
+                "n_sweeps_kept": int(S),
+                "kept_sweeps": [int(s) for s in kept_sweeps],                  # original indices
+                "omitted_sweeps": sorted(int(x) for x in getattr(st, "omitted_sweeps", set())),
+                "abf_path": str(getattr(st, "in_path", "")),
+                "ui_meta": getattr(self, "_save_meta", {}),
+                "excluded_for_csv": sorted(list(self._EXCLUDE_FOR_CSV)),
+                "ds_target_hz": float(DS_TARGET_HZ),
+                "ds_step": int(ds_step),
+                "csv_time_zero": float(csv_t0),
+                "csv_includes_traces": bool(INCLUDE_TRACES),
+                "norm_window_s": float(NORM_BASELINE_WINDOW_S),
+            }
+    
+            np.savez_compressed(
+                npz_path,
+                t_ds=t_ds_raw,
+                Y_proc_ds=Y_proc_ds,
+                peaks_by_sweep=peaks_obj,
+                onsets_by_sweep=on_obj,
+                offsets_by_sweep=off_obj,
+                expmins_by_sweep=exm_obj,
+                expoffs_by_sweep=exo_obj,
+                sigh_idx_by_sweep=sigh_obj,
+                stim_spans_by_sweep=stim_obj,
+                meta_json=json.dumps(meta),
+                **y2_kwargs_ds,
+            )
+    
+            # -------------------- helpers for normalization (time CSV) --------------------
+            def _per_sweep_baseline_for_time(A_ds: np.ndarray) -> np.ndarray:
+                """
+                A_ds: (M,S) downsampled metric matrix.
+                Returns b[S]: mean over last NORM_BASELINE_WINDOW_S before 0; fallback to first W after 0.
+                """
+                b = np.full((A_ds.shape[1],), np.nan, dtype=float)
+                mask_pre  = (t_ds_csv >= -NORM_BASELINE_WINDOW_S) & (t_ds_csv < 0.0)
+                mask_post = (t_ds_csv >=  0.0) & (t_ds_csv <= NORM_BASELINE_WINDOW_S)
+                for sidx in range(A_ds.shape[1]):
+                    col = A_ds[:, sidx]
+                    vals = col[mask_pre]
                     vals = vals[np.isfinite(vals)]
-                if vals.size:
-                    b[sidx] = float(np.mean(vals))
-            return b
-
-        def _normalize_matrix_by_baseline(A_ds: np.ndarray, b: np.ndarray) -> np.ndarray:
-            out = np.full_like(A_ds, np.nan)
-            for sidx in range(A_ds.shape[1]):
-                bs = b[sidx]
-                if np.isfinite(bs) and abs(bs) > EPS_BASE:
-                    out[:, sidx] = A_ds[:, sidx] / bs
-            return out
+                    if vals.size == 0:
+                        vals = col[mask_post]
+                        vals = vals[np.isfinite(vals)]
+                    if vals.size:
+                        b[sidx] = float(np.mean(vals))
+                return b
+    
+            def _normalize_matrix_by_baseline(A_ds: np.ndarray, b: np.ndarray) -> np.ndarray:
+                out = np.full_like(A_ds, np.nan)
+                for sidx in range(A_ds.shape[1]):
+                    bs = b[sidx]
+                    if np.isfinite(bs) and abs(bs) > EPS_BASE:
+                        out[:, sidx] = A_ds[:, sidx] / bs
+                return out
+            
         
     
-
-
-        # -------------------- (2) Per-time CSV (raw + normalized appended) --------------------
-        csv_time_path = base.with_name(base.name + "_means_by_time.csv")
-        keys_for_csv  = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
-
-        # Build normalized stacks per metric
-        y2_ds_by_key_norm = {}
-        baseline_by_key   = {}
-        for k in keys_for_csv:
-            b = _per_sweep_baseline_for_time(y2_ds_by_key[k])
-            baseline_by_key[k] = b
-            y2_ds_by_key_norm[k] = _normalize_matrix_by_baseline(y2_ds_by_key[k], b)
-
-        # headers: raw first, then the same pattern with *_norm suffix
-        header = ["t"]
-        for k in keys_for_csv:
-            if INCLUDE_TRACES:
-                header += [f"{k}_s{j+1}" for j in range(S)]
-            header += [f"{k}_mean", f"{k}_sem"]
-
-        for k in keys_for_csv:
-            if INCLUDE_TRACES:
-                header += [f"{k}_norm_s{j+1}" for j in range(S)]
-            header += [f"{k}_norm_mean", f"{k}_norm_sem"]
-
-        self.setCursor(Qt.CursorShape.WaitCursor)
-        try:
-            with open(csv_time_path, "w", newline="") as f:
-                w = csv.writer(f)
-                w.writerow(header)
-
-                for i in range(M):
-                    row = [f"{t_ds_csv[i]:.9f}"]
-
-                    # RAW block
-                    for k in keys_for_csv:
-                        col = y2_ds_by_key[k][i, :]
-                        if INCLUDE_TRACES:
-                            row += [f"{v:.9g}" if np.isfinite(v) else "" for v in col]
-                        m, sem = self._nanmean_sem(col, axis=0)  # 1D -> scalars
-                        row += [f"{m:.9g}", f"{sem:.9g}"]
-
-                    # NORMALIZED block
-                    for k in keys_for_csv:
-                        colN = y2_ds_by_key_norm[k][i, :]
-                        if INCLUDE_TRACES:
-                            row += [f"{v:.9g}" if np.isfinite(v) else "" for v in colN]
-                        mN, semN = self._nanmean_sem(colN, axis=0)
-                        row += [f"{mN:.9g}", f"{semN:.9g}"]
-
-                    w.writerow(row)
-                    if (i % CSV_FLUSH_EVERY) == 0:
-                        QApplication.processEvents()
-        finally:
-            self.unsetCursor()
-
-        # -------------------- (3) Per-breath CSV (WIDE; with is_sigh) --------------------
-        breaths_path = base.with_name(base.name + "_breaths.csv")
-
-        BREATH_COLS = [
-            "sweep", "breath", "t", "region", "is_sigh",
-            "if", "amp_insp", "amp_exp", "area_insp", "area_exp",
-            "ti", "te", "vent_proxy",
-        ]
-        def _headers_for_block(suffix: str | None) -> list[str]:
-            if not suffix: return BREATH_COLS[:]
-            return [f"{c}_{suffix}" for c in BREATH_COLS]
-
-        def _headers_for_block_norm(suffix: str | None) -> list[str]:
-            base_cols = _headers_for_block(suffix)
-            return [h + "_norm" for h in base_cols]
-
-        rows_all, rows_bl, rows_st, rows_po = [], [], [], []
-        rows_all_N, rows_bl_N, rows_st_N, rows_po_N = [], [], [], []
-
-        need_keys = ["if", "amp_insp", "amp_exp", "area_insp", "area_exp", "ti", "te", "vent_proxy"]
-
-        for s in kept_sweeps:
-            y_proc = self._get_processed_for(st.analyze_chan, s)
-            pks    = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-            br     = st.breath_by_sweep.get(s, None)
-            if br is None and pks.size:
-                br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
-                st.breath_by_sweep[s] = br
-            if br is None:
-                br = {"onsets": np.array([], dtype=int)}
-
-            on = np.asarray(br.get("onsets", []), dtype=int)
-            if on.size < 2:
-                continue
-
-            mids = (on[:-1] + on[1:]) // 2
-
-            # Metric traces sampled at breath midpoints
-            traces = {}
-            for k in need_keys:
-                if k in metrics.METRICS:
-                    traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
-                else:
-                    traces[k] = None
-
-            # Per-sweep breath-based baselines (use breath midpoints)
-            t_rel_all = (st.t[mids] - (global_s0 if have_global_stim else 0.0)).astype(float)
-            mask_pre_b  = (t_rel_all >= -NORM_BASELINE_WINDOW_S) & (t_rel_all < 0.0)
-            mask_post_b = (t_rel_all >=  0.0) & (t_rel_all <= NORM_BASELINE_WINDOW_S)
-
-            b_by_k = {}
-            for k in need_keys:
-                arr = traces.get(k, None)
-                if arr is None or len(arr) != N:
-                    b_by_k[k] = np.nan
+    
+            # -------------------- (2) Per-time CSV (raw + normalized appended) --------------------
+            csv_time_path = base.with_name(base.name + "_means_by_time.csv")
+            keys_for_csv  = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
+    
+            # Build normalized stacks per metric
+            y2_ds_by_key_norm = {}
+            baseline_by_key   = {}
+            for k in keys_for_csv:
+                b = _per_sweep_baseline_for_time(y2_ds_by_key[k])
+                baseline_by_key[k] = b
+                y2_ds_by_key_norm[k] = _normalize_matrix_by_baseline(y2_ds_by_key[k], b)
+    
+            # headers: raw first, then the same pattern with *_norm suffix
+            header = ["t"]
+            for k in keys_for_csv:
+                if INCLUDE_TRACES:
+                    header += [f"{k}_s{j+1}" for j in range(S)]
+                header += [f"{k}_mean", f"{k}_sem"]
+    
+            for k in keys_for_csv:
+                if INCLUDE_TRACES:
+                    header += [f"{k}_norm_s{j+1}" for j in range(S)]
+                header += [f"{k}_norm_mean", f"{k}_norm_sem"]
+    
+            self.setCursor(Qt.CursorShape.WaitCursor)
+            try:
+                with open(csv_time_path, "w", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(header)
+    
+                    for i in range(M):
+                        row = [f"{t_ds_csv[i]:.9f}"]
+    
+                        # RAW block
+                        for k in keys_for_csv:
+                            col = y2_ds_by_key[k][i, :]
+                            if INCLUDE_TRACES:
+                                row += [f"{v:.9g}" if np.isfinite(v) else "" for v in col]
+                            m, sem = self._nanmean_sem(col, axis=0)  # 1D -> scalars
+                            row += [f"{m:.9g}", f"{sem:.9g}"]
+    
+                        # NORMALIZED block
+                        for k in keys_for_csv:
+                            colN = y2_ds_by_key_norm[k][i, :]
+                            if INCLUDE_TRACES:
+                                row += [f"{v:.9g}" if np.isfinite(v) else "" for v in colN]
+                            mN, semN = self._nanmean_sem(colN, axis=0)
+                            row += [f"{mN:.9g}", f"{semN:.9g}"]
+    
+                        w.writerow(row)
+                        if (i % CSV_FLUSH_EVERY) == 0:
+                            QApplication.processEvents()
+            finally:
+                self.unsetCursor()
+    
+            # -------------------- (3) Per-breath CSV (WIDE; with is_sigh) --------------------
+            breaths_path = base.with_name(base.name + "_breaths.csv")
+    
+            BREATH_COLS = [
+                "sweep", "breath", "t", "region", "is_sigh",
+                "if", "amp_insp", "amp_exp", "area_insp", "area_exp",
+                "ti", "te", "vent_proxy",
+            ]
+            def _headers_for_block(suffix: str | None) -> list[str]:
+                if not suffix: return BREATH_COLS[:]
+                return [f"{c}_{suffix}" for c in BREATH_COLS]
+    
+            def _headers_for_block_norm(suffix: str | None) -> list[str]:
+                base_cols = _headers_for_block(suffix)
+                return [h + "_norm" for h in base_cols]
+    
+            rows_all, rows_bl, rows_st, rows_po = [], [], [], []
+            rows_all_N, rows_bl_N, rows_st_N, rows_po_N = [], [], [], []
+    
+            need_keys = ["if", "amp_insp", "amp_exp", "area_insp", "area_exp", "ti", "te", "vent_proxy"]
+    
+            for s in kept_sweeps:
+                y_proc = self._get_processed_for(st.analyze_chan, s)
+                pks    = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+                br     = st.breath_by_sweep.get(s, None)
+                if br is None and pks.size:
+                    br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
+                    st.breath_by_sweep[s] = br
+                if br is None:
+                    br = {"onsets": np.array([], dtype=int)}
+    
+                on = np.asarray(br.get("onsets", []), dtype=int)
+                if on.size < 2:
                     continue
-                vals = arr[mids[mask_pre_b]]
-                vals = vals[np.isfinite(vals)]
-                if vals.size == 0:
-                    vals = arr[mids[mask_post_b]]
+    
+                mids = (on[:-1] + on[1:]) // 2
+    
+                # Metric traces sampled at breath midpoints
+                traces = {}
+                for k in need_keys:
+                    if k in metrics.METRICS:
+                        traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
+                    else:
+                        traces[k] = None
+    
+                # Per-sweep breath-based baselines (use breath midpoints)
+                t_rel_all = (st.t[mids] - (global_s0 if have_global_stim else 0.0)).astype(float)
+                mask_pre_b  = (t_rel_all >= -NORM_BASELINE_WINDOW_S) & (t_rel_all < 0.0)
+                mask_post_b = (t_rel_all >=  0.0) & (t_rel_all <= NORM_BASELINE_WINDOW_S)
+    
+                b_by_k = {}
+                for k in need_keys:
+                    arr = traces.get(k, None)
+                    if arr is None or len(arr) != N:
+                        b_by_k[k] = np.nan
+                        continue
+                    vals = arr[mids[mask_pre_b]]
                     vals = vals[np.isfinite(vals)]
-                b_by_k[k] = float(np.mean(vals)) if vals.size else np.nan
-
-            # NEW: sigh flag per breath interval [on[j], on[j+1])
-            sigh_idx = np.asarray(st.sigh_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-            sigh_idx = sigh_idx[(sigh_idx >= 0) & (sigh_idx < len(y_proc))]
-            is_sigh_per_breath = np.zeros(on.size - 1, dtype=int)
-            if sigh_idx.size:
-                for j in range(on.size - 1):
-                    a = int(on[j]); b = int(on[j+1])
-                    if np.any((sigh_idx >= a) & (sigh_idx < b)):
-                        is_sigh_per_breath[j] = 1
-
-            for i, idx in enumerate(mids, start=1):
-                t_rel = float(st.t[int(idx)] - (global_s0 if have_global_stim else 0.0))
-                sigh_flag = str(int(is_sigh_per_breath[i - 1]))
-
-                # ----- RAW: ALL
-                row_all = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag]
-                for k in need_keys:
-                    v = np.nan
-                    arr = traces.get(k, None)
-                    if arr is not None and len(arr) == N:
-                        v = arr[int(idx)]
-                    row_all.append(f"{v:.9g}" if np.isfinite(v) else "")
-                rows_all.append(row_all)
-
-                # ----- NORM: ALL (binary flag repeated; not normalized)
-                row_allN = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag]
-                for k in need_keys:
-                    v = np.nan
-                    arr = traces.get(k, None)
-                    if arr is not None and len(arr) == N:
-                        v = arr[int(idx)]
-                    b = b_by_k.get(k, np.nan)
-                    vn = (v / b) if (np.isfinite(v) and np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
-                    row_allN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
-                rows_all_N.append(row_allN)
-
-                if have_global_stim:
-                    region = "Baseline" if t_rel < 0 else ("Stim" if t_rel <= global_dur else "Post")
-
-                    # RAW regional row
-                    row_reg = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag]
+                    if vals.size == 0:
+                        vals = arr[mids[mask_post_b]]
+                        vals = vals[np.isfinite(vals)]
+                    b_by_k[k] = float(np.mean(vals)) if vals.size else np.nan
+    
+                # NEW: sigh flag per breath interval [on[j], on[j+1])
+                sigh_idx = np.asarray(st.sigh_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+                sigh_idx = sigh_idx[(sigh_idx >= 0) & (sigh_idx < len(y_proc))]
+                is_sigh_per_breath = np.zeros(on.size - 1, dtype=int)
+                if sigh_idx.size:
+                    for j in range(on.size - 1):
+                        a = int(on[j]); b = int(on[j+1])
+                        if np.any((sigh_idx >= a) & (sigh_idx < b)):
+                            is_sigh_per_breath[j] = 1
+    
+                for i, idx in enumerate(mids, start=1):
+                    t_rel = float(st.t[int(idx)] - (global_s0 if have_global_stim else 0.0))
+                    sigh_flag = str(int(is_sigh_per_breath[i - 1]))
+    
+                    # ----- RAW: ALL
+                    row_all = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag]
                     for k in need_keys:
                         v = np.nan
                         arr = traces.get(k, None)
                         if arr is not None and len(arr) == N:
                             v = arr[int(idx)]
-                        row_reg.append(f"{v:.9g}" if np.isfinite(v) else "")
-                    if region == "Baseline": rows_bl.append(row_reg)
-                    elif region == "Stim":  rows_st.append(row_reg)
-                    else:                   rows_po.append(row_reg)
-
-                    # NORM regional row
-                    row_regN = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag]
+                        row_all.append(f"{v:.9g}" if np.isfinite(v) else "")
+                    rows_all.append(row_all)
+    
+                    # ----- NORM: ALL (binary flag repeated; not normalized)
+                    row_allN = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag]
                     for k in need_keys:
                         v = np.nan
                         arr = traces.get(k, None)
@@ -3951,102 +3938,147 @@ class MainWindow(QMainWindow):
                             v = arr[int(idx)]
                         b = b_by_k.get(k, np.nan)
                         vn = (v / b) if (np.isfinite(v) and np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
-                        row_regN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
-                    if region == "Baseline": rows_bl_N.append(row_regN)
-                    elif region == "Stim":  rows_st_N.append(row_regN)
-                    else:                   rows_po_N.append(row_regN)
-
-        def _pad_row(row, want_len):
-            if row is None: return [""] * want_len
-            if len(row) < want_len: return row + [""] * (want_len - len(row))
-            return row
-
-        headers_all = _headers_for_block(None)
-        headers_bl  = _headers_for_block("baseline")
-        headers_st  = _headers_for_block("stim")
-        headers_po  = _headers_for_block("post")
-
-        headers_allN = _headers_for_block_norm(None)
-        headers_blN  = _headers_for_block_norm("baseline")
-        headers_stN  = _headers_for_block_norm("stim")
-        headers_poN  = _headers_for_block_norm("post")
-
-        have_stim_blocks = have_global_stim and (len(rows_bl) + len(rows_st) + len(rows_po) > 0)
-
-        with open(breaths_path, "w", newline="") as f:
-            w = csv.writer(f)
-            if not have_stim_blocks:
-                # RAW + NORM (ALL only)
-                full_header = headers_all + [""] + headers_allN
-                w.writerow(full_header)
-                L = max(len(rows_all), len(rows_all_N))
-                LA = len(headers_all); LAN = len(headers_allN)
-                for i in range(L):
-                    ra  = rows_all[i]   if i < len(rows_all)   else None
-                    raN = rows_all_N[i] if i < len(rows_all_N) else None
-                    row = _pad_row(ra, LA) + [""] + _pad_row(raN, LAN)
-                    w.writerow(row)
-            else:
-                # RAW blocks, then NORM blocks
-                full_header = (
-                    headers_all + [""] + headers_bl + [""] + headers_st + [""] + headers_po + [""] +
-                    headers_allN + [""] + headers_blN + [""] + headers_stN + [""] + headers_poN
-                )
-                w.writerow(full_header)
-
-                L = max(
-                    len(rows_all), len(rows_bl), len(rows_st), len(rows_po),
-                    len(rows_all_N), len(rows_bl_N), len(rows_st_N), len(rows_po_N),
-                )
-                LA = len(headers_all); LB = len(headers_bl); LS = len(headers_st); LP = len(headers_po)
-                LAN = len(headers_allN); LBN = len(headers_blN); LSN = len(headers_stN); LPN = len(headers_poN)
-
-                for i in range(L):
-                    ra  = rows_all[i]   if i < len(rows_all)   else None
-                    rb  = rows_bl[i]    if i < len(rows_bl)    else None
-                    rs  = rows_st[i]    if i < len(rows_st)    else None
-                    rp  = rows_po[i]    if i < len(rows_po)    else None
-                    raN = rows_all_N[i] if i < len(rows_all_N) else None
-                    rbN = rows_bl_N[i]  if i < len(rows_bl_N)  else None
-                    rsN = rows_st_N[i]  if i < len(rows_st_N)  else None
-                    rpN = rows_po_N[i]  if i < len(rows_po_N)  else None
-
-                    row = (
-                        _pad_row(ra, LA) + [""] +
-                        _pad_row(rb, LB) + [""] +
-                        _pad_row(rs, LS) + [""] +
-                        _pad_row(rp, LP) + [""] +
-                        _pad_row(raN, LAN) + [""] +
-                        _pad_row(rbN, LBN) + [""] +
-                        _pad_row(rsN, LSN) + [""] +
-                        _pad_row(rpN, LPN)
+                        row_allN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
+                    rows_all_N.append(row_allN)
+    
+                    if have_global_stim:
+                        region = "Baseline" if t_rel < 0 else ("Stim" if t_rel <= global_dur else "Post")
+    
+                        # RAW regional row
+                        row_reg = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag]
+                        for k in need_keys:
+                            v = np.nan
+                            arr = traces.get(k, None)
+                            if arr is not None and len(arr) == N:
+                                v = arr[int(idx)]
+                            row_reg.append(f"{v:.9g}" if np.isfinite(v) else "")
+                        if region == "Baseline": rows_bl.append(row_reg)
+                        elif region == "Stim":  rows_st.append(row_reg)
+                        else:                   rows_po.append(row_reg)
+    
+                        # NORM regional row
+                        row_regN = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag]
+                        for k in need_keys:
+                            v = np.nan
+                            arr = traces.get(k, None)
+                            if arr is not None and len(arr) == N:
+                                v = arr[int(idx)]
+                            b = b_by_k.get(k, np.nan)
+                            vn = (v / b) if (np.isfinite(v) and np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
+                            row_regN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
+                        if region == "Baseline": rows_bl_N.append(row_regN)
+                        elif region == "Stim":  rows_st_N.append(row_regN)
+                        else:                   rows_po_N.append(row_regN)
+    
+            def _pad_row(row, want_len):
+                if row is None: return [""] * want_len
+                if len(row) < want_len: return row + [""] * (want_len - len(row))
+                return row
+    
+            headers_all = _headers_for_block(None)
+            headers_bl  = _headers_for_block("baseline")
+            headers_st  = _headers_for_block("stim")
+            headers_po  = _headers_for_block("post")
+    
+            headers_allN = _headers_for_block_norm(None)
+            headers_blN  = _headers_for_block_norm("baseline")
+            headers_stN  = _headers_for_block_norm("stim")
+            headers_poN  = _headers_for_block_norm("post")
+    
+            have_stim_blocks = have_global_stim and (len(rows_bl) + len(rows_st) + len(rows_po) > 0)
+    
+            with open(breaths_path, "w", newline="") as f:
+                w = csv.writer(f)
+                if not have_stim_blocks:
+                    # RAW + NORM (ALL only)
+                    full_header = headers_all + [""] + headers_allN
+                    w.writerow(full_header)
+                    L = max(len(rows_all), len(rows_all_N))
+                    LA = len(headers_all); LAN = len(headers_allN)
+                    for i in range(L):
+                        ra  = rows_all[i]   if i < len(rows_all)   else None
+                        raN = rows_all_N[i] if i < len(rows_all_N) else None
+                        row = _pad_row(ra, LA) + [""] + _pad_row(raN, LAN)
+                        w.writerow(row)
+                else:
+                    # RAW blocks, then NORM blocks
+                    full_header = (
+                        headers_all + [""] + headers_bl + [""] + headers_st + [""] + headers_po + [""] +
+                        headers_allN + [""] + headers_blN + [""] + headers_stN + [""] + headers_poN
                     )
-                    w.writerow(row)
+                    w.writerow(full_header)
+    
+                    L = max(
+                        len(rows_all), len(rows_bl), len(rows_st), len(rows_po),
+                        len(rows_all_N), len(rows_bl_N), len(rows_st_N), len(rows_po_N),
+                    )
+                    LA = len(headers_all); LB = len(headers_bl); LS = len(headers_st); LP = len(headers_po)
+                    LAN = len(headers_allN); LBN = len(headers_blN); LSN = len(headers_stN); LPN = len(headers_poN)
+    
+                    for i in range(L):
+                        ra  = rows_all[i]   if i < len(rows_all)   else None
+                        rb  = rows_bl[i]    if i < len(rows_bl)    else None
+                        rs  = rows_st[i]    if i < len(rows_st)    else None
+                        rp  = rows_po[i]    if i < len(rows_po)    else None
+                        raN = rows_all_N[i] if i < len(rows_all_N) else None
+                        rbN = rows_bl_N[i]  if i < len(rows_bl_N)  else None
+                        rsN = rows_st_N[i]  if i < len(rows_st_N)  else None
+                        rpN = rows_po_N[i]  if i < len(rows_po_N)  else None
+    
+                        row = (
+                            _pad_row(ra, LA) + [""] +
+                            _pad_row(rb, LB) + [""] +
+                            _pad_row(rs, LS) + [""] +
+                            _pad_row(rp, LP) + [""] +
+                            _pad_row(raN, LAN) + [""] +
+                            _pad_row(rbN, LBN) + [""] +
+                            _pad_row(rsN, LSN) + [""] +
+                            _pad_row(rpN, LPN)
+                        )
+                        w.writerow(row)
 
-        # -------------------- (4) Summary PDF --------------------
+        # -------------------- (4) Summary PDF or Preview --------------------
         keys_for_timeplots = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
         label_by_key = {key: label for (label, key) in metrics.METRIC_SPECS if key in keys_for_timeplots}
-        pdf_path = base.with_name(base.name + "_summary.pdf")
-        try:
-            self._save_metrics_summary_pdf(
-                out_path=pdf_path,
-                t_ds_csv=t_ds_csv,
-                y2_ds_by_key=y2_ds_by_key,
-                keys_for_csv=keys_for_timeplots,
-                label_by_key=label_by_key,
-                stim_zero=(global_s0 if have_global_stim else None),
-                stim_dur=(global_dur if have_global_stim else None),
-            )
-        except Exception as e:
-            print(f"[save][summary-pdf] skipped: {e}")
 
-        # -------------------- done --------------------
-        msg = f"Saved:\n- {npz_path.name}\n- {csv_time_path.name}\n- {breaths_path.name}\n- {pdf_path.name}"
-        print("[save]", msg)
-        try:
-            self.statusbar.showMessage(msg, 6000)
-        except Exception:
-            pass
+        if preview_only:
+            # Show interactive preview dialog instead of saving
+            try:
+                self._show_summary_preview_dialog(
+                    t_ds_csv=t_ds_csv,
+                    y2_ds_by_key=y2_ds_by_key,
+                    keys_for_csv=keys_for_timeplots,
+                    label_by_key=label_by_key,
+                    stim_zero=(global_s0 if have_global_stim else None),
+                    stim_dur=(global_dur if have_global_stim else None),
+                )
+            except Exception as e:
+                QMessageBox.critical(self, "View Summary", f"Error generating preview:\n{e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            # Save PDF to disk
+            pdf_path = base.with_name(base.name + "_summary.pdf")
+            try:
+                self._save_metrics_summary_pdf(
+                    out_path=pdf_path,
+                    t_ds_csv=t_ds_csv,
+                    y2_ds_by_key=y2_ds_by_key,
+                    keys_for_csv=keys_for_timeplots,
+                    label_by_key=label_by_key,
+                    stim_zero=(global_s0 if have_global_stim else None),
+                    stim_dur=(global_dur if have_global_stim else None),
+                )
+            except Exception as e:
+                print(f"[save][summary-pdf] skipped: {e}")
+
+            # -------------------- done --------------------
+            msg = f"Saved:\n- {npz_path.name}\n- {csv_time_path.name}\n- {breaths_path.name}\n- {pdf_path.name}"
+            print("[save]", msg)
+            try:
+                self.statusbar.showMessage(msg, 6000)
+            except Exception:
+                pass
 
 
     def _mean_sem_1d(self, arr: np.ndarray):
@@ -4619,9 +4651,14 @@ class MainWindow(QMainWindow):
         label_by_key: dict[str, str],
         stim_zero: float | None,
         stim_dur: float | None,
+        return_figures: bool = False,
          ):
         """
-        Build a two-page PDF:
+        Build a two-page PDF (or return figures for preview).
+
+        If return_figures=True: Returns (fig1, fig2) tuple instead of saving.
+        If return_figures=False: Saves PDF to out_path.
+
         • Page 1: rows = metrics, cols = [all sweeps | mean±SEM | histograms] using RAW data
         • Page 2: same layout, using NORMALIZED data (per sweep, per metric baseline)
         • NEW: overlay orange star markers at times where sighs occurred (first two columns)
@@ -4849,6 +4886,8 @@ class MainWindow(QMainWindow):
             nrows = max(1, len(keys_for_csv))
             for r, k in enumerate(keys_for_csv):
                 label = label_by_key.get(k, k)
+                is_bottom_row = (r == nrows - 1)
+                is_top_row = (r == 0)
 
                 # --- col 1: all sweeps overlaid ---
                 ax1 = axes[r, 0]
@@ -4860,21 +4899,16 @@ class MainWindow(QMainWindow):
                     ax1.axvspan(0.0, stim_dur, color="#2E5090", alpha=0.25)
                     ax1.axvline(0.0, color="#2E5090", lw=1.0, alpha=0.8)
                     ax1.axvline(stim_dur, color="#2E5090", lw=1.0, alpha=0.8, ls="--")
-                _plot_sigh_time_stars(ax1, sigh_times_rel)  # NEW
-                ax1.set_title(f"{label} — all sweeps{title_suffix}")
-                if r == nrows - 1:
-                    ax1.set_xlabel("Time (s, rel. stim onset)")
+                _plot_sigh_time_stars(ax1, sigh_times_rel)
+                # Use less padding on top row to make room for figure title
+                title_pad = 3 if is_top_row else 8
+                ax1.set_title(f"{label} — all sweeps{title_suffix}", fontsize=9, pad=title_pad)
+                ax1.set_ylabel(label, fontsize=8)  # Add y-label with metric name
+                ax1.set_xlabel("Time (s)", fontsize=8)
 
                 # --- col 2: mean ± SEM ---
                 ax2 = axes[r, 1]
                 if Y is not None and Y.shape[0] == M:
-                    # with np.errstate(invalid="ignore"):
-                    #     mean = np.nanmean(Y, axis=1)
-                    #     n    = np.sum(np.isfinite(Y), axis=1)
-                    #     std  = np.nanstd(Y, axis=1, ddof=1)
-                    #     sem  = np.where(n >= 2, std / np.sqrt(n), np.nan)
-                    # ax2.plot(t_ds_csv, mean, lw=1.8)
-                    # ax2.fill_between(t_ds_csv, mean - sem, mean + sem, alpha=0.25, linewidth=0)
                     mean, sem = _rowwise_mean_sem(Y)
                     ax2.plot(t_ds_csv, mean, lw=1.8)
                     ax2.fill_between(t_ds_csv, mean - sem, mean + sem, alpha=0.25, linewidth=0)
@@ -4883,10 +4917,10 @@ class MainWindow(QMainWindow):
                     ax2.axvspan(0.0, stim_dur, color="#2E5090", alpha=0.25)
                     ax2.axvline(0.0, color="#2E5090", lw=1.0, alpha=0.8)
                     ax2.axvline(stim_dur, color="#2E5090", lw=1.0, alpha=0.8, ls="--")
-                _plot_sigh_time_stars(ax2, sigh_times_rel)  # NEW
-                ax2.set_title(f"{label} — mean ± SEM{title_suffix}")
-                if r == nrows - 1:
-                    ax2.set_xlabel("Time (s, rel. stim onset)")
+                _plot_sigh_time_stars(ax2, sigh_times_rel)
+                ax2.set_title(f"{label} — mean ± SEM{title_suffix}", fontsize=9, pad=title_pad)
+                ax2.set_ylabel(label, fontsize=8)  # Add y-label with metric name
+                ax2.set_xlabel("Time (s)", fontsize=8)
 
                 # --- col 3: line histograms (density) + stars at sigh metric values ---
                 ax3 = axes[r, 2]
@@ -4914,13 +4948,20 @@ class MainWindow(QMainWindow):
                         _plot_line(hist_vals[k]["stim"],     "Stim",     dict(lw=1.6, ls="--"))
                         _plot_line(hist_vals[k]["post"],     "Post",     dict(lw=1.6, ls=":"))
 
-                ax3.set_title(f"{label} — distribution (density){title_suffix}")
-                ax3.set_ylabel("Density")
-                if len(ax3.lines):
-                    ax3.legend(loc="best", fontsize=8)
+                ax3.set_title(f"{label} — distribution (density){title_suffix}", fontsize=9, pad=title_pad)
+                ax3.set_ylabel("Density", fontsize=8)
+                ax3.set_xlabel(label, fontsize=8)  # Add metric name as x-label
+                # Only show legend on top row to save space
+                if len(ax3.lines) and is_top_row:
+                    ax3.legend(loc="best", fontsize=7)
 
                 # NEW: stars for histogram at sigh metric values (use "all" sigh values)
                 _plot_hist_stars(ax3, sigh_hist_vals_by_key.get(k, []))
+
+                # Reduce tick label font size for all axes
+                ax1.tick_params(labelsize=7)
+                ax2.tick_params(labelsize=7)
+                ax3.tick_params(labelsize=7)
 
             fig.tight_layout()
 
@@ -4944,26 +4985,165 @@ class MainWindow(QMainWindow):
         # ---------- Create two-page PDF ----------
         nrows = max(1, len(keys_for_csv))
         fig_w = 13
-        fig_h = max(4.0, 2.8 * nrows)
+        fig_h = max(4.0, 2.6 * nrows)  # Reduced from 5.25 to 2.6 per row (half of 5.25)
 
-        with PdfPages(out_path) as pdf:
-            # Page 1 — RAW
-            fig1, axes1 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
-            plt.subplots_adjust(hspace=0.6, wspace=0.25)
-            # _plot_grid(fig1, axes1, y2_ds_by_key, y2_ds_by_key=hist_vals_raw, sigh_hist_vals_by_key=sigh_vals_raw_by_key, sigh_times_rel=sigh_times_rel, title_suffix="")
-            _plot_grid(fig1, axes1, y2_ds_by_key, hist_vals_raw, sigh_vals_raw_by_key, sigh_times_rel, title_suffix="")
-            
-            fig1.suptitle("PlethApp summary — raw", y=0.995, fontsize=12)
-            pdf.savefig(fig1, dpi=150)
+        # Page 1 — RAW
+        fig1, axes1 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
+        _plot_grid(fig1, axes1, y2_ds_by_key, hist_vals_raw, sigh_vals_raw_by_key, sigh_times_rel, title_suffix="")
+        fig1.suptitle("Summary — raw", fontsize=11)
+        fig1.tight_layout(rect=[0, 0, 1, 0.99])  # Leave 1% at top for suptitle
+
+        # Page 2 — NORMALIZED
+        fig2, axes2 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
+        _plot_grid(fig2, axes2, y2_ds_by_key_norm, hist_vals_norm, sigh_vals_norm_by_key, sigh_times_rel, title_suffix=" (norm)")
+        fig2.suptitle("Summary — normalized", fontsize=11)
+        fig2.tight_layout(rect=[0, 0, 1, 0.99])  # Leave 1% at top for suptitle
+
+        # Either return figures or save to PDF
+        if return_figures:
+            return fig1, fig2
+        else:
+            with PdfPages(out_path) as pdf:
+                pdf.savefig(fig1, dpi=150)
+                pdf.savefig(fig2, dpi=150)
             plt.close(fig1)
-
-            # Page 2 — NORMALIZED
-            fig2, axes2 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
-            plt.subplots_adjust(hspace=0.6, wspace=0.25)
-            _plot_grid(fig2, axes2, y2_ds_by_key_norm, hist_vals_norm, sigh_vals_norm_by_key, sigh_times_rel, title_suffix=" (norm)")
-            fig2.suptitle("PlethApp summary — normalized", y=0.995, fontsize=12)
-            pdf.savefig(fig2, dpi=150)
             plt.close(fig2)
+
+
+    def _show_summary_preview_dialog(self, t_ds_csv, y2_ds_by_key, keys_for_csv, label_by_key, stim_zero, stim_dur):
+        """Display interactive preview dialog with the two summary figures."""
+        import matplotlib.pyplot as plt
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+
+        # Generate figures using the same method that saves PDFs, but get figures back instead
+        fig1, fig2 = self._save_metrics_summary_pdf(
+            out_path=None,  # Not used when return_figures=True
+            t_ds_csv=t_ds_csv,
+            y2_ds_by_key=y2_ds_by_key,
+            keys_for_csv=keys_for_csv,
+            label_by_key=label_by_key,
+            stim_zero=stim_zero,
+            stim_dur=stim_dur,
+            return_figures=True,
+        )
+
+        # -------------------- Display in dialog --------------------
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Summary Preview")
+        dialog.resize(1300, 900)  # Slightly larger window
+
+        main_layout = QVBoxLayout(dialog)
+
+        # Page selector controls at top
+        control_layout = QHBoxLayout()
+        page_label = QLabel("Page 1 of 2 (Raw)")
+        prev_btn = QPushButton("← Previous")
+        next_btn = QPushButton("Next →")
+        close_btn = QPushButton("Close")
+
+        control_layout.addWidget(prev_btn)
+        control_layout.addWidget(page_label)
+        control_layout.addWidget(next_btn)
+        control_layout.addStretch()
+        control_layout.addWidget(close_btn)
+
+        main_layout.addLayout(control_layout)
+
+        # Create scroll area for the canvas with mouse wheel support
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)  # Allow canvas to resize to fit width
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        # Enable mouse wheel scrolling by setting focus policy
+        scroll_area.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
+
+        # Canvas for displaying matplotlib figures
+        canvas1 = FigureCanvas(fig1)
+        canvas2 = FigureCanvas(fig2)
+
+        # Set size policies to allow width scaling but keep height fixed
+        from PyQt6.QtWidgets import QSizePolicy
+        from PyQt6.QtCore import QEvent
+        for canvas in [canvas1, canvas2]:
+            canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            canvas.setMinimumWidth(800)  # Minimum width
+
+        # Create a container widget to hold both canvases (so they don't get deleted)
+        from PyQt6.QtWidgets import QWidget, QStackedWidget
+        canvas_stack = QStackedWidget()
+        canvas_stack.addWidget(canvas1)  # index 0
+        canvas_stack.addWidget(canvas2)  # index 1
+        canvas_stack.setCurrentIndex(0)  # Start with page 1
+
+        # Install event filter on canvases to forward wheel events to scroll area
+        class WheelEventFilter:
+            def __init__(self, scroll_area):
+                self.scroll_area = scroll_area
+
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.Type.Wheel:
+                    # Forward wheel event to scroll area's viewport
+                    scrollbar = self.scroll_area.verticalScrollBar()
+                    scrollbar.setValue(scrollbar.value() - event.angleDelta().y())
+                    return True  # Event handled
+                return False  # Let other events pass through
+
+        wheel_filter = WheelEventFilter(scroll_area)
+        from PyQt6.QtCore import QObject
+
+        class EventFilterObject(QObject):
+            def __init__(self, filter_func):
+                super().__init__()
+                self.filter_func = filter_func
+
+            def eventFilter(self, obj, event):
+                return self.filter_func(obj, event)
+
+        filter_obj = EventFilterObject(wheel_filter.eventFilter)
+        canvas1.installEventFilter(filter_obj)
+        canvas2.installEventFilter(filter_obj)
+
+        # Put the stacked widget in the scroll area
+        scroll_area.setWidget(canvas_stack)
+        main_layout.addWidget(scroll_area)
+
+        # Page navigation
+        current_page = [1]  # Use list to allow modification in nested function
+
+        def update_page():
+            if current_page[0] == 1:
+                canvas_stack.setCurrentIndex(0)  # Show canvas1
+                page_label.setText("Page 1 of 2 (Raw)")
+                prev_btn.setEnabled(False)
+                next_btn.setEnabled(True)
+            else:
+                canvas_stack.setCurrentIndex(1)  # Show canvas2
+                page_label.setText("Page 2 of 2 (Normalized)")
+                prev_btn.setEnabled(True)
+                next_btn.setEnabled(False)
+            # Reset scroll position to top when changing pages
+            scroll_area.verticalScrollBar().setValue(0)
+
+        def go_prev():
+            current_page[0] = max(1, current_page[0] - 1)
+            update_page()
+
+        def go_next():
+            current_page[0] = min(2, current_page[0] + 1)
+            update_page()
+
+        prev_btn.clicked.connect(go_prev)
+        next_btn.clicked.connect(go_next)
+        close_btn.clicked.connect(dialog.close)
+
+        update_page()
+        dialog.exec()
+
+        # Cleanup
+        plt.close(fig1)
+        plt.close(fig2)
 
 
     def _sigh_sample_indices(self, s: int, pks: np.ndarray | None) -> set[int]:
