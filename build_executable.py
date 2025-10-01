@@ -20,8 +20,14 @@ def clean_build_artifacts():
     directories_to_clean = ['dist', 'build', '__pycache__']
     for dir_name in directories_to_clean:
         if os.path.exists(dir_name):
-            shutil.rmtree(dir_name)
-            print(f"  Removed {dir_name}/")
+            try:
+                shutil.rmtree(dir_name)
+                print(f"  Removed {dir_name}/")
+            except PermissionError:
+                print(f"  Warning: Could not remove {dir_name}/ (files in use)")
+                print(f"  PyInstaller will overwrite existing files...")
+            except Exception as e:
+                print(f"  Warning: Error removing {dir_name}/: {e}")
 
     # Clean Python cache files recursively
     for root, dirs, files in os.walk('.'):

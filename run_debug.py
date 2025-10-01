@@ -72,8 +72,13 @@ def main():
 
     try:
         # Import and run the main application
-        from main import main as app_main
-        app_main()
+        from PyQt6.QtWidgets import QApplication
+        from main import MainWindow
+
+        app = QApplication(sys.argv)
+        w = MainWindow()
+        w.show()
+        sys.exit(app.exec())
 
     except Exception as e:
         print(f"\nERROR: Application crashed: {e}")

@@ -1,4 +1,3 @@
-@"
 # Python
 __pycache__/
 *.py[cod]
@@ -23,17 +22,17 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Build/packaging
+# Build/packaging - keep dist/ for distributing executables
 build/
-dist/
-*.spec
 
 # Data/outputs (do NOT back these up)
 Pleth_App_analysis/
 *.npz
 *_bundle.npz
 *_means_by_time.csv
+*_timeseries.csv
 *_breaths.csv
+*_events.csv
 *.csv
 
 # Raw data (do NOT back these up)
@@ -47,7 +46,5 @@ Pleth_App_analysis/
 !/assets/
 !/assets/**
 
-
 # Keep the app icon (even if you later move it into an images folder)
 !assets/plethapp_thumbnail.ico
-"@ | Set-Content -Encoding UTF8 .gitignore

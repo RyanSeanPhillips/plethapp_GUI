@@ -442,6 +442,10 @@ class MainWindow(QMainWindow):
                 # Refresh the omit button label since sweep omissions were cleared
                 self._refresh_omit_button_label()
 
+                # Reset to first sweep and first window
+                st.sweep_idx = 0
+                self._win_left = None  # Reset window position (will default to start of trace)
+
                 something_changed = True
 
         # ---- Apply stim channel (if pending) ----
@@ -1994,7 +1998,7 @@ class MainWindow(QMainWindow):
 
         # Create progress dialog
         progress = QProgressDialog("Preparing data export...", None, 0, 100, self)
-        progress.setWindowTitle("Exporting Data")
+        progress.setWindowTitle("PlethAnalysis")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)  # Show immediately
         progress.setValue(0)
@@ -2012,7 +2016,7 @@ class MainWindow(QMainWindow):
 
         # Create progress dialog
         progress = QProgressDialog("Generating summary preview...", None, 0, 100, self)
-        progress.setWindowTitle("Creating Preview")
+        progress.setWindowTitle("PlethAnalysis")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)  # Show immediately
         progress.setValue(0)
@@ -3537,7 +3541,7 @@ class MainWindow(QMainWindow):
 
         5) <base>_summary.pdf (or preview dialog if preview_only=True)
         """
-        import numpy as np, csv, json
+        import numpy as np, csv, json, time
         from PyQt6.QtWidgets import QApplication
 
         st = self.state
@@ -3836,7 +3840,7 @@ class MainWindow(QMainWindow):
     
     
             # -------------------- (2) Per-time CSV (raw + normalized appended) --------------------
-            csv_time_path = base.with_name(base.name + "_means_by_time.csv")
+            csv_time_path = base.with_name(base.name + "_timeseries.csv")
             keys_for_csv  = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
     
             if progress_dialog:
@@ -3976,6 +3980,7 @@ class MainWindow(QMainWindow):
                 progress_dialog.setValue(50)
                 QApplication.processEvents()
 
+            t_start = time.time()
             self.setCursor(Qt.CursorShape.WaitCursor)
             try:
                 with open(csv_time_path, "w", newline="") as f:
@@ -4014,7 +4019,10 @@ class MainWindow(QMainWindow):
                             QApplication.processEvents()
             finally:
                 self.unsetCursor()
-    
+
+            t_elapsed = time.time() - t_start
+            print(f"[CSV] ✓ Time-series data written in {t_elapsed:.2f}s")
+
             if progress_dialog:
                 progress_dialog.setLabelText("Writing breath-by-breath CSV...")
                 progress_dialog.setValue(60)
@@ -4051,6 +4059,7 @@ class MainWindow(QMainWindow):
             eupnea_b_by_k = {}
             eupnea_masks_by_sweep = {}
 
+            t_start = time.time()
             print(f"[CSV] Pre-computing eupnea masks for {len(kept_sweeps)} sweeps...")
             for s in kept_sweeps:
                 y_proc = self._get_processed_for(st.analyze_chan, s)
@@ -4074,8 +4083,12 @@ class MainWindow(QMainWindow):
                     )
                     eupnea_masks_by_sweep[s] = eupnea_mask
 
+            t_elapsed = time.time() - t_start
+            print(f"[CSV] ✓ Eupnea masks computed in {t_elapsed:.2f}s")
+
             # Now compute baselines by collecting breath values from eupneic periods
             # IMPORTANT: Cache traces to reuse in main export loop AND PDF generation
+            t_start = time.time()
             print(f"[CSV] Computing eupnea baselines and caching traces for {len(need_keys)} metrics...")
             eupnea_baseline_breaths = {k: [] for k in need_keys}
 
@@ -4085,6 +4098,10 @@ class MainWindow(QMainWindow):
             cached_traces_by_sweep = {}  # Cache traces to avoid recomputing
 
             for s in kept_sweeps:
+                # Keep UI responsive during long computation
+                if progress_dialog:
+                    QApplication.processEvents()
+
                 y_proc = self._get_processed_for(st.analyze_chan, s)
                 pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
                 br = st.breath_by_sweep.get(s, None)
@@ -4168,7 +4185,12 @@ class MainWindow(QMainWindow):
                                         fallback_vals.append(val)
 
                     eupnea_b_by_k[k] = float(np.mean(fallback_vals)) if len(fallback_vals) > 0 else np.nan
-    
+
+            t_elapsed = time.time() - t_start
+            print(f"[CSV] ✓ Baselines and traces computed in {t_elapsed:.2f}s")
+
+            t_start = time.time()
+            print(f"[CSV] Writing breath-by-breath data...")
             for s in kept_sweeps:
                 # Use cached traces if available, otherwise compute
                 traces = cached_traces_by_sweep.get(s, None)
@@ -4394,12 +4416,16 @@ class MainWindow(QMainWindow):
                         )
                         w.writerow(row)
 
+            t_elapsed = time.time() - t_start
+            print(f"[CSV] ✓ Breath data written in {t_elapsed:.2f}s")
+
             if progress_dialog:
                 progress_dialog.setLabelText("Writing events CSV...")
                 progress_dialog.setValue(70)
                 QApplication.processEvents()
 
             # -------------------- (4) Events CSV (stimulus, apnea, eupnea intervals) --------------------
+            t_start = time.time()
             events_path = base.with_name(base.name + "_events.csv")
 
             events_rows = []
@@ -4536,7 +4562,11 @@ class MainWindow(QMainWindow):
                 for row in events_rows:
                     w.writerow(row)
 
+            t_elapsed = time.time() - t_start
+            print(f"[CSV] ✓ Events data written in {t_elapsed:.2f}s")
+
         # -------------------- (4) Summary PDF or Preview --------------------
+        t_start = time.time()
         if progress_dialog:
             progress_dialog.setLabelText("Generating summary figures..." if preview_only else "Generating PDF...")
             progress_dialog.setValue(80)
@@ -4575,6 +4605,12 @@ class MainWindow(QMainWindow):
                 )
             except Exception as e:
                 print(f"[save][summary-pdf] skipped: {e}")
+
+            t_elapsed = time.time() - t_start
+            if preview_only:
+                print(f"[PDF] ✓ Preview generated in {t_elapsed:.2f}s")
+            else:
+                print(f"[PDF] ✓ PDF saved in {t_elapsed:.2f}s")
 
             # -------------------- done --------------------
             if progress_dialog:
@@ -5962,8 +5998,9 @@ class MainWindow(QMainWindow):
         """
         Walk base_dir recursively and group CSVs by common root:
         root + '_breaths.csv'
-        root + '_means_by_time.csv'
-        Returns a list of dicts: {key, root, dir, breaths, means}
+        root + '_timeseries.csv'
+        root + '_events.csv'
+        Returns a list of dicts: {key, root, dir, breaths, means, events}
         """
         groups = {}
         for dirpath, _, filenames in os.walk(str(base_dir)):
@@ -5976,9 +6013,15 @@ class MainWindow(QMainWindow):
                 if lower.endswith("_breaths.csv"):
                     root = fn[:-len("_breaths.csv")]
                     kind = "breaths"
-                elif lower.endswith("_means_by_time.csv"):
+                elif lower.endswith("_timeseries.csv"):
+                    root = fn[:-len("_timeseries.csv")]
+                    kind = "means"
+                elif lower.endswith("_means_by_time.csv"):  # Legacy support
                     root = fn[:-len("_means_by_time.csv")]
                     kind = "means"
+                elif lower.endswith("_events.csv"):
+                    root = fn[:-len("_events.csv")]
+                    kind = "events"
 
                 if kind is None:
                     continue
@@ -5987,7 +6030,7 @@ class MainWindow(QMainWindow):
                 key = str((dir_p / root).resolve()).lower()  # unique per dir+root (case-insensitive on Win)
                 entry = groups.get(key)
                 if entry is None:
-                    entry = {"key": key, "root": root, "dir": dir_p, "breaths": None, "means": None}
+                    entry = {"key": key, "root": root, "dir": dir_p, "breaths": None, "means": None, "events": None}
                     groups[key] = entry
                 entry[kind] = str(dir_p / fn)
 
@@ -6011,27 +6054,35 @@ class MainWindow(QMainWindow):
             root = g["root"]
             has_b = bool(g["breaths"])
             has_m = bool(g["means"])
+            has_e = bool(g["events"])
 
-            if has_b and has_m:
-                suffix = "[breaths + means]"
-            elif has_b:
-                suffix = "[missing means]"
-            elif has_m:
-                suffix = "[missing breaths]"
+            # Build suffix showing what files are present
+            parts = []
+            if has_b:
+                parts.append("breaths")
+            if has_m:
+                parts.append("timeseries")
+            if has_e:
+                parts.append("events")
+
+            if parts:
+                suffix = f"[{' + '.join(parts)}]"
             else:
-                # Shouldn't happen; skip if neither is present
+                # Shouldn't happen; skip if nothing is present
                 continue
 
             item = QListWidgetItem(f"{root}  {suffix}")
             tt_lines = [f"Root: {root}", f"Dir:  {g['dir']}"]
             if g["breaths"]:
-                tt_lines.append(f"breaths: {g['breaths']}")
+                tt_lines.append(f"breaths:    {g['breaths']}")
             if g["means"]:
-                tt_lines.append(f"means:   {g['means']}")
+                tt_lines.append(f"timeseries: {g['means']}")
+            if g["events"]:
+                tt_lines.append(f"events:     {g['events']}")
             item.setToolTip("\n".join(tt_lines))
 
             # Store full metadata for later use
-            item.setData(Qt.ItemDataRole.UserRole, g)  # {'key', 'root', 'dir', 'breaths', 'means'}
+            item.setData(Qt.ItemDataRole.UserRole, g)  # {'key', 'root', 'dir', 'breaths', 'means', 'events'}
 
             self.FileList.addItem(item)
 
@@ -6068,7 +6119,7 @@ class MainWindow(QMainWindow):
         self.FileList.clear()
 
         # Patterns to include (recursive)
-        patterns = ["*_breaths.csv", "*_means_by_time.csv"]
+        patterns = ["*_breaths.csv", "*_timeseries.csv", "*_means_by_time.csv", "*_events.csv"]
 
         files = []
         try:
@@ -6222,14 +6273,15 @@ class MainWindow(QMainWindow):
             pass
 
     def on_move_all_right(self):
-        """Move ALL from left to right."""
+        """Move ALL VISIBLE from left to right."""
         src = self.FileList
         dst = self.FilestoConsolidateList
-        rows = list(range(src.count()))
+        # Only move visible (non-hidden) items
+        rows = [i for i in range(src.count()) if not src.item(i).isHidden()]
         moved, skipped = self._move_items(src, dst, rows)
         try:
             if moved or skipped:
-                self.statusbar.showMessage(f"Moved {moved} item(s) to right. Skipped {skipped} duplicate(s).", 3000)
+                self.statusbar.showMessage(f"Moved {moved} visible item(s) to right. Skipped {skipped} duplicate(s).", 3000)
         except Exception:
             pass
 
@@ -6246,14 +6298,15 @@ class MainWindow(QMainWindow):
             pass
 
     def on_move_all_left(self):
-        """Move ALL from right back to left."""
+        """Move ALL VISIBLE from right back to left."""
         src = self.FilestoConsolidateList
         dst = self.FileList
-        rows = list(range(src.count()))
+        # Only move visible (non-hidden) items
+        rows = [i for i in range(src.count()) if not src.item(i).isHidden()]
         moved, skipped = self._move_items(src, dst, rows)
         try:
             if moved or skipped:
-                self.statusbar.showMessage(f"Moved {moved} item(s) to left. Skipped {skipped} duplicate(s).", 3000)
+                self.statusbar.showMessage(f"Moved {moved} visible item(s) to left. Skipped {skipped} duplicate(s).", 3000)
         except Exception:
             pass
 
@@ -6530,6 +6583,7 @@ class MainWindow(QMainWindow):
         # Separate by file type
         means_files = []
         breaths_files = []
+        events_files = []
 
         for item in items:
             meta = item.data(Qt.ItemDataRole.UserRole) or {}
@@ -6537,8 +6591,10 @@ class MainWindow(QMainWindow):
                 means_files.append((meta["root"], Path(meta["means"])))
             if meta.get("breaths"):
                 breaths_files.append((meta["root"], Path(meta["breaths"])))
+            if meta.get("events"):
+                events_files.append((meta["root"], Path(meta["events"])))
 
-        if not means_files and not breaths_files:
+        if not means_files and not breaths_files and not events_files:
             QMessageBox.warning(self, "Consolidate", "No CSV files selected.")
             return
 
@@ -6561,6 +6617,7 @@ class MainWindow(QMainWindow):
         # Create progress dialog
         n_total_files = len(means_files) + len(breaths_files)
         progress = QProgressDialog("Consolidating data...", "Cancel", 0, 100, self)
+        progress.setWindowTitle("PlethAnalysis")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -6607,6 +6664,51 @@ class MainWindow(QMainWindow):
                 }
                 progress.setValue(80)
                 QApplication.processEvents()
+
+            if events_files:
+                if progress.wasCanceled():
+                    return
+
+                progress.setLabelText(f"Processing events data ({len(events_files)} files)...")
+                progress.setValue(82)
+                QApplication.processEvents()
+
+                events_df = self._consolidate_events(events_files)
+                print(f"Events DataFrame shape: {events_df.shape}")
+                print(f"Events columns: {events_df.columns.tolist()}")
+                if len(events_df) > 0:
+                    print(f"First few event types: {events_df['event_type'].unique()[:5]}")
+                consolidated_data['events'] = {
+                    'time_series': events_df,
+                    'raw_summary': {},
+                    'norm_summary': {},
+                    'eupnea_summary': {},
+                    'windows': []
+                }
+
+                # Process stimulus events separately
+                progress.setLabelText(f"Processing stimulus data ({len(events_files)} files)...")
+                progress.setValue(83)
+                QApplication.processEvents()
+
+                stimulus_df, stim_warnings = self._consolidate_stimulus(events_files)
+                print(f"Stimulus DataFrame shape: {stimulus_df.shape}")
+                if len(stimulus_df) > 0:
+                    print(f"Stimulus columns: {stimulus_df.columns.tolist()}")
+                    print(f"Stimulus rows: {len(stimulus_df)}")
+                consolidated_data['stimulus'] = {
+                    'time_series': stimulus_df,
+                    'raw_summary': {},
+                    'norm_summary': {},
+                    'eupnea_summary': {},
+                    'windows': []
+                }
+
+                # Add stimulus warnings to consolidated warnings
+                if stim_warnings:
+                    if '_warnings' not in consolidated_data:
+                        consolidated_data['_warnings'] = []
+                    consolidated_data['_warnings'].extend(stim_warnings)
 
             if progress.wasCanceled():
                 return
@@ -7512,8 +7614,8 @@ class MainWindow(QMainWindow):
                 
                 for root, path in files:
                     try:
-                        df = pd.read_csv(path)
-                        
+                        df = pd.read_csv(path, low_memory=False)
+
                         if col_name in df.columns:
                             values = df[col_name].dropna().values
                             if len(values) > 0:
@@ -7573,8 +7675,8 @@ class MainWindow(QMainWindow):
                 
                 for root, path in files:
                     try:
-                        df = pd.read_csv(path)
-                        
+                        df = pd.read_csv(path, low_memory=False)
+
                         if col_name in df.columns:
                             values = df[col_name].dropna().values
                             if len(values) > 0:
@@ -7618,16 +7720,179 @@ class MainWindow(QMainWindow):
                 
                 # Add blank column separator AFTER each normalized region
                 combined_df[''] = ''
-            
+
+            # Process EUPNEA-NORMALIZED data
+            for region_name, suffix in regions.items():
+                col_name = f"{metric}{suffix}_norm_eupnea" if suffix else f"{metric}_norm_eupnea"
+
+                # Collect eupnea-normalized data for this region
+                all_data_eupnea = []
+                file_roots_eupnea = []
+
+                for root, path in files:
+                    try:
+                        df = pd.read_csv(path, low_memory=False)
+
+                        if col_name in df.columns:
+                            values = df[col_name].dropna().values
+                            if len(values) > 0:
+                                all_data_eupnea.append(values)
+                                file_roots_eupnea.append(root)
+                    except Exception as e:
+                        print(f"Error reading {path}: {e}")
+
+                if not all_data_eupnea:
+                    continue
+
+                # Common bin edges for eupnea-normalized region
+                all_combined_eupnea = np.concatenate(all_data_eupnea)
+                n_bins = 30
+                bin_edges_eupnea = np.histogram_bin_edges(all_combined_eupnea, bins=n_bins)
+                bin_centers_eupnea = (bin_edges_eupnea[:-1] + bin_edges_eupnea[1:]) / 2
+
+                # Calculate density histogram for each file
+                region_data_eupnea = {f'bin_center_{region_name}_eupnea': bin_centers_eupnea}
+
+                density_arrays_eupnea = []
+                for root, values in zip(file_roots_eupnea, all_data_eupnea):
+                    counts, _ = np.histogram(values, bins=bin_edges_eupnea)
+                    bin_widths = np.diff(bin_edges_eupnea)
+                    density = counts / (counts.sum() * bin_widths)
+                    region_data_eupnea[f'{root}_{region_name}_eupnea'] = density
+                    density_arrays_eupnea.append(density)
+
+                # Calculate mean and SEM for eupnea-normalized region
+                if density_arrays_eupnea:
+                    density_matrix_eupnea = np.column_stack(density_arrays_eupnea)
+                    mean_eupnea, sem_eupnea = calc_mean_sem(density_matrix_eupnea)
+                    region_data_eupnea[f'mean_{region_name}_eupnea'] = mean_eupnea
+                    region_data_eupnea[f'sem_{region_name}_eupnea'] = sem_eupnea
+
+                # Create DataFrame for this eupnea-normalized region
+                region_df_eupnea = pd.DataFrame(region_data_eupnea)
+
+                # Merge horizontally
+                combined_df = pd.concat([combined_df, region_df_eupnea], axis=1)
+
+                # Add blank column separator AFTER each eupnea-normalized region
+                combined_df[''] = ''
+
             if combined_df is not None:
                 consolidated[f'{metric}_histogram'] = {
-                    'time_series': combined_df, 
-                    'raw_summary': {}, 
-                    'norm_summary': {}, 
+                    'time_series': combined_df,
+                    'raw_summary': {},
+                    'norm_summary': {},
+                    'eupnea_summary': {},
                     'windows': []
                 }
-        
+
         return consolidated
+
+
+    def _consolidate_events(self, files: list[tuple[str, Path]]) -> pd.DataFrame:
+        """
+        Consolidate events CSV files from multiple experiments (excluding stimulus events).
+        Adds experiment, experiment_number, and global_sweep_number columns.
+        """
+        import pandas as pd
+        import numpy as np
+
+        all_events = []
+
+        for exp_num, (root, path) in enumerate(files, start=1):
+            try:
+                df = pd.read_csv(path, low_memory=False)
+
+                if len(df) > 0:
+                    # Filter out stimulus events
+                    if 'event_type' in df.columns:
+                        df = df[~df['event_type'].str.contains('stimulus', case=False, na=False)]
+
+                    if len(df) > 0:  # Check if we still have data after filtering
+                        # Add experiment identifier columns
+                        df.insert(0, 'experiment', root)
+                        df.insert(1, 'experiment_number', exp_num)
+
+                        # Calculate global sweep number
+                        # Each experiment has sweeps numbered 1, 2, 3, etc.
+                        # We need to add an offset based on previous experiments
+                        if 'sweep' in df.columns:
+                            # Find the maximum sweep number in this experiment
+                            max_sweep = df['sweep'].max()
+                            # Calculate offset (total sweeps from previous experiments)
+                            sweep_offset = sum([pd.read_csv(files[i][1], low_memory=False)['sweep'].max()
+                                              for i in range(exp_num - 1)
+                                              if 'sweep' in pd.read_csv(files[i][1], low_memory=False).columns])
+                            df.insert(2, 'global_sweep_number', df['sweep'] + sweep_offset)
+
+                        all_events.append(df)
+
+            except Exception as e:
+                print(f"Error reading events file {path}: {e}")
+
+        if all_events:
+            return pd.concat(all_events, ignore_index=True)
+        else:
+            return pd.DataFrame()
+
+    def _consolidate_stimulus(self, files: list[tuple[str, Path]]) -> tuple[pd.DataFrame, list[str]]:
+        """
+        Extract stimulus events and validate consistency across all experiments/sweeps.
+        Returns: (stimulus_df with one instance, list of warnings)
+        """
+        import pandas as pd
+        import numpy as np
+
+        all_stimulus = []
+        warnings = []
+        reference_stim = None
+
+        for exp_num, (root, path) in enumerate(files, start=1):
+            try:
+                df = pd.read_csv(path, low_memory=False)
+
+                if 'event_type' in df.columns:
+                    # Extract only stimulus events
+                    stim_events = df[df['event_type'].str.contains('stimulus', case=False, na=False)].copy()
+
+                    if len(stim_events) > 0:
+                        # Determine which column names are used (could be start_time/end_time or t_start/t_end)
+                        start_col = 'start_time' if 'start_time' in stim_events.columns else 't_start'
+                        end_col = 'end_time' if 'end_time' in stim_events.columns else 't_end'
+
+                        # Get unique stimulus events (should be same across all sweeps)
+                        unique_stim = stim_events.drop_duplicates(subset=['event_type', start_col, end_col])
+
+                        if reference_stim is None:
+                            # First experiment sets the reference
+                            reference_stim = unique_stim[[start_col, end_col]].values
+                            # Store with experiment identifier
+                            result_df = unique_stim.copy()
+                            result_df.insert(0, 'experiment', root)
+                            all_stimulus.append(result_df)
+                        else:
+                            # Validate against reference
+                            current_stim = unique_stim[[start_col, end_col]].values
+
+                            # Check if stimulus events match
+                            if not (len(reference_stim) == len(current_stim) and
+                                    np.allclose(reference_stim.astype(float),
+                                               current_stim.astype(float),
+                                               rtol=1e-5)):
+                                warnings.append(f"WARNING: Stimulus timing differs in experiment '{root}'")
+                                print(f"  Stimulus mismatch in {root}")
+
+            except Exception as e:
+                print(f"Error reading stimulus from {path}: {e}")
+                import traceback
+                traceback.print_exc()
+
+        if all_stimulus:
+            # Return only the first instance (they should all be identical)
+            return all_stimulus[0], warnings
+        else:
+            return pd.DataFrame(), warnings
+
 
     # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     """
@@ -8273,7 +8538,7 @@ class MainWindow(QMainWindow):
 
         # Determine common time base (use first file's time)
         first_root, first_path = files[0]
-        df_first = pd.read_csv(first_path)
+        df_first = pd.read_csv(first_path, low_memory=False)
         t_common = df_first['t'].values
         t_common_min, t_common_max = t_common.min(), t_common.max()
         t_common_step = np.median(np.diff(t_common)) if len(t_common) > 1 else np.nan
@@ -8289,10 +8554,24 @@ class MainWindow(QMainWindow):
         # Helper function to calculate mean and SEM
         def calc_mean_sem(data_array):
             """Calculate mean and SEM from array of values."""
-            mean = np.nanmean(data_array, axis=1)
+            # Count valid values per row
             n = np.sum(np.isfinite(data_array), axis=1)
-            std = np.nanstd(data_array, axis=1, ddof=1)
-            sem = np.where(n >= 2, std / np.sqrt(n), np.nan)
+
+            # Initialize outputs with NaN
+            mean = np.full(data_array.shape[0], np.nan)
+            sem = np.full(data_array.shape[0], np.nan)
+
+            # Only calculate for rows with at least one valid value
+            valid_rows = n > 0
+            if valid_rows.any():
+                mean[valid_rows] = np.nanmean(data_array[valid_rows, :], axis=1)
+
+                # Only calculate SEM for rows with at least 2 values
+                sem_rows = n >= 2
+                if sem_rows.any():
+                    std = np.nanstd(data_array[sem_rows, :], axis=1, ddof=1)
+                    sem[sem_rows] = std / np.sqrt(n[sem_rows])
+
             return mean, sem
         
         # Helper function to calculate window mean
@@ -8317,25 +8596,27 @@ class MainWindow(QMainWindow):
             ('Post (25-30s)', 25.0, 30.0),
         ]
         
-        # Process each metric (combining raw and normalized in same sheet)
+        # Process each metric (combining raw, time-normalized, and eupnea-normalized in same sheet)
         for metric in metrics:
             metric_mean_col = f"{metric}_mean"
             metric_norm_col = f"{metric}_norm_mean"
-            
+            metric_eupnea_col = f"{metric}_norm_eupnea_mean"
+
             # Check if metric exists
             if metric_mean_col not in df_first.columns:
                 continue
-            
+
             result_df = pd.DataFrame({'t': t_common})
-            
+
             # Store data for summary calculations
             raw_data_dict = {}
             norm_data_dict = {}
+            eupnea_data_dict = {}
             
             # Collect raw data from all files
             raw_data_cols = []
             for root, path in files:
-                df = pd.read_csv(path)
+                df = pd.read_csv(path, low_memory=False)
 
                 if metric_mean_col not in df.columns:
                     print(f"Warning: {metric_mean_col} not found in {root}")
@@ -8413,7 +8694,7 @@ class MainWindow(QMainWindow):
             if metric_norm_col in df_first.columns:
                 norm_data_cols = []
                 for root, path in files:
-                    df = pd.read_csv(path)
+                    df = pd.read_csv(path, low_memory=False)
                     
                     if metric_norm_col not in df.columns:
                         continue
@@ -8450,22 +8731,75 @@ class MainWindow(QMainWindow):
                 if norm_data_cols:
                     norm_data = result_df[norm_data_cols].values
                     result_df['mean_norm'], result_df['sem_norm'] = calc_mean_sem(norm_data)
-            
-            # Insert blank column before normalized data
+
+            # Collect eupnea-normalized data from all files
+            if metric_eupnea_col in df_first.columns:
+                eupnea_data_cols = []
+                for root, path in files:
+                    df = pd.read_csv(path, low_memory=False)
+
+                    if metric_eupnea_col not in df.columns:
+                        continue
+
+                    t_file = df['t'].values
+                    y_file = df[metric_eupnea_col].values
+
+                    eupnea_col_name = f"{root}_eupnea"
+
+                    if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
+                        result_df[eupnea_col_name] = y_file
+                        eupnea_data_dict[root] = (t_common, y_file)
+                    else:
+                        mask = np.isfinite(y_file)
+                        if mask.sum() >= 2:
+                            try:
+                                f_interp = interp1d(
+                                    t_file[mask], y_file[mask],
+                                    kind='linear',
+                                    bounds_error=False,
+                                    fill_value=np.nan
+                                )
+                                y_interp = f_interp(t_common)
+                                result_df[eupnea_col_name] = y_interp
+                                eupnea_data_dict[root] = (t_common, y_interp)
+                            except:
+                                result_df[eupnea_col_name] = np.nan
+                        else:
+                            result_df[eupnea_col_name] = np.nan
+
+                    eupnea_data_cols.append(eupnea_col_name)
+
+                # Calculate eupnea-normalized mean and SEM
+                if eupnea_data_cols:
+                    eupnea_data = result_df[eupnea_data_cols].values
+                    result_df['mean_eupnea'], result_df['sem_eupnea'] = calc_mean_sem(eupnea_data)
+
+            # Insert blank columns between data blocks
+            # First blank: before time-normalized data
             norm_start_idx = None
             for i, col in enumerate(result_df.columns):
-                if '_norm' in str(col):
+                if '_norm' in str(col) and '_eupnea' not in str(col):
                     norm_start_idx = i
                     break
             if norm_start_idx is not None:
                 result_df.insert(norm_start_idx, '', '')
-            
+
+            # Second blank: before eupnea-normalized data
+            eupnea_start_idx = None
+            for i, col in enumerate(result_df.columns):
+                if '_eupnea' in str(col):
+                    eupnea_start_idx = i
+                    break
+            if eupnea_start_idx is not None:
+                result_df.insert(eupnea_start_idx, ' ', '')
+
             # Build summary statistics (as rows below the time series)
             # This will be saved as a separate section in Excel
             consolidated[metric] = {
                 'time_series': result_df,
                 'raw_summary': raw_data_dict,
                 'norm_summary': norm_data_dict,
+                'eupnea_summary': eupnea_data_dict,
                 'windows': windows
             }
 
@@ -8503,64 +8837,75 @@ class MainWindow(QMainWindow):
     def _consolidate_breaths_sighs(self, files: list[tuple[str, Path]]) -> pd.DataFrame:
         """
         Extract all breaths marked as sighs (is_sigh == 1) from breaths CSV files.
+        Adds experiment_number and global_sweep_number columns.
         Returns DataFrame with sigh breaths from all files.
         """
         import pandas as pd
         import numpy as np
-        
+
         # Columns to extract for raw data
-        raw_cols = ['sweep', 'breath', 't', 'region', 'is_sigh', 
-                    'if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 
+        raw_cols = ['sweep', 'breath', 't', 'region', 'is_sigh',
+                    'if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp',
                     'ti', 'te', 'vent_proxy']
-        
-        # Columns to extract for normalized data  
+
+        # Columns to extract for normalized data
         norm_cols = ['sweep', 'breath', 't', 'region', 'is_sigh',
                     'if_norm', 'amp_insp_norm', 'amp_exp_norm', 'area_insp_norm', 'area_exp_norm',
                     'ti_norm', 'te_norm', 'vent_proxy_norm']
-        
+
         all_sighs_raw = []
         all_sighs_norm = []
-        
-        for root, path in files:
+
+        for exp_num, (root, path) in enumerate(files, start=1):
             try:
-                df = pd.read_csv(path)
-                
+                df = pd.read_csv(path, low_memory=False)
+
                 # Filter for sighs (is_sigh == 1)
                 if 'is_sigh' in df.columns:
                     sigh_mask = df['is_sigh'] == 1
-                    
+
                     # Extract raw sigh data
                     available_raw_cols = [col for col in raw_cols if col in df.columns]
                     if available_raw_cols and sigh_mask.sum() > 0:
                         sigh_df_raw = df.loc[sigh_mask, available_raw_cols].copy()
                         sigh_df_raw.insert(0, 'file', root)
+                        sigh_df_raw.insert(1, 'experiment_number', exp_num)
+
+                        # Calculate global sweep number
+                        if 'sweep' in sigh_df_raw.columns:
+                            # Calculate offset from previous experiments
+                            sweep_offset = sum([pd.read_csv(files[i][1], low_memory=False)['sweep'].max()
+                                              for i in range(exp_num - 1)
+                                              if 'sweep' in pd.read_csv(files[i][1], low_memory=False).columns])
+                            sigh_df_raw.insert(2, 'global_sweep_number', sigh_df_raw['sweep'] + sweep_offset)
+
                         all_sighs_raw.append(sigh_df_raw)
-                    
+
                     # Extract normalized sigh data
                     available_norm_cols = [col for col in norm_cols if col in df.columns]
                     if available_norm_cols and sigh_mask.sum() > 0:
                         sigh_df_norm = df.loc[sigh_mask, available_norm_cols].copy()
                         sigh_df_norm.insert(0, 'file', root)
                         all_sighs_norm.append(sigh_df_norm)
-            
+
             except Exception as e:
                 print(f"Error reading sighs from {path}: {e}")
-        
+
         # Combine all sigh data
         if all_sighs_raw:
             combined_raw = pd.concat(all_sighs_raw, ignore_index=True)
         else:
-            combined_raw = pd.DataFrame(columns=['file'] + raw_cols)
-        
+            combined_raw = pd.DataFrame(columns=['file', 'experiment_number', 'global_sweep_number'] + raw_cols)
+
         if all_sighs_norm:
             combined_norm = pd.concat(all_sighs_norm, ignore_index=True)
         else:
             combined_norm = pd.DataFrame(columns=['file'] + norm_cols)
-        
+
         # Combine raw and normalized with blank column separator
         combined_raw[''] = ''
         combined_sighs = pd.concat([combined_raw, combined_norm], axis=1)
-        
+
         return combined_sighs
 
     # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
@@ -9707,14 +10052,33 @@ class MainWindow(QMainWindow):
             return np.nanmean(y[mask])
         
         with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
-            for metric_name, data_dict in consolidated.items():
-                # Skip internal warning data
+            # Define sheet order: time series metrics first, then sighs, then events/stimulus, then histograms
+            time_series_metrics = []
+            sighs_sheets = []
+            event_sheets = []
+            histogram_sheets = []
+
+            for metric_name in consolidated.keys():
                 if metric_name == '_warnings':
                     continue
+                elif metric_name == 'sighs':
+                    sighs_sheets.append(metric_name)
+                elif metric_name in ['events', 'stimulus']:
+                    event_sheets.append(metric_name)
+                elif '_histogram' in metric_name:
+                    histogram_sheets.append(metric_name)
+                else:
+                    time_series_metrics.append(metric_name)
 
+            # Process sheets in desired order: time series -> sighs -> events/stimulus -> histograms
+            ordered_sheets = time_series_metrics + sighs_sheets + event_sheets + histogram_sheets
+
+            for metric_name in ordered_sheets:
+                data_dict = consolidated[metric_name]
                 time_series_df = data_dict['time_series']
                 raw_summary = data_dict.get('raw_summary', {})
                 norm_summary = data_dict.get('norm_summary', {})
+                eupnea_summary = data_dict.get('eupnea_summary', {})
                 windows = data_dict.get('windows', [])
                 
                 sheet_name = metric_name[:31]
@@ -9762,12 +10126,33 @@ class MainWindow(QMainWindow):
                         
                         if norm_summary_rows:
                             norm_summary_df = pd.DataFrame(norm_summary_rows)
-                            
+
                             # Write normalized summary to the right of raw summary
                             for r_idx, row in enumerate(dataframe_to_rows(norm_summary_df, index=False, header=True)):
                                 for c_idx, value in enumerate(row):
                                     worksheet.cell(row=r_idx + 1, column=norm_start_col + c_idx, value=value)
-                
+
+                    # Build eupnea-normalized summary DataFrame
+                    if eupnea_summary:
+                        # Start eupnea summary after normalized summary + 2 blank columns
+                        eupnea_start_col = norm_start_col + len(norm_summary_df.columns) + 2 if norm_summary else summary_start_col
+
+                        eupnea_summary_rows = []
+                        for root in eupnea_summary.keys():
+                            t, y = eupnea_summary[root]
+                            row = {'File': root}
+                            for window_name, t_start, t_end in windows:
+                                row[f"{window_name}_eupnea"] = window_mean(t, y, t_start, t_end)
+                            eupnea_summary_rows.append(row)
+
+                        if eupnea_summary_rows:
+                            eupnea_summary_df = pd.DataFrame(eupnea_summary_rows)
+
+                            # Write eupnea summary to the right of normalized summary
+                            for r_idx, row in enumerate(dataframe_to_rows(eupnea_summary_df, index=False, header=True)):
+                                for c_idx, value in enumerate(row):
+                                    worksheet.cell(row=r_idx + 1, column=eupnea_start_col + c_idx, value=value)
+
                 print(f"Saved sheet: {sheet_name}")
         
         # Apply bold formatting and add charts
@@ -9776,7 +10161,8 @@ class MainWindow(QMainWindow):
         
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
-            
+            print(f"Processing sheet: '{sheet_name}'")
+
             # Bold columns: t, mean, sem, mean_norm, sem_norm, bin_center, and histogram mean/sem
             header_row = ws[1]
             
@@ -9796,8 +10182,23 @@ class MainWindow(QMainWindow):
                         for c in row:
                             c.font = bold_font
             
+            # Add charts based on sheet type
+            if sheet_name == 'sighs':
+                print(f"Matched sighs sheet condition for '{sheet_name}'")
+                # Create sigh timeline chart
+                self._add_sighs_chart(ws, header_row)
+
+            elif sheet_name == 'events':
+                print(f"Matched events sheet condition for '{sheet_name}'")
+                # Create eupnea and apnea timeline charts
+                self._add_events_charts(ws, header_row)
+
+            # Stimulus sheet - no charts needed (just tabular data)
+            elif sheet_name == 'stimulus':
+                pass  # No charts for stimulus
+
             # Add charts for histogram sheets
-            if '_histogram' in sheet_name:
+            elif '_histogram' in sheet_name:
                 regions = ['all', 'baseline', 'stim', 'post']
                 
                 # Chart 1: Raw means overlay (reverted to original style)
@@ -9843,15 +10244,15 @@ class MainWindow(QMainWindow):
                         series = Series(yvalues, xvalues, title=region)
                         chart1.series.append(series)
                 
-                chart1.width = 20
-                chart1.height = 12
+                chart1.width = 10
+                chart1.height = 6
                 ws.add_chart(chart1, f"A{ws.max_row + 3}")
-                
-                # Chart 2: Normalized means overlay (reverted to original style)
+
+                # Chart 2: Time-normalized means overlay
                 chart2 = ScatterChart()
-                chart2.title = f"{sheet_name} - Normalized Mean Histograms"
+                chart2.title = f"{sheet_name} - Time-Normalized Mean Histograms"
                 chart2.style = 2
-                chart2.x_axis.title = "Bin Center (normalized)"
+                chart2.x_axis.title = "Bin Center (time-normalized)"
                 chart2.y_axis.title = "Density"
 
                 # Enable axes display
@@ -9859,7 +10260,7 @@ class MainWindow(QMainWindow):
                 chart2.y_axis.delete = False
 
                 # Enable axis tick marks and labels (major only, no minor)
-                chart2.x_axis.tickLblPos = "nextTo"  # Changed from "low" to fix label positioning
+                chart2.x_axis.tickLblPos = "nextTo"
                 chart2.y_axis.tickLblPos = "nextTo"
                 chart2.x_axis.majorTickMark = "out"
                 chart2.y_axis.majorTickMark = "out"
@@ -9872,28 +10273,75 @@ class MainWindow(QMainWindow):
 
                 # Set y-axis to start at 0
                 chart2.y_axis.scaling.min = 0
-                
+
                 for region in regions:
                     bin_col_norm = None
                     mean_col_norm = None
-                    
+
                     for idx, cell in enumerate(header_row, start=1):
                         if cell.value == f'bin_center_{region}_norm':
                             bin_col_norm = idx
                         elif cell.value == f'mean_{region}_norm':
                             mean_col_norm = idx
-                    
+
                     if bin_col_norm and mean_col_norm:
                         xvalues = Reference(ws, min_col=bin_col_norm, min_row=2, max_row=ws.max_row)
                         yvalues = Reference(ws, min_col=mean_col_norm, min_row=2, max_row=ws.max_row)
-                        
+
                         series = Series(yvalues, xvalues, title=f"{region}_norm")
                         chart2.series.append(series)
-                
-                chart2.width = 20
-                chart2.height = 12
-                ws.add_chart(chart2, f"M{ws.max_row + 3}")
-            
+
+                chart2.width = 10
+                chart2.height = 6
+                ws.add_chart(chart2, f"K{ws.max_row + 3}")
+
+                # Chart 3: Eupnea-normalized means overlay
+                chart3 = ScatterChart()
+                chart3.title = f"{sheet_name} - Eupnea-Normalized Mean Histograms"
+                chart3.style = 2
+                chart3.x_axis.title = "Bin Center (eupnea-normalized)"
+                chart3.y_axis.title = "Density"
+
+                # Enable axes display
+                chart3.x_axis.delete = False
+                chart3.y_axis.delete = False
+
+                # Enable axis tick marks and labels (major only, no minor)
+                chart3.x_axis.tickLblPos = "nextTo"
+                chart3.y_axis.tickLblPos = "nextTo"
+                chart3.x_axis.majorTickMark = "out"
+                chart3.y_axis.majorTickMark = "out"
+                chart3.x_axis.minorTickMark = "none"
+                chart3.y_axis.minorTickMark = "none"
+
+                # Disable gridlines
+                chart3.x_axis.majorGridlines = None
+                chart3.y_axis.majorGridlines = None
+
+                # Set y-axis to start at 0
+                chart3.y_axis.scaling.min = 0
+
+                for region in regions:
+                    bin_col_eupnea = None
+                    mean_col_eupnea = None
+
+                    for idx, cell in enumerate(header_row, start=1):
+                        if cell.value == f'bin_center_{region}_eupnea':
+                            bin_col_eupnea = idx
+                        elif cell.value == f'mean_{region}_eupnea':
+                            mean_col_eupnea = idx
+
+                    if bin_col_eupnea and mean_col_eupnea:
+                        xvalues = Reference(ws, min_col=bin_col_eupnea, min_row=2, max_row=ws.max_row)
+                        yvalues = Reference(ws, min_col=mean_col_eupnea, min_row=2, max_row=ws.max_row)
+
+                        series = Series(yvalues, xvalues, title=f"{region}_eupnea")
+                        chart3.series.append(series)
+
+                chart3.width = 10
+                chart3.height = 6
+                ws.add_chart(chart3, f"U{ws.max_row + 3}")  # Position to the right of chart2
+
             # Add charts for time series sheets (not histograms)
             elif '_histogram' not in sheet_name:
                 t_col = None
@@ -9901,8 +10349,10 @@ class MainWindow(QMainWindow):
                 sem_col = None
                 mean_norm_col = None
                 sem_norm_col = None
+                mean_eupnea_col = None
+                sem_eupnea_col = None
 
-                # Find t, mean, sem, mean_norm, and sem_norm columns
+                # Find t, mean, sem, mean_norm, sem_norm, mean_eupnea, and sem_eupnea columns
                 for idx, cell in enumerate(header_row, start=1):
                     if cell.value == 't':
                         t_col = idx
@@ -9914,40 +10364,36 @@ class MainWindow(QMainWindow):
                         mean_norm_col = idx
                     elif cell.value == 'sem_norm':
                         sem_norm_col = idx
+                    elif cell.value == 'mean_eupnea':
+                        mean_eupnea_col = idx
+                    elif cell.value == 'sem_eupnea':
+                        sem_eupnea_col = idx
                 
                 # Position charts near top of sheet (row 5)
                 chart_row = 5
 
-                # Add helper columns for mean ± SEM bounds if SEM exists
-                if mean_col and sem_col:
-                    # Add upper and lower bounds columns to the right of existing data
-                    upper_col = ws.max_column + 1
-                    lower_col = ws.max_column + 2
+                # Find individual file columns for plotting
+                # Raw data columns: between 'mean' and first '_norm' column
+                raw_file_cols = []
+                norm_file_cols = []
+                eupnea_file_cols = []
 
-                    ws.cell(row=1, column=upper_col, value='mean_upper')
-                    ws.cell(row=1, column=lower_col, value='mean_lower')
-
-                    for row_idx in range(2, ws.max_row + 1):
-                        mean_val = ws.cell(row=row_idx, column=mean_col).value
-                        sem_val = ws.cell(row=row_idx, column=sem_col).value
-                        if mean_val is not None and sem_val is not None:
-                            ws.cell(row=row_idx, column=upper_col, value=mean_val + sem_val)
-                            ws.cell(row=row_idx, column=lower_col, value=mean_val - sem_val)
-
-                if mean_norm_col and sem_norm_col:
-                    # Add upper and lower bounds columns for normalized
-                    upper_norm_col = ws.max_column + 1
-                    lower_norm_col = ws.max_column + 2
-
-                    ws.cell(row=1, column=upper_norm_col, value='mean_norm_upper')
-                    ws.cell(row=1, column=lower_norm_col, value='mean_norm_lower')
-
-                    for row_idx in range(2, ws.max_row + 1):
-                        mean_val = ws.cell(row=row_idx, column=mean_norm_col).value
-                        sem_val = ws.cell(row=row_idx, column=sem_norm_col).value
-                        if mean_val is not None and sem_val is not None:
-                            ws.cell(row=row_idx, column=upper_norm_col, value=mean_val + sem_val)
-                            ws.cell(row=row_idx, column=lower_norm_col, value=mean_val - sem_val)
+                for idx, cell in enumerate(header_row, start=1):
+                    col_name = str(cell.value or '')
+                    # Skip time, mean, sem, and blank columns
+                    if col_name in ['t', 'mean', 'sem', 'mean_norm', 'sem_norm', 'mean_eupnea', 'sem_eupnea', '', 'None']:
+                        continue
+                    # Skip columns with numeric or empty names
+                    if not col_name or col_name.isspace():
+                        continue
+                    if '_eupnea' in col_name:
+                        eupnea_file_cols.append(idx)
+                    elif '_norm' in col_name:
+                        norm_file_cols.append(idx)
+                    else:
+                        # Must be a raw data file column
+                        if t_col and idx > t_col:  # Make sure it's after the time column
+                            raw_file_cols.append(idx)
 
                 # Chart 1: Raw mean vs time
                 if t_col and mean_col:
@@ -9963,7 +10409,7 @@ class MainWindow(QMainWindow):
                     chart1.y_axis.delete = False
 
                     # Enable axis tick marks and labels (major only, no minor)
-                    chart1.x_axis.tickLblPos = "nextTo"  # Changed from "low" to fix label positioning
+                    chart1.x_axis.tickLblPos = "nextTo"
                     chart1.y_axis.tickLblPos = "nextTo"
                     chart1.x_axis.majorTickMark = "out"
                     chart1.y_axis.majorTickMark = "out"
@@ -9982,18 +10428,13 @@ class MainWindow(QMainWindow):
 
                     xvalues = Reference(ws, min_col=t_col, min_row=2, max_row=ws.max_row)
 
-                    # Get full y-range from chart data for vertical line
+                    # Get full y-range from all data for vertical line
                     y_vals_all = []
-                    for row_idx in range(2, ws.max_row + 1):
-                        y_val = ws.cell(row=row_idx, column=mean_col).value
-                        if y_val is not None:
-                            y_vals_all.append(y_val)
-                        if sem_col:
-                            y_upper_val = ws.cell(row=row_idx, column=mean_col).value
-                            y_sem_val = ws.cell(row=row_idx, column=sem_col).value
-                            if y_upper_val is not None and y_sem_val is not None:
-                                y_vals_all.append(y_upper_val + y_sem_val)
-                                y_vals_all.append(y_upper_val - y_sem_val)
+                    for file_col in raw_file_cols:
+                        for row_idx in range(2, ws.max_row + 1):
+                            y_val = ws.cell(row=row_idx, column=file_col).value
+                            if y_val is not None and isinstance(y_val, (int, float)):
+                                y_vals_all.append(y_val)
 
                     if y_vals_all:
                         # Add some padding to span full chart height
@@ -10018,61 +10459,49 @@ class MainWindow(QMainWindow):
                         series_vline = Series(vline_y, vline_x, title="x=0")
                         series_vline.marker = Marker('none')
                         series_vline.smooth = False
-                        # Thin dashed line with small dashes and gaps
-                        series_vline.graphicalProperties.line.width = 25400  # 2pt in EMUs (doubled from 1pt)
-                        series_vline.graphicalProperties.line.dashStyle = "sysDot"  # Small dots
+                        series_vline.graphicalProperties.line.width = 25400  # 2pt
+                        series_vline.graphicalProperties.line.dashStyle = "sysDot"
                         series_vline.graphicalProperties.line.solidFill = "808080"  # Gray
                         chart1.series.append(series_vline)
 
-                        # Store for use in chart2
-                        zero_x_rows = True
-
-                    # Add SEM shaded region (upper bound)
-                    if sem_col and 'upper_col' in locals():
-                        y_upper = Reference(ws, min_col=upper_col, min_row=2, max_row=ws.max_row)
-                        series_upper = Series(y_upper, xvalues, title="Upper")
-                        series_upper.marker = Marker('none')
-                        series_upper.smooth = True
-                        series_upper.graphicalProperties.line.noFill = True
-                        series_upper.graphicalProperties.solidFill = "D6E9F8"  # Light blue fill
-                        chart1.series.append(series_upper)
-
-                        # Add SEM shaded region (lower bound)
-                        y_lower = Reference(ws, min_col=lower_col, min_row=2, max_row=ws.max_row)
-                        series_lower = Series(y_lower, xvalues, title="Lower")
-                        series_lower.marker = Marker('none')
-                        series_lower.smooth = True
-                        series_lower.graphicalProperties.line.noFill = True
-                        series_lower.graphicalProperties.solidFill = "D6E9F8"  # Light blue fill
-                        chart1.series.append(series_lower)
+                    # Add individual file traces in light gray
+                    for file_col in raw_file_cols:
+                        yvalues_file = Reference(ws, min_col=file_col, min_row=2, max_row=ws.max_row)
+                        series_file = Series(yvalues_file, xvalues, title="")
+                        series_file.marker = Marker('none')
+                        series_file.smooth = True
+                        series_file.graphicalProperties.line.solidFill = "D3D3D3"  # Light gray
+                        series_file.graphicalProperties.line.width = 8000  # Thinner than mean
+                        chart1.series.append(series_file)
 
                     # Add mean line on top
                     yvalues = Reference(ws, min_col=mean_col, min_row=2, max_row=ws.max_row)
                     series = Series(yvalues, xvalues, title="Mean")
-                    series.marker = Marker('none')  # No markers, just line
+                    series.marker = Marker('none')
                     series.smooth = True
                     series.graphicalProperties.line.solidFill = "4472C4"  # Solid blue line
+                    series.graphicalProperties.line.width = 12700  # 1pt line width
                     chart1.series.append(series)
 
-                    chart1.width = 20
-                    chart1.height = 12
+                    chart1.width = 10
+                    chart1.height = 6
                     ws.add_chart(chart1, f"A{chart_row}")
                 
-                # Chart 2: Normalized mean vs time
+                # Chart 2: Time-normalized mean vs time
                 if t_col and mean_norm_col:
                     chart2 = ScatterChart()
-                    chart2.title = f"{sheet_name} - Mean vs Time (Normalized)"
+                    chart2.title = f"{sheet_name} - Mean vs Time (Time-Normalized)"
                     chart2.style = 13
 
                     chart2.x_axis.title = "Time (s)"
-                    chart2.y_axis.title = f"{sheet_name} (normalized)"
+                    chart2.y_axis.title = f"{sheet_name} (time-normalized)"
 
                     # Enable axes display
                     chart2.x_axis.delete = False
                     chart2.y_axis.delete = False
 
                     # Enable axis tick marks and labels (major only, no minor)
-                    chart2.x_axis.tickLblPos = "nextTo"  # Changed from "low" to fix label positioning
+                    chart2.x_axis.tickLblPos = "nextTo"
                     chart2.y_axis.tickLblPos = "nextTo"
                     chart2.x_axis.majorTickMark = "out"
                     chart2.y_axis.majorTickMark = "out"
@@ -10094,19 +10523,14 @@ class MainWindow(QMainWindow):
                     # Get full y-range and x-range from normalized data
                     y_vals_all_norm = []
                     x_vals_all_norm = []
-                    for row_idx in range(2, ws.max_row + 1):
-                        x_val = ws.cell(row=row_idx, column=t_col).value
-                        y_val = ws.cell(row=row_idx, column=mean_norm_col).value
-                        if x_val is not None:
-                            x_vals_all_norm.append(x_val)
-                        if y_val is not None:
-                            y_vals_all_norm.append(y_val)
-                        if sem_norm_col:
-                            y_upper_val = ws.cell(row=row_idx, column=mean_norm_col).value
-                            y_sem_val = ws.cell(row=row_idx, column=sem_norm_col).value
-                            if y_upper_val is not None and y_sem_val is not None:
-                                y_vals_all_norm.append(y_upper_val + y_sem_val)
-                                y_vals_all_norm.append(y_upper_val - y_sem_val)
+                    for file_col in norm_file_cols:
+                        for row_idx in range(2, ws.max_row + 1):
+                            x_val = ws.cell(row=row_idx, column=t_col).value
+                            y_val = ws.cell(row=row_idx, column=file_col).value
+                            if x_val is not None and isinstance(x_val, (int, float)) and x_val not in x_vals_all_norm:
+                                x_vals_all_norm.append(x_val)
+                            if y_val is not None and isinstance(y_val, (int, float)):
+                                y_vals_all_norm.append(y_val)
 
                     if y_vals_all_norm:
                         # Add padding to span full chart height
@@ -10131,8 +10555,7 @@ class MainWindow(QMainWindow):
                         series_vline_norm = Series(vline_y_norm, vline_x_norm, title="x=0")
                         series_vline_norm.marker = Marker('none')
                         series_vline_norm.smooth = False
-                        # Thin dashed line with small dashes and gaps
-                        series_vline_norm.graphicalProperties.line.width = 25400  # 2pt (doubled)
+                        series_vline_norm.graphicalProperties.line.width = 25400  # 2pt
                         series_vline_norm.graphicalProperties.line.dashStyle = "sysDot"
                         series_vline_norm.graphicalProperties.line.solidFill = "808080"
                         chart2.series.append(series_vline_norm)
@@ -10147,54 +10570,378 @@ class MainWindow(QMainWindow):
                         ws.cell(row=1, column=hline_x_col_norm, value='hline_x_norm')
                         ws.cell(row=1, column=hline_y_col_norm, value='hline_y_norm')
                         ws.cell(row=2, column=hline_x_col_norm, value=x_min_chart_norm)
-                        ws.cell(row=2, column=hline_y_col_norm, value=1)  # Changed from 0 to 1
+                        ws.cell(row=2, column=hline_y_col_norm, value=1)
                         ws.cell(row=3, column=hline_x_col_norm, value=x_max_chart_norm)
-                        ws.cell(row=3, column=hline_y_col_norm, value=1)  # Changed from 0 to 1
+                        ws.cell(row=3, column=hline_y_col_norm, value=1)
 
                         hline_x_norm = Reference(ws, min_col=hline_x_col_norm, min_row=2, max_row=3)
                         hline_y_norm = Reference(ws, min_col=hline_y_col_norm, min_row=2, max_row=3)
                         series_hline_norm = Series(hline_y_norm, hline_x_norm, title="y=1")
                         series_hline_norm.marker = Marker('none')
                         series_hline_norm.smooth = False
-                        # Same style as vertical line
-                        series_hline_norm.graphicalProperties.line.width = 25400  # 2pt (doubled)
+                        series_hline_norm.graphicalProperties.line.width = 25400  # 2pt
                         series_hline_norm.graphicalProperties.line.dashStyle = "sysDot"
                         series_hline_norm.graphicalProperties.line.solidFill = "808080"
                         chart2.series.append(series_hline_norm)
 
-                    # Add SEM shaded region (upper bound)
-                    if sem_norm_col and 'upper_norm_col' in locals():
-                        y_upper_norm = Reference(ws, min_col=upper_norm_col, min_row=2, max_row=ws.max_row)
-                        series_upper_norm = Series(y_upper_norm, xvalues, title="Upper (norm)")
-                        series_upper_norm.marker = Marker('none')
-                        series_upper_norm.smooth = True
-                        series_upper_norm.graphicalProperties.line.noFill = True
-                        series_upper_norm.graphicalProperties.solidFill = "FCE4D6"  # Light orange fill
-                        chart2.series.append(series_upper_norm)
-
-                        # Add SEM shaded region (lower bound)
-                        y_lower_norm = Reference(ws, min_col=lower_norm_col, min_row=2, max_row=ws.max_row)
-                        series_lower_norm = Series(y_lower_norm, xvalues, title="Lower (norm)")
-                        series_lower_norm.marker = Marker('none')
-                        series_lower_norm.smooth = True
-                        series_lower_norm.graphicalProperties.line.noFill = True
-                        series_lower_norm.graphicalProperties.solidFill = "FCE4D6"  # Light orange fill
-                        chart2.series.append(series_lower_norm)
+                    # Add individual file traces in light gray
+                    for file_col in norm_file_cols:
+                        yvalues_file = Reference(ws, min_col=file_col, min_row=2, max_row=ws.max_row)
+                        series_file = Series(yvalues_file, xvalues, title="")
+                        series_file.marker = Marker('none')
+                        series_file.smooth = True
+                        series_file.graphicalProperties.line.solidFill = "D3D3D3"  # Light gray
+                        series_file.graphicalProperties.line.width = 8000  # Thinner than mean
+                        chart2.series.append(series_file)
 
                     # Add mean line on top
                     yvalues = Reference(ws, min_col=mean_norm_col, min_row=2, max_row=ws.max_row)
-                    series = Series(yvalues, xvalues, title="Mean (normalized)")
+                    series = Series(yvalues, xvalues, title="Mean")
                     series.marker = Marker('none')
                     series.smooth = True
                     series.graphicalProperties.line.solidFill = "ED7D31"  # Solid orange line
+                    series.graphicalProperties.line.width = 12700  # 1pt line width
                     chart2.series.append(series)
 
-                    chart2.width = 20
-                    chart2.height = 12
-                    ws.add_chart(chart2, f"M{chart_row}")
-        
+                    chart2.width = 10
+                    chart2.height = 6
+                    ws.add_chart(chart2, f"K{chart_row}")
+
+                # Chart 3: Eupnea-normalized mean vs time
+                if t_col and mean_eupnea_col:
+                    chart3 = ScatterChart()
+                    chart3.title = f"{sheet_name} - Mean vs Time (Eupnea-Normalized)"
+                    chart3.style = 13
+
+                    chart3.x_axis.title = "Time (s)"
+                    chart3.y_axis.title = f"{sheet_name} (eupnea-normalized)"
+
+                    # Enable axes display
+                    chart3.x_axis.delete = False
+                    chart3.y_axis.delete = False
+
+                    # Enable axis tick marks and labels (major only, no minor)
+                    chart3.x_axis.tickLblPos = "nextTo"
+                    chart3.y_axis.tickLblPos = "nextTo"
+                    chart3.x_axis.majorTickMark = "out"
+                    chart3.y_axis.majorTickMark = "out"
+                    chart3.x_axis.minorTickMark = "none"
+                    chart3.y_axis.minorTickMark = "none"
+
+                    # Position y-axis on the left side
+                    chart3.y_axis.crosses = "min"
+
+                    # Disable gridlines
+                    chart3.x_axis.majorGridlines = None
+                    chart3.y_axis.majorGridlines = None
+
+                    # Hide legend
+                    chart3.legend = None
+
+                    xvalues = Reference(ws, min_col=t_col, min_row=2, max_row=ws.max_row)
+
+                    # Get full y-range and x-range from eupnea-normalized data
+                    y_vals_all_eupnea = []
+                    x_vals_all_eupnea = []
+                    for file_col in eupnea_file_cols:
+                        for row_idx in range(2, ws.max_row + 1):
+                            x_val = ws.cell(row=row_idx, column=t_col).value
+                            y_val = ws.cell(row=row_idx, column=file_col).value
+                            if x_val is not None and isinstance(x_val, (int, float)) and x_val not in x_vals_all_eupnea:
+                                x_vals_all_eupnea.append(x_val)
+                            if y_val is not None and isinstance(y_val, (int, float)):
+                                y_vals_all_eupnea.append(y_val)
+
+                    if y_vals_all_eupnea:
+                        # Add padding to span full chart height
+                        y_min_chart_eupnea = min(y_vals_all_eupnea)
+                        y_max_chart_eupnea = max(y_vals_all_eupnea)
+                        y_range_eupnea = y_max_chart_eupnea - y_min_chart_eupnea
+                        y_min_chart_eupnea -= 0.1 * y_range_eupnea
+                        y_max_chart_eupnea += 0.1 * y_range_eupnea
+
+                        # Add vertical line at x=0
+                        vline_x_col_eupnea = ws.max_column + 1
+                        vline_y_col_eupnea = ws.max_column + 2
+                        ws.cell(row=1, column=vline_x_col_eupnea, value='vline_x_eupnea')
+                        ws.cell(row=1, column=vline_y_col_eupnea, value='vline_y_eupnea')
+                        ws.cell(row=2, column=vline_x_col_eupnea, value=0)
+                        ws.cell(row=2, column=vline_y_col_eupnea, value=y_min_chart_eupnea)
+                        ws.cell(row=3, column=vline_x_col_eupnea, value=0)
+                        ws.cell(row=3, column=vline_y_col_eupnea, value=y_max_chart_eupnea)
+
+                        vline_x_eupnea = Reference(ws, min_col=vline_x_col_eupnea, min_row=2, max_row=3)
+                        vline_y_eupnea = Reference(ws, min_col=vline_y_col_eupnea, min_row=2, max_row=3)
+                        series_vline_eupnea = Series(vline_y_eupnea, vline_x_eupnea, title="x=0")
+                        series_vline_eupnea.marker = Marker('none')
+                        series_vline_eupnea.smooth = False
+                        series_vline_eupnea.graphicalProperties.line.width = 25400  # 2pt
+                        series_vline_eupnea.graphicalProperties.line.dashStyle = "sysDot"
+                        series_vline_eupnea.graphicalProperties.line.solidFill = "808080"
+                        chart3.series.append(series_vline_eupnea)
+
+                    if x_vals_all_eupnea:
+                        # Add horizontal line at y=1 spanning full x-range
+                        x_min_chart_eupnea = min(x_vals_all_eupnea)
+                        x_max_chart_eupnea = max(x_vals_all_eupnea)
+
+                        hline_x_col_eupnea = ws.max_column + 1
+                        hline_y_col_eupnea = ws.max_column + 2
+                        ws.cell(row=1, column=hline_x_col_eupnea, value='hline_x_eupnea')
+                        ws.cell(row=1, column=hline_y_col_eupnea, value='hline_y_eupnea')
+                        ws.cell(row=2, column=hline_x_col_eupnea, value=x_min_chart_eupnea)
+                        ws.cell(row=2, column=hline_y_col_eupnea, value=1)
+                        ws.cell(row=3, column=hline_x_col_eupnea, value=x_max_chart_eupnea)
+                        ws.cell(row=3, column=hline_y_col_eupnea, value=1)
+
+                        hline_x_eupnea = Reference(ws, min_col=hline_x_col_eupnea, min_row=2, max_row=3)
+                        hline_y_eupnea = Reference(ws, min_col=hline_y_col_eupnea, min_row=2, max_row=3)
+                        series_hline_eupnea = Series(hline_y_eupnea, hline_x_eupnea, title="y=1")
+                        series_hline_eupnea.marker = Marker('none')
+                        series_hline_eupnea.smooth = False
+                        series_hline_eupnea.graphicalProperties.line.width = 25400  # 2pt
+                        series_hline_eupnea.graphicalProperties.line.dashStyle = "sysDot"
+                        series_hline_eupnea.graphicalProperties.line.solidFill = "808080"
+                        chart3.series.append(series_hline_eupnea)
+
+                    # Add individual file traces in light gray
+                    for file_col in eupnea_file_cols:
+                        yvalues_file = Reference(ws, min_col=file_col, min_row=2, max_row=ws.max_row)
+                        series_file = Series(yvalues_file, xvalues, title="")
+                        series_file.marker = Marker('none')
+                        series_file.smooth = True
+                        series_file.graphicalProperties.line.solidFill = "D3D3D3"  # Light gray
+                        series_file.graphicalProperties.line.width = 8000  # Thinner than mean
+                        chart3.series.append(series_file)
+
+                    # Add mean line on top
+                    yvalues = Reference(ws, min_col=mean_eupnea_col, min_row=2, max_row=ws.max_row)
+                    series = Series(yvalues, xvalues, title="Mean")
+                    series.marker = Marker('none')
+                    series.smooth = True
+                    series.graphicalProperties.line.solidFill = "70AD47"  # Solid green line
+                    series.graphicalProperties.line.width = 12700  # 1pt line width
+                    chart3.series.append(series)
+
+                    chart3.width = 10
+                    chart3.height = 6
+                    ws.add_chart(chart3, f"U{chart_row}")  # Position to the right of chart2
+
         wb.save(save_path)
         print(f"Applied bold formatting and charts. Consolidated Excel file saved: {save_path}")
+
+
+    def _add_events_charts(self, ws, header_row):
+        """Add eupnea and apnea timeline charts to the events sheet."""
+        from openpyxl.chart import ScatterChart, Reference, Series
+        from openpyxl.chart.marker import Marker
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from openpyxl.drawing.image import Image as XLImage
+        from PIL import Image as PILImage
+        import io
+        import numpy as np
+
+        print(f"_add_events_charts called for sheet with {ws.max_row} rows")
+
+        # Find required columns (handle both naming conventions)
+        exp_num_col = None
+        sweep_col = None
+        global_sweep_col = None
+        event_type_col = None
+        t_start_col = None
+        t_end_col = None
+
+        for idx, cell in enumerate(header_row, start=1):
+            if cell.value == 'experiment_number':
+                exp_num_col = idx
+            elif cell.value == 'sweep':
+                sweep_col = idx
+            elif cell.value == 'global_sweep_number':
+                global_sweep_col = idx
+            elif cell.value == 'event_type':
+                event_type_col = idx
+            elif cell.value in ['t_start', 'start_time']:
+                t_start_col = idx
+            elif cell.value in ['t_end', 'end_time']:
+                t_end_col = idx
+
+        if not all([exp_num_col, global_sweep_col, event_type_col, t_start_col, t_end_col]):
+            print(f"Events sheet missing required columns for charts. Found columns: {[cell.value for cell in header_row]}")
+            return
+
+        # Read data from sheet
+        events = []
+        for row_idx in range(2, ws.max_row + 1):
+            exp_num = ws.cell(row=row_idx, column=exp_num_col).value
+            global_sweep = ws.cell(row=row_idx, column=global_sweep_col).value
+            event_type = ws.cell(row=row_idx, column=event_type_col).value
+            t_start = ws.cell(row=row_idx, column=t_start_col).value
+            t_end = ws.cell(row=row_idx, column=t_end_col).value
+
+            if all([exp_num is not None, global_sweep is not None,
+                    event_type is not None, t_start is not None, t_end is not None]):
+                events.append({
+                    'exp_num': int(exp_num),
+                    'global_sweep': int(global_sweep),
+                    'event_type': str(event_type).lower(),
+                    't_start': float(t_start),
+                    't_end': float(t_end)
+                })
+
+        if not events:
+            print("No events found for chart generation")
+            return
+
+        # Separate eupnea and apnea events
+        eupnea_events = [e for e in events if 'eupnea' in e['event_type']]
+        apnea_events = [e for e in events if 'apnea' in e['event_type']]
+
+        if not eupnea_events and not apnea_events:
+            print("No eupnea or apnea events found for charts")
+            return
+
+        # Create colormap for experiments
+        n_experiments = max([e['exp_num'] for e in events])
+        colors = plt.cm.tab10(np.linspace(0, 1, n_experiments))
+
+        # Position charts at the top (starting at row 1)
+        # We'll place them to the right of the data columns
+        chart_start_row = 1
+
+        # Create eupnea chart
+        if eupnea_events:
+            fig1, ax1 = plt.subplots(figsize=(10, 6))
+            for event in eupnea_events:
+                color = colors[event['exp_num'] - 1]
+                ax1.plot([event['t_start'], event['t_end']],
+                        [event['global_sweep'], event['global_sweep']],
+                        color=color, linewidth=2, solid_capstyle='butt')
+
+            ax1.set_xlabel('Time (s)')
+            ax1.set_ylabel('Global Sweep Number')
+            ax1.set_title('Eupnea Periods Across Experiments')
+            ax1.grid(True, alpha=0.3)
+
+            # Save figure to bytes
+            buf1 = io.BytesIO()
+            fig1.savefig(buf1, format='png', dpi=100, bbox_inches='tight')
+            buf1.seek(0)
+            plt.close(fig1)
+
+            # Insert image into Excel
+            img1 = XLImage(buf1)
+            img1.width = 600
+            img1.height = 360
+            ws.add_image(img1, f"A{chart_start_row}")
+            print(f"Added eupnea chart at A{chart_start_row}")
+
+        # Create apnea chart
+        if apnea_events:
+            fig2, ax2 = plt.subplots(figsize=(10, 6))
+            for event in apnea_events:
+                color = colors[event['exp_num'] - 1]
+                ax2.plot([event['t_start'], event['t_end']],
+                        [event['global_sweep'], event['global_sweep']],
+                        color=color, linewidth=2, solid_capstyle='butt')
+
+            ax2.set_xlabel('Time (s)')
+            ax2.set_ylabel('Global Sweep Number')
+            ax2.set_title('Apnea Periods Across Experiments')
+            ax2.grid(True, alpha=0.3)
+
+            # Save figure to bytes
+            buf2 = io.BytesIO()
+            fig2.savefig(buf2, format='png', dpi=100, bbox_inches='tight')
+            buf2.seek(0)
+            plt.close(fig2)
+
+            # Insert image into Excel
+            img2 = XLImage(buf2)
+            img2.width = 600
+            img2.height = 360
+            # Position to the right of first chart (column K)
+            ws.add_image(img2, f"K{chart_start_row}")
+            print(f"Added apnea chart at K{chart_start_row}")
+
+    def _add_sighs_chart(self, ws, header_row):
+        """Add sigh timeline scatter plot to the sighs sheet."""
+        import matplotlib.pyplot as plt
+        from openpyxl.drawing.image import Image as XLImage
+        import io
+        import numpy as np
+
+        print(f"_add_sighs_chart called for sheet with {ws.max_row} rows")
+
+        # Find required columns
+        exp_num_col = None
+        global_sweep_col = None
+        t_col = None
+
+        for idx, cell in enumerate(header_row, start=1):
+            if cell.value == 'experiment_number':
+                exp_num_col = idx
+            elif cell.value == 'global_sweep_number':
+                global_sweep_col = idx
+            elif cell.value == 't':
+                t_col = idx
+
+        if not all([exp_num_col, global_sweep_col, t_col]):
+            print(f"Sighs sheet missing required columns for chart. Found columns: {[cell.value for cell in header_row]}")
+            return
+
+        # Read data from sheet
+        sighs = []
+        for row_idx in range(2, ws.max_row + 1):
+            exp_num = ws.cell(row=row_idx, column=exp_num_col).value
+            global_sweep = ws.cell(row=row_idx, column=global_sweep_col).value
+            t = ws.cell(row=row_idx, column=t_col).value
+
+            if all([exp_num is not None, global_sweep is not None, t is not None]):
+                sighs.append({
+                    'exp_num': int(exp_num),
+                    'global_sweep': int(global_sweep),
+                    't': float(t)
+                })
+
+        if not sighs:
+            print("No sigh data found for chart generation")
+            return
+
+        # Create colormap for experiments
+        n_experiments = max([s['exp_num'] for s in sighs])
+        colors = plt.cm.tab10(np.linspace(0, 1, n_experiments))
+
+        # Position chart at the top (starting at row 1)
+        chart_start_row = 1
+
+        # Create sigh scatter plot
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Plot each sigh as a yellow asterisk, colored by experiment
+        for sigh in sighs:
+            color = colors[sigh['exp_num'] - 1]
+            ax.scatter(sigh['t'], sigh['global_sweep'],
+                      marker='*', s=200, color='gold', edgecolors=color, linewidths=1.5)
+
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Global Sweep Number')
+        ax.set_title('Sigh Events Across Experiments')
+        ax.grid(True, alpha=0.3)
+
+        # Save figure to bytes
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        buf.seek(0)
+        plt.close(fig)
+
+        # Insert image into Excel
+        img = XLImage(buf)
+        img.width = 600
+        img.height = 360
+        ws.add_image(img, f"A{chart_start_row}")
+        print(f"Added sigh chart at A{chart_start_row}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
