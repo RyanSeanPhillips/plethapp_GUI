@@ -269,7 +269,7 @@ class MainWindow(QMainWindow):
         st.sweep_idx = 0
         self._win_left = None
 
-        # Reset peak results
+        # Reset peak results and trace cache
         if not hasattr(st, "peaks_by_sweep"):
             st.peaks_by_sweep = {}
             st.breath_by_sweep = {}
@@ -279,6 +279,9 @@ class MainWindow(QMainWindow):
             st.breath_by_sweep.clear()
             self.state.omitted_sweeps.clear()
             self._refresh_omit_button_label()
+
+        # Clear global trace cache when loading new file
+        self._global_trace_cache = {}
 
 
 
@@ -1986,15 +1989,43 @@ class MainWindow(QMainWindow):
 
     def on_save_analyzed_clicked(self):
         """Save analyzed data to disk after prompting for location/name."""
-        self._export_all_analyzed_data(preview_only=False)
+        from PyQt6.QtWidgets import QProgressDialog, QApplication
+        from PyQt6.QtCore import Qt
+
+        # Create progress dialog
+        progress = QProgressDialog("Preparing data export...", None, 0, 100, self)
+        progress.setWindowTitle("Exporting Data")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)  # Show immediately
+        progress.setValue(0)
+        QApplication.processEvents()
+
+        try:
+            self._export_all_analyzed_data(preview_only=False, progress_dialog=progress)
+        finally:
+            progress.close()
 
     def on_view_summary_clicked(self):
         """Display interactive preview of the PDF summary without saving."""
-        self._export_all_analyzed_data(preview_only=True)
+        from PyQt6.QtWidgets import QProgressDialog, QApplication
+        from PyQt6.QtCore import Qt
+
+        # Create progress dialog
+        progress = QProgressDialog("Generating summary preview...", None, 0, 100, self)
+        progress.setWindowTitle("Creating Preview")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)  # Show immediately
+        progress.setValue(0)
+        QApplication.processEvents()
+
+        try:
+            self._export_all_analyzed_data(preview_only=True, progress_dialog=progress)
+        finally:
+            progress.close()
 
 
-    # metrics we won't include in CSV exports
-    _EXCLUDE_FOR_CSV = {"d1", "d2"}
+    # metrics we won't include in CSV exports and PDFs
+    _EXCLUDE_FOR_CSV = {"d1", "d2", "eupnic", "apnea", "regularity"}
 
     def _metric_keys_in_order(self):
         """Return metric keys in the UI order (from metrics.METRIC_SPECS)."""
@@ -3471,7 +3502,7 @@ class MainWindow(QMainWindow):
     #     except Exception:
     #         pass
 
-    def _export_all_analyzed_data(self, preview_only=False):
+    def _export_all_analyzed_data(self, preview_only=False, progress_dialog=None):
         """
         Exports (or previews) analyzed data.
 
@@ -3489,15 +3520,22 @@ class MainWindow(QMainWindow):
         2) <base>_means_by_time.csv
             - t (relative to global stim start if present)
             - For each metric: optional per-sweep traces, mean, sem
-            - Then the same block normalized by per-sweep baseline window
+            - Then the same block normalized by per-sweep baseline window (_norm)
+            - Then the same block normalized by pooled eupneic baseline (_norm_eupnea)
 
         3) <base>_breaths.csv
             - Wide layout:
                 RAW blocks:  ALL | BASELINE | STIM | POST
-                NORM blocks: ALL | BASELINE | STIM | POST
+                NORM blocks: ALL | BASELINE | STIM | POST (per-sweep time-based)
+                NORM_EUPNEA blocks: ALL | BASELINE | STIM | POST (pooled eupneic)
             - Includes `is_sigh` column (1 if any sigh peak in that breath interval)
 
-        4) <base>_summary.pdf (or preview dialog if preview_only=True)
+        4) <base>_events.csv
+            - Event intervals: stimulus on/off, apnea episodes, eupnea regions
+            - Columns: sweep, event_type, start_time, end_time, duration
+            - Times are relative to global stim start if present
+
+        5) <base>_summary.pdf (or preview dialog if preview_only=True)
         """
         import numpy as np, csv, json
         from PyQt6.QtWidgets import QApplication
@@ -3625,6 +3663,11 @@ class MainWindow(QMainWindow):
         EPS_BASE = 1e-12
 
         # -------------------- basics --------------------
+        if progress_dialog:
+            progress_dialog.setLabelText("Preparing data...")
+            progress_dialog.setValue(5)
+            QApplication.processEvents()
+
         any_ch    = next(iter(st.sweeps.values()))
         n_sweeps  = int(any_ch.shape[1])
         N         = int(len(st.t))
@@ -3702,6 +3745,11 @@ class MainWindow(QMainWindow):
                 y2 = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
                 if y2 is not None and len(y2) == N:
                     y2_ds_by_key[k][:, col] = y2[ds_idx]
+
+        if progress_dialog:
+            progress_dialog.setLabelText("Computing metrics...")
+            progress_dialog.setValue(15)
+            QApplication.processEvents()
 
         # -------------------- Save files (skip if preview_only) --------------------
         if not preview_only:
@@ -3791,26 +3839,143 @@ class MainWindow(QMainWindow):
             csv_time_path = base.with_name(base.name + "_means_by_time.csv")
             keys_for_csv  = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
     
-            # Build normalized stacks per metric
+            if progress_dialog:
+                progress_dialog.setLabelText("Computing time-based normalization...")
+                progress_dialog.setValue(25)
+                QApplication.processEvents()
+
+            # Build normalized stacks per metric (TIME-BASED, per-sweep)
             y2_ds_by_key_norm = {}
             baseline_by_key   = {}
             for k in keys_for_csv:
                 b = _per_sweep_baseline_for_time(y2_ds_by_key[k])
                 baseline_by_key[k] = b
                 y2_ds_by_key_norm[k] = _normalize_matrix_by_baseline(y2_ds_by_key[k], b)
-    
-            # headers: raw first, then the same pattern with *_norm suffix
+
+            if progress_dialog:
+                progress_dialog.setLabelText("Computing eupnea-based normalization...")
+                progress_dialog.setValue(35)
+                QApplication.processEvents()
+
+            # Build EUPNEA-BASED normalization (pooled across all sweeps)
+            # Use efficient approach: extract from pre-computed matrices
+            y2_ds_by_key_norm_eupnea = {}
+            eupnea_baseline_by_key = {}
+
+            # Get eupnea threshold from UI
+            eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+
+            # Pre-compute eupnea masks once per sweep
+            print(f"[CSV-time] Pre-computing eupnea masks for {len(kept_sweeps)} sweeps...")
+            eupnea_masks_csv = {}
+            for s in kept_sweeps:
+                y_proc = self._get_processed_for(st.analyze_chan, s)
+                pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+                br = st.breath_by_sweep.get(s, None)
+                if br is None and pks.size:
+                    br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
+                    st.breath_by_sweep[s] = br
+                if br is None:
+                    continue
+
+                on = np.asarray(br.get("onsets", []), dtype=int)
+                off = np.asarray(br.get("offsets", []), dtype=int)
+                expmins = np.asarray(br.get("expmins", []), dtype=int)
+                expoffs = np.asarray(br.get("expoffs", []), dtype=int)
+
+                if on.size >= 2:
+                    eupnea_mask = metrics.detect_eupnic_regions(
+                        st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
+                        freq_threshold_hz=eupnea_thresh
+                    )
+                    eupnea_masks_csv[s] = eupnea_mask
+
+            # Compute baselines by extracting from y2_ds_by_key matrices
+            # OPTIMIZATION: Build index mapping once instead of calling argmin repeatedly
+            print(f"[CSV-time] Computing eupnea baselines for {len(keys_for_csv)} metrics...")
+
+            # Pre-compute mapping from downsampled indices to original indices
+            t0 = float(global_s0) if have_global_stim else 0.0
+            ds_to_orig_idx = np.zeros(len(t_ds_csv), dtype=int)
+            for ds_idx in range(len(t_ds_csv)):
+                t_target = t_ds_csv[ds_idx] + t0
+                ds_to_orig_idx[ds_idx] = np.argmin(np.abs(st.t - t_target))
+
+            # Identify baseline indices (t < 0)
+            baseline_ds_mask = t_ds_csv < 0
+            poststim_ds_mask = (t_ds_csv >= 0) & (t_ds_csv <= NORM_BASELINE_WINDOW_S)
+
+            for k in keys_for_csv:
+                Y_raw = y2_ds_by_key.get(k, None)
+                if Y_raw is None or Y_raw.size == 0:
+                    eupnea_baseline_by_key[k] = np.nan
+                    y2_ds_by_key_norm_eupnea[k] = np.full_like(Y_raw, np.nan) if Y_raw is not None else None
+                    continue
+
+                pooled_vals = []
+
+                # Collect eupneic baseline values from downsampled data
+                for col_idx, s in enumerate(kept_sweeps):
+                    eupnea_mask = eupnea_masks_csv.get(s, None)
+                    if eupnea_mask is None:
+                        continue
+
+                    # Check baseline time points
+                    for ds_idx in np.where(baseline_ds_mask)[0]:
+                        i_orig = ds_to_orig_idx[ds_idx]
+
+                        # Check if this point is eupneic
+                        if i_orig < len(eupnea_mask) and eupnea_mask[i_orig] > 0:
+                            val = Y_raw[ds_idx, col_idx]
+                            if np.isfinite(val):
+                                pooled_vals.append(val)
+
+                # Fallback: include post-stim eupneic periods if insufficient
+                if len(pooled_vals) < 10:
+                    for col_idx, s in enumerate(kept_sweeps):
+                        eupnea_mask = eupnea_masks_csv.get(s, None)
+                        if eupnea_mask is None:
+                            continue
+
+                        for ds_idx in np.where(poststim_ds_mask)[0]:
+                            i_orig = ds_to_orig_idx[ds_idx]
+
+                            if i_orig < len(eupnea_mask) and eupnea_mask[i_orig] > 0:
+                                val = Y_raw[ds_idx, col_idx]
+                                if np.isfinite(val):
+                                    pooled_vals.append(val)
+
+                # Compute baseline and normalize
+                eupnea_b = float(np.mean(pooled_vals)) if len(pooled_vals) > 0 else np.nan
+                eupnea_baseline_by_key[k] = eupnea_b
+
+                if np.isfinite(eupnea_b) and abs(eupnea_b) > EPS_BASE:
+                    y2_ds_by_key_norm_eupnea[k] = Y_raw / eupnea_b
+                else:
+                    y2_ds_by_key_norm_eupnea[k] = np.full_like(Y_raw, np.nan)
+
+            # headers: raw first, then time-based norm, then eupnea-based norm
             header = ["t"]
             for k in keys_for_csv:
                 if INCLUDE_TRACES:
                     header += [f"{k}_s{j+1}" for j in range(S)]
                 header += [f"{k}_mean", f"{k}_sem"]
-    
+
             for k in keys_for_csv:
                 if INCLUDE_TRACES:
                     header += [f"{k}_norm_s{j+1}" for j in range(S)]
                 header += [f"{k}_norm_mean", f"{k}_norm_sem"]
+
+            for k in keys_for_csv:
+                if INCLUDE_TRACES:
+                    header += [f"{k}_norm_eupnea_s{j+1}" for j in range(S)]
+                header += [f"{k}_norm_eupnea_mean", f"{k}_norm_eupnea_sem"]
     
+            if progress_dialog:
+                progress_dialog.setLabelText("Writing time-series CSV...")
+                progress_dialog.setValue(50)
+                QApplication.processEvents()
+
             self.setCursor(Qt.CursorShape.WaitCursor)
             try:
                 with open(csv_time_path, "w", newline="") as f:
@@ -3819,7 +3984,7 @@ class MainWindow(QMainWindow):
     
                     for i in range(M):
                         row = [f"{t_ds_csv[i]:.9f}"]
-    
+
                         # RAW block
                         for k in keys_for_csv:
                             col = y2_ds_by_key[k][i, :]
@@ -3827,21 +3992,34 @@ class MainWindow(QMainWindow):
                                 row += [f"{v:.9g}" if np.isfinite(v) else "" for v in col]
                             m, sem = self._nanmean_sem(col, axis=0)  # 1D -> scalars
                             row += [f"{m:.9g}", f"{sem:.9g}"]
-    
-                        # NORMALIZED block
+
+                        # NORMALIZED block (time-based, per-sweep)
                         for k in keys_for_csv:
                             colN = y2_ds_by_key_norm[k][i, :]
                             if INCLUDE_TRACES:
                                 row += [f"{v:.9g}" if np.isfinite(v) else "" for v in colN]
                             mN, semN = self._nanmean_sem(colN, axis=0)
                             row += [f"{mN:.9g}", f"{semN:.9g}"]
-    
+
+                        # NORMALIZED block (eupnea-based, pooled)
+                        for k in keys_for_csv:
+                            colE = y2_ds_by_key_norm_eupnea[k][i, :]
+                            if INCLUDE_TRACES:
+                                row += [f"{v:.9g}" if np.isfinite(v) else "" for v in colE]
+                            mE, semE = self._nanmean_sem(colE, axis=0)
+                            row += [f"{mE:.9g}", f"{semE:.9g}"]
+
                         w.writerow(row)
                         if (i % CSV_FLUSH_EVERY) == 0:
                             QApplication.processEvents()
             finally:
                 self.unsetCursor()
     
+            if progress_dialog:
+                progress_dialog.setLabelText("Writing breath-by-breath CSV...")
+                progress_dialog.setValue(60)
+                QApplication.processEvents()
+
             # -------------------- (3) Per-breath CSV (WIDE; with is_sigh) --------------------
             breaths_path = base.with_name(base.name + "_breaths.csv")
     
@@ -3857,35 +4035,171 @@ class MainWindow(QMainWindow):
             def _headers_for_block_norm(suffix: str | None) -> list[str]:
                 base_cols = _headers_for_block(suffix)
                 return [h + "_norm" for h in base_cols]
-    
+
+            def _headers_for_block_norm_eupnea(suffix: str | None) -> list[str]:
+                base_cols = _headers_for_block(suffix)
+                return [h + "_norm_eupnea" for h in base_cols]
+
             rows_all, rows_bl, rows_st, rows_po = [], [], [], []
             rows_all_N, rows_bl_N, rows_st_N, rows_po_N = [], [], [], []
-    
+            rows_all_E, rows_bl_E, rows_st_E, rows_po_E = [], [], [], []
+
             need_keys = ["if", "amp_insp", "amp_exp", "area_insp", "area_exp", "ti", "te", "vent_proxy"]
-    
+
+            # Compute EUPNEA-BASED baselines (pooled across all sweeps)
+            # Pre-compute eupnea masks once per sweep to avoid redundant calculations
+            eupnea_b_by_k = {}
+            eupnea_masks_by_sweep = {}
+
+            print(f"[CSV] Pre-computing eupnea masks for {len(kept_sweeps)} sweeps...")
             for s in kept_sweeps:
                 y_proc = self._get_processed_for(st.analyze_chan, s)
-                pks    = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-                br     = st.breath_by_sweep.get(s, None)
+                pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+                br = st.breath_by_sweep.get(s, None)
                 if br is None and pks.size:
                     br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
                     st.breath_by_sweep[s] = br
                 if br is None:
-                    br = {"onsets": np.array([], dtype=int)}
-    
+                    continue
+
+                on = np.asarray(br.get("onsets", []), dtype=int)
+                off = np.asarray(br.get("offsets", []), dtype=int)
+                expmins = np.asarray(br.get("expmins", []), dtype=int)
+                expoffs = np.asarray(br.get("expoffs", []), dtype=int)
+
+                if on.size >= 2:
+                    eupnea_mask = metrics.detect_eupnic_regions(
+                        st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
+                        freq_threshold_hz=eupnea_thresh
+                    )
+                    eupnea_masks_by_sweep[s] = eupnea_mask
+
+            # Now compute baselines by collecting breath values from eupneic periods
+            # IMPORTANT: Cache traces to reuse in main export loop AND PDF generation
+            print(f"[CSV] Computing eupnea baselines and caching traces for {len(need_keys)} metrics...")
+            eupnea_baseline_breaths = {k: [] for k in need_keys}
+
+            # Global cache for reuse in PDF generation (stored on self)
+            if not hasattr(self, '_global_trace_cache'):
+                self._global_trace_cache = {}
+            cached_traces_by_sweep = {}  # Cache traces to avoid recomputing
+
+            for s in kept_sweeps:
+                y_proc = self._get_processed_for(st.analyze_chan, s)
+                pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+                br = st.breath_by_sweep.get(s, None)
+                if br is None or pks.size < 2:
+                    continue
+
                 on = np.asarray(br.get("onsets", []), dtype=int)
                 if on.size < 2:
                     continue
-    
+
+                eupnea_mask = eupnea_masks_by_sweep.get(s, None)
+                if eupnea_mask is None:
+                    continue
+
                 mids = (on[:-1] + on[1:]) // 2
-    
-                # Metric traces sampled at breath midpoints
-                traces = {}
+                t_rel_all = (st.t[mids] - (global_s0 if have_global_stim else 0.0)).astype(float)
+
+                # Compute traces once for this sweep and CACHE them (both locally and globally)
+                traces_for_sweep = {}
                 for k in need_keys:
                     if k in metrics.METRICS:
-                        traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
-                    else:
-                        traces[k] = None
+                        traces_for_sweep[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
+
+                # Store in cache for reuse in main loop
+                cached_traces_by_sweep[s] = traces_for_sweep
+                # Also store globally for PDF reuse
+                self._global_trace_cache[s] = traces_for_sweep
+
+                # Collect baseline eupneic breath values
+                for i, mid_idx in enumerate(mids):
+                    if t_rel_all[i] >= 0:
+                        continue  # Only baseline (t < 0)
+
+                    # Check if this breath is eupneic
+                    if mid_idx < len(eupnea_mask) and eupnea_mask[mid_idx] > 0:
+                        for k in need_keys:
+                            trace = traces_for_sweep.get(k, None)
+                            if trace is not None and len(trace) == len(st.t):
+                                val = trace[mid_idx]
+                                if np.isfinite(val):
+                                    eupnea_baseline_breaths[k].append(val)
+
+            # Compute baseline means with fallback if insufficient baseline data
+            for k in need_keys:
+                if len(eupnea_baseline_breaths[k]) >= 10:
+                    eupnea_b_by_k[k] = float(np.mean(eupnea_baseline_breaths[k]))
+                elif len(eupnea_baseline_breaths[k]) > 0:
+                    eupnea_b_by_k[k] = float(np.mean(eupnea_baseline_breaths[k]))
+                else:
+                    # Fallback: include post-stim eupneic breaths using CACHED traces
+                    fallback_vals = []
+                    for s in kept_sweeps:
+                        traces_cached = cached_traces_by_sweep.get(s, None)
+                        if traces_cached is None:
+                            continue
+
+                        br = st.breath_by_sweep.get(s, None)
+                        if br is None:
+                            continue
+
+                        on = np.asarray(br.get("onsets", []), dtype=int)
+                        if on.size < 2:
+                            continue
+
+                        eupnea_mask = eupnea_masks_by_sweep.get(s, None)
+                        if eupnea_mask is None:
+                            continue
+
+                        mids = (on[:-1] + on[1:]) // 2
+                        t_rel_all = (st.t[mids] - (global_s0 if have_global_stim else 0.0)).astype(float)
+
+                        trace = traces_cached.get(k, None)
+                        if trace is None or len(trace) != len(st.t):
+                            continue
+
+                        for i, mid_idx in enumerate(mids):
+                            if 0 <= t_rel_all[i] <= NORM_BASELINE_WINDOW_S:
+                                if mid_idx < len(eupnea_mask) and eupnea_mask[mid_idx] > 0:
+                                    val = trace[mid_idx]
+                                    if np.isfinite(val):
+                                        fallback_vals.append(val)
+
+                    eupnea_b_by_k[k] = float(np.mean(fallback_vals)) if len(fallback_vals) > 0 else np.nan
+    
+            for s in kept_sweeps:
+                # Use cached traces if available, otherwise compute
+                traces = cached_traces_by_sweep.get(s, None)
+                if traces is None:
+                    # Compute if not cached (shouldn't happen, but safety fallback)
+                    y_proc = self._get_processed_for(st.analyze_chan, s)
+                    pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+                    br = st.breath_by_sweep.get(s, None)
+                    if br is None and pks.size:
+                        br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
+                        st.breath_by_sweep[s] = br
+                    if br is None:
+                        br = {"onsets": np.array([], dtype=int)}
+
+                    traces = {}
+                    for k in need_keys:
+                        if k in metrics.METRICS:
+                            traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
+                        else:
+                            traces[k] = None
+                else:
+                    # Use cached data
+                    br = st.breath_by_sweep.get(s, None)
+                    if br is None:
+                        br = {"onsets": np.array([], dtype=int)}
+
+                on = np.asarray(br.get("onsets", []), dtype=int)
+                if on.size < 2:
+                    continue
+
+                mids = (on[:-1] + on[1:]) // 2
     
                 # Per-sweep breath-based baselines (use breath midpoints)
                 t_rel_all = (st.t[mids] - (global_s0 if have_global_stim else 0.0)).astype(float)
@@ -3929,7 +4243,7 @@ class MainWindow(QMainWindow):
                         row_all.append(f"{v:.9g}" if np.isfinite(v) else "")
                     rows_all.append(row_all)
     
-                    # ----- NORM: ALL (binary flag repeated; not normalized)
+                    # ----- NORM: ALL (time-based, per-sweep)
                     row_allN = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag]
                     for k in need_keys:
                         v = np.nan
@@ -3940,7 +4254,19 @@ class MainWindow(QMainWindow):
                         vn = (v / b) if (np.isfinite(v) and np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
                         row_allN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
                     rows_all_N.append(row_allN)
-    
+
+                    # ----- NORM_EUPNEA: ALL (eupnea-based, pooled)
+                    row_allE = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag]
+                    for k in need_keys:
+                        v = np.nan
+                        arr = traces.get(k, None)
+                        if arr is not None and len(arr) == N:
+                            v = arr[int(idx)]
+                        eb = eupnea_b_by_k.get(k, np.nan)
+                        ve = (v / eb) if (np.isfinite(v) and np.isfinite(eb) and abs(eb) > EPS_BASE) else np.nan
+                        row_allE.append(f"{ve:.9g}" if np.isfinite(ve) else "")
+                    rows_all_E.append(row_allE)
+
                     if have_global_stim:
                         region = "Baseline" if t_rel < 0 else ("Stim" if t_rel <= global_dur else "Post")
     
@@ -3956,7 +4282,7 @@ class MainWindow(QMainWindow):
                         elif region == "Stim":  rows_st.append(row_reg)
                         else:                   rows_po.append(row_reg)
     
-                        # NORM regional row
+                        # NORM regional row (time-based, per-sweep)
                         row_regN = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag]
                         for k in need_keys:
                             v = np.nan
@@ -3969,6 +4295,20 @@ class MainWindow(QMainWindow):
                         if region == "Baseline": rows_bl_N.append(row_regN)
                         elif region == "Stim":  rows_st_N.append(row_regN)
                         else:                   rows_po_N.append(row_regN)
+
+                        # NORM_EUPNEA regional row (eupnea-based, pooled)
+                        row_regE = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag]
+                        for k in need_keys:
+                            v = np.nan
+                            arr = traces.get(k, None)
+                            if arr is not None and len(arr) == N:
+                                v = arr[int(idx)]
+                            eb = eupnea_b_by_k.get(k, np.nan)
+                            ve = (v / eb) if (np.isfinite(v) and np.isfinite(eb) and abs(eb) > EPS_BASE) else np.nan
+                            row_regE.append(f"{ve:.9g}" if np.isfinite(ve) else "")
+                        if region == "Baseline": rows_bl_E.append(row_regE)
+                        elif region == "Stim":  rows_st_E.append(row_regE)
+                        else:                   rows_po_E.append(row_regE)
     
             def _pad_row(row, want_len):
                 if row is None: return [""] * want_len
@@ -3979,42 +4319,51 @@ class MainWindow(QMainWindow):
             headers_bl  = _headers_for_block("baseline")
             headers_st  = _headers_for_block("stim")
             headers_po  = _headers_for_block("post")
-    
+
             headers_allN = _headers_for_block_norm(None)
             headers_blN  = _headers_for_block_norm("baseline")
             headers_stN  = _headers_for_block_norm("stim")
             headers_poN  = _headers_for_block_norm("post")
-    
+
+            headers_allE = _headers_for_block_norm_eupnea(None)
+            headers_blE  = _headers_for_block_norm_eupnea("baseline")
+            headers_stE  = _headers_for_block_norm_eupnea("stim")
+            headers_poE  = _headers_for_block_norm_eupnea("post")
+
             have_stim_blocks = have_global_stim and (len(rows_bl) + len(rows_st) + len(rows_po) > 0)
-    
+
             with open(breaths_path, "w", newline="") as f:
                 w = csv.writer(f)
                 if not have_stim_blocks:
-                    # RAW + NORM (ALL only)
-                    full_header = headers_all + [""] + headers_allN
+                    # RAW + NORM + NORM_EUPNEA (ALL only)
+                    full_header = headers_all + [""] + headers_allN + [""] + headers_allE
                     w.writerow(full_header)
-                    L = max(len(rows_all), len(rows_all_N))
-                    LA = len(headers_all); LAN = len(headers_allN)
+                    L = max(len(rows_all), len(rows_all_N), len(rows_all_E))
+                    LA = len(headers_all); LAN = len(headers_allN); LAE = len(headers_allE)
                     for i in range(L):
                         ra  = rows_all[i]   if i < len(rows_all)   else None
                         raN = rows_all_N[i] if i < len(rows_all_N) else None
-                        row = _pad_row(ra, LA) + [""] + _pad_row(raN, LAN)
+                        raE = rows_all_E[i] if i < len(rows_all_E) else None
+                        row = _pad_row(ra, LA) + [""] + _pad_row(raN, LAN) + [""] + _pad_row(raE, LAE)
                         w.writerow(row)
                 else:
-                    # RAW blocks, then NORM blocks
+                    # RAW blocks, then NORM blocks, then NORM_EUPNEA blocks
                     full_header = (
                         headers_all + [""] + headers_bl + [""] + headers_st + [""] + headers_po + [""] +
-                        headers_allN + [""] + headers_blN + [""] + headers_stN + [""] + headers_poN
+                        headers_allN + [""] + headers_blN + [""] + headers_stN + [""] + headers_poN + [""] +
+                        headers_allE + [""] + headers_blE + [""] + headers_stE + [""] + headers_poE
                     )
                     w.writerow(full_header)
-    
+
                     L = max(
                         len(rows_all), len(rows_bl), len(rows_st), len(rows_po),
                         len(rows_all_N), len(rows_bl_N), len(rows_st_N), len(rows_po_N),
+                        len(rows_all_E), len(rows_bl_E), len(rows_st_E), len(rows_po_E),
                     )
                     LA = len(headers_all); LB = len(headers_bl); LS = len(headers_st); LP = len(headers_po)
                     LAN = len(headers_allN); LBN = len(headers_blN); LSN = len(headers_stN); LPN = len(headers_poN)
-    
+                    LAE = len(headers_allE); LBE = len(headers_blE); LSE = len(headers_stE); LPE = len(headers_poE)
+
                     for i in range(L):
                         ra  = rows_all[i]   if i < len(rows_all)   else None
                         rb  = rows_bl[i]    if i < len(rows_bl)    else None
@@ -4024,7 +4373,11 @@ class MainWindow(QMainWindow):
                         rbN = rows_bl_N[i]  if i < len(rows_bl_N)  else None
                         rsN = rows_st_N[i]  if i < len(rows_st_N)  else None
                         rpN = rows_po_N[i]  if i < len(rows_po_N)  else None
-    
+                        raE = rows_all_E[i] if i < len(rows_all_E) else None
+                        rbE = rows_bl_E[i]  if i < len(rows_bl_E)  else None
+                        rsE = rows_st_E[i]  if i < len(rows_st_E)  else None
+                        rpE = rows_po_E[i]  if i < len(rows_po_E)  else None
+
                         row = (
                             _pad_row(ra, LA) + [""] +
                             _pad_row(rb, LB) + [""] +
@@ -4033,11 +4386,162 @@ class MainWindow(QMainWindow):
                             _pad_row(raN, LAN) + [""] +
                             _pad_row(rbN, LBN) + [""] +
                             _pad_row(rsN, LSN) + [""] +
-                            _pad_row(rpN, LPN)
+                            _pad_row(rpN, LPN) + [""] +
+                            _pad_row(raE, LAE) + [""] +
+                            _pad_row(rbE, LBE) + [""] +
+                            _pad_row(rsE, LSE) + [""] +
+                            _pad_row(rpE, LPE)
                         )
                         w.writerow(row)
 
+            if progress_dialog:
+                progress_dialog.setLabelText("Writing events CSV...")
+                progress_dialog.setValue(70)
+                QApplication.processEvents()
+
+            # -------------------- (4) Events CSV (stimulus, apnea, eupnea intervals) --------------------
+            events_path = base.with_name(base.name + "_events.csv")
+
+            events_rows = []
+
+            # Get thresholds from UI
+            eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+            apnea_thresh = self._parse_float(self.ApneaThresh) or 0.5    # seconds
+
+            for s in kept_sweeps:
+                y_proc = self._get_processed_for(st.analyze_chan, s)
+                pks    = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+                br     = st.breath_by_sweep.get(s, None)
+                if br is None and pks.size:
+                    br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
+                if br is None:
+                    br = {"onsets": np.array([], dtype=int)}
+
+                on = np.asarray(br.get("onsets", []), dtype=int)
+                off = np.asarray(br.get("offsets", []), dtype=int)
+                expmins = np.asarray(br.get("expmins", []), dtype=int)
+                expoffs = np.asarray(br.get("expoffs", []), dtype=int)
+
+                # Stimulus events
+                stim_on_idx = st.stim_onsets_by_sweep.get(s, None)
+                stim_off_idx = st.stim_offsets_by_sweep.get(s, None)
+
+                if stim_on_idx is not None and len(stim_on_idx) > 0:
+                    for i, on_idx in enumerate(stim_on_idx):
+                        start_time = float(st.t[int(on_idx)])
+                        if stim_off_idx is not None and i < len(stim_off_idx):
+                            end_time = float(st.t[int(stim_off_idx[i])])
+                        else:
+                            end_time = np.nan
+
+                        # Convert to relative time if global stim available
+                        if have_global_stim:
+                            start_time -= global_s0
+                            if np.isfinite(end_time):
+                                end_time -= global_s0
+
+                        duration = end_time - start_time if np.isfinite(end_time) else np.nan
+
+                        events_rows.append([
+                            str(s + 1),
+                            "stimulus",
+                            f"{start_time:.9g}",
+                            f"{end_time:.9g}" if np.isfinite(end_time) else "",
+                            f"{duration:.9g}" if np.isfinite(duration) else ""
+                        ])
+
+                # Apnea and eupnea events (only if we have breath data)
+                if on.size >= 2:
+                    # Detect apnea regions
+                    apnea_mask = metrics.detect_apneas(
+                        st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
+                        min_apnea_duration_sec=apnea_thresh
+                    )
+
+                    # Detect eupnea regions
+                    eupnea_mask = metrics.detect_eupnic_regions(
+                        st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
+                        freq_threshold_hz=eupnea_thresh
+                    )
+
+                    # Convert masks to interval lists
+                    def mask_to_intervals(mask):
+                        """Convert boolean mask to list of (start_idx, end_idx) intervals."""
+                        intervals = []
+                        in_region = False
+                        start_idx = 0
+
+                        for i in range(len(mask)):
+                            if mask[i] and not in_region:
+                                # Start of new region
+                                start_idx = i
+                                in_region = True
+                            elif not mask[i] and in_region:
+                                # End of region
+                                intervals.append((start_idx, i - 1))
+                                in_region = False
+
+                        # Handle case where region extends to end
+                        if in_region:
+                            intervals.append((start_idx, len(mask) - 1))
+
+                        return intervals
+
+                    # Add apnea intervals
+                    apnea_intervals = mask_to_intervals(apnea_mask > 0)
+                    for start_idx, end_idx in apnea_intervals:
+                        start_time = float(st.t[int(start_idx)])
+                        end_time = float(st.t[int(end_idx)])
+
+                        # Convert to relative time if global stim available
+                        if have_global_stim:
+                            start_time -= global_s0
+                            end_time -= global_s0
+
+                        duration = end_time - start_time
+
+                        events_rows.append([
+                            str(s + 1),
+                            "apnea",
+                            f"{start_time:.9g}",
+                            f"{end_time:.9g}",
+                            f"{duration:.9g}"
+                        ])
+
+                    # Add eupnea intervals
+                    eupnea_intervals = mask_to_intervals(eupnea_mask > 0)
+                    for start_idx, end_idx in eupnea_intervals:
+                        start_time = float(st.t[int(start_idx)])
+                        end_time = float(st.t[int(end_idx)])
+
+                        # Convert to relative time if global stim available
+                        if have_global_stim:
+                            start_time -= global_s0
+                            end_time -= global_s0
+
+                        duration = end_time - start_time
+
+                        events_rows.append([
+                            str(s + 1),
+                            "eupnea",
+                            f"{start_time:.9g}",
+                            f"{end_time:.9g}",
+                            f"{duration:.9g}"
+                        ])
+
+            # Write events CSV
+            with open(events_path, "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["sweep", "event_type", "start_time", "end_time", "duration"])
+                for row in events_rows:
+                    w.writerow(row)
+
         # -------------------- (4) Summary PDF or Preview --------------------
+        if progress_dialog:
+            progress_dialog.setLabelText("Generating summary figures..." if preview_only else "Generating PDF...")
+            progress_dialog.setValue(80)
+            QApplication.processEvents()
+
         keys_for_timeplots = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
         label_by_key = {key: label for (label, key) in metrics.METRIC_SPECS if key in keys_for_timeplots}
 
@@ -4073,7 +4577,11 @@ class MainWindow(QMainWindow):
                 print(f"[save][summary-pdf] skipped: {e}")
 
             # -------------------- done --------------------
-            msg = f"Saved:\n- {npz_path.name}\n- {csv_time_path.name}\n- {breaths_path.name}\n- {pdf_path.name}"
+            if progress_dialog:
+                progress_dialog.setValue(100)
+                QApplication.processEvents()
+
+            msg = f"Saved:\n- {npz_path.name}\n- {csv_time_path.name}\n- {breaths_path.name}\n- {events_path.name}\n- {pdf_path.name}"
             print("[save]", msg)
             try:
                 self.statusbar.showMessage(msg, 6000)
@@ -4654,13 +5162,14 @@ class MainWindow(QMainWindow):
         return_figures: bool = False,
          ):
         """
-        Build a two-page PDF (or return figures for preview).
+        Build a three-page PDF (or return figures for preview).
 
-        If return_figures=True: Returns (fig1, fig2) tuple instead of saving.
+        If return_figures=True: Returns (fig1, fig2, fig3) tuple instead of saving.
         If return_figures=False: Saves PDF to out_path.
 
         • Page 1: rows = metrics, cols = [all sweeps | mean±SEM | histograms] using RAW data
-        • Page 2: same layout, using NORMALIZED data (per sweep, per metric baseline)
+        • Page 2: same layout, using NORMALIZED data (time-based, per-sweep baseline)
+        • Page 3: same layout, using NORMALIZED data (eupnea-based, pooled baseline)
         • NEW: overlay orange star markers at times where sighs occurred (first two columns)
             and at x = metric value of sigh breaths (histogram column).
         """
@@ -4783,13 +5292,19 @@ class MainWindow(QMainWindow):
                             # time for time-series star (use breath midpoint)
                             sigh_times_rel.append(float(st.t[int(mids[j])] - t0))
 
-                # Build metric traces
-                traces = {}
-                for k in keys_for_csv:
-                    try:
-                        traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
-                    except TypeError:
-                        traces[k] = None
+                # Build metric traces - use global cache if available
+                traces = None
+                if hasattr(self, '_global_trace_cache'):
+                    traces = self._global_trace_cache.get(s, None)
+
+                if traces is None:
+                    # Compute if not cached
+                    traces = {}
+                    for k in keys_for_csv:
+                        try:
+                            traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
+                        except TypeError:
+                            traces[k] = None
 
                 # Per-sweep baselines for normalization (breath-based)
                 mask_pre_b  = (t_rel_all >= -NORM_BASELINE_WINDOW_S) & (t_rel_all < 0.0)
@@ -4975,14 +5490,190 @@ class MainWindow(QMainWindow):
             b = _per_sweep_baseline_time(Y)
             y2_ds_by_key_norm[k] = _normalize_matrix(Y, b)
 
+        # Prepare EUPNEA-BASED normalized datasets
+        y2_ds_by_key_norm_eupnea = {}
+        eupnea_baselines_by_key = {}  # Store computed baselines for histogram building
+        eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+
+        # OPTIMIZATION: Compute eupnea masks once per sweep, reuse for all metrics
+        eupnea_masks_by_sweep = {}
+        kept = [s for s in range(next(iter(st.sweeps.values())).shape[1])
+                if s not in getattr(st, "omitted_sweeps", set())]
+
+        print(f"[PDF] Computing eupnea masks for {len(kept)} sweeps...")
+        for s in kept:
+            y_proc = self._get_processed_for(st.analyze_chan, s)
+            pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+            br = st.breath_by_sweep.get(s, None)
+            if br is None and pks.size:
+                try:
+                    br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
+                except TypeError:
+                    br = peakdet.compute_breath_events(y_proc, pks)
+
+            if br is not None:
+                on = np.asarray(br.get("onsets", []), dtype=int)
+                off = np.asarray(br.get("offsets", []), dtype=int)
+                expmins = np.asarray(br.get("expmins", []), dtype=int)
+                expoffs = np.asarray(br.get("expoffs", []), dtype=int)
+
+                if on.size >= 2:
+                    eupnea_mask = metrics.detect_eupnic_regions(
+                        st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
+                        freq_threshold_hz=eupnea_thresh
+                    )
+                    eupnea_masks_by_sweep[s] = eupnea_mask
+
+        print(f"[PDF] Computed {len(eupnea_masks_by_sweep)} eupnea masks")
+
+        print(f"[PDF] Building histograms (raw and time-normalized)...")
         # Pools + sigh overlays
         (hist_vals_raw,
         hist_vals_norm,
         sigh_vals_raw_by_key,
         sigh_vals_norm_by_key,
         sigh_times_rel) = _build_hist_vals_raw_and_norm()
+        print(f"[PDF] Built raw and time-normalized histograms")
 
-        # ---------- Create two-page PDF ----------
+        # Build EUPNEA-normalized histograms using a simple breath-based approach
+        print(f"[PDF] Building eupnea-normalized histograms...")
+
+        def _build_eupnea_normalized_hists():
+            """
+            Simple approach:
+            1. Collect all breath metric values from eupneic baseline periods
+            2. Compute mean baseline per metric
+            3. Normalize all breath values by that baseline
+            """
+            # Step 1: Collect eupneic baseline breath values
+            eupnea_baseline_breaths = {k: [] for k in keys_for_csv}
+            all_breath_values_raw = {k: {"all": [], "baseline": [], "stim": [], "post": []} for k in keys_for_csv}
+            sigh_vals_raw = {k: [] for k in keys_for_csv}
+
+            kept = [s for s in range(next(iter(st.sweeps.values())).shape[1])
+                    if s not in getattr(st, "omitted_sweeps", set())]
+            t0 = float(stim_zero) if stim_zero is not None else 0.0
+
+            for s in kept:
+                y_proc = self._get_processed_for(st.analyze_chan, s)
+                pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+                br = st.breath_by_sweep.get(s, None)
+                if br is None or pks.size < 2:
+                    continue
+
+                on = np.asarray(br.get("onsets", []), dtype=int)
+                if on.size < 2:
+                    continue
+
+                # Get eupnea mask for this sweep
+                eupnea_mask = eupnea_masks_by_sweep.get(s, None)
+                if eupnea_mask is None:
+                    continue
+
+                mids = (on[:-1] + on[1:]) // 2
+                t_rel_all = (st.t[mids] - t0).astype(float)
+
+                # Check which breaths are sighs
+                sigh_idx = np.asarray(st.sigh_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+                is_sigh_breath = np.zeros(len(mids), dtype=bool)
+                if sigh_idx.size:
+                    for j in range(len(mids)):
+                        a = int(on[j]); b = int(on[j + 1])
+                        if np.any((sigh_idx >= a) & (sigh_idx < b)):
+                            is_sigh_breath[j] = True
+
+                # For each breath, check if midpoint is eupneic and collect metric values
+                for i, mid_idx in enumerate(mids):
+                    t_rel = t_rel_all[i]
+                    is_eupneic = eupnea_mask[mid_idx] > 0 if mid_idx < len(eupnea_mask) else False
+                    is_baseline = t_rel < 0
+
+                    # Determine region
+                    if have_stim:
+                        if t_rel < 0:
+                            region = "baseline"
+                        elif t_rel <= stim_dur:
+                            region = "stim"
+                        else:
+                            region = "post"
+                    else:
+                        region = "all"
+
+                    # Extract metric values from raw histograms (already computed by _build_hist_vals_raw_and_norm)
+                    # We'll use the same raw values that were already extracted
+                    # But we need to recompute - let's just use the data from hist_vals_raw
+                    # Actually, we can't easily map back. Let's sample from y2_ds_by_key at this time point
+
+                    for k in keys_for_csv:
+                        Y_raw = y2_ds_by_key.get(k, None)
+                        if Y_raw is None or Y_raw.size == 0:
+                            continue
+
+                        # Find closest downsampled time point
+                        ds_idx = np.argmin(np.abs(t_ds_csv - t_rel))
+                        if ds_idx >= Y_raw.shape[0]:
+                            continue
+
+                        col_idx = kept.index(s)
+                        val = Y_raw[ds_idx, col_idx]
+
+                        if not np.isfinite(val):
+                            continue
+
+                        # Collect for baseline calculation if eupneic and baseline
+                        if is_eupneic and is_baseline:
+                            eupnea_baseline_breaths[k].append(val)
+
+                        # Collect all breath values (will normalize later)
+                        all_breath_values_raw[k]["all"].append(val)
+                        if have_stim:
+                            all_breath_values_raw[k][region].append(val)
+
+                        # Collect sigh values
+                        if is_sigh_breath[i]:
+                            sigh_vals_raw[k].append(val)
+
+            # Step 2: Compute eupneic baseline means
+            eupnea_baselines = {}
+            for k in keys_for_csv:
+                if len(eupnea_baseline_breaths[k]) >= 10:
+                    eupnea_baselines[k] = np.mean(eupnea_baseline_breaths[k])
+                elif len(eupnea_baseline_breaths[k]) > 0:
+                    # Use what we have if < 10
+                    eupnea_baselines[k] = np.mean(eupnea_baseline_breaths[k])
+                else:
+                    eupnea_baselines[k] = np.nan
+
+            # Step 3: Normalize all values
+            hist_norm_eupnea = {k: {"all": [], "baseline": [], "stim": [], "post": []} for k in keys_for_csv}
+            sigh_vals_norm_eupnea = {k: [] for k in keys_for_csv}
+
+            for k in keys_for_csv:
+                baseline = eupnea_baselines.get(k, np.nan)
+                if not np.isfinite(baseline) or abs(baseline) < EPS_BASE:
+                    continue
+
+                for region in ["all", "baseline", "stim", "post"]:
+                    hist_norm_eupnea[k][region] = [v / baseline for v in all_breath_values_raw[k][region]]
+
+                sigh_vals_norm_eupnea[k] = [v / baseline for v in sigh_vals_raw[k]]
+
+            # Also store baselines and normalized time series for plotting
+            y2_norm_eupnea = {}
+            for k in keys_for_csv:
+                Y_raw = y2_ds_by_key.get(k, None)
+                baseline = eupnea_baselines.get(k, np.nan)
+                if Y_raw is not None and np.isfinite(baseline) and abs(baseline) > EPS_BASE:
+                    y2_norm_eupnea[k] = Y_raw / baseline
+                else:
+                    y2_norm_eupnea[k] = None
+
+            return hist_norm_eupnea, sigh_vals_norm_eupnea, eupnea_baselines, y2_norm_eupnea
+
+        hist_vals_norm_eupnea, sigh_vals_norm_eupnea_by_key, eupnea_baselines_by_key, y2_ds_by_key_norm_eupnea = _build_eupnea_normalized_hists()
+        print(f"[PDF] Built eupnea-normalized histograms")
+
+        # ---------- Create three-page PDF ----------
         nrows = max(1, len(keys_for_csv))
         fig_w = 13
         fig_h = max(4.0, 2.6 * nrows)  # Reduced from 5.25 to 2.6 per row (half of 5.25)
@@ -4993,31 +5684,39 @@ class MainWindow(QMainWindow):
         fig1.suptitle("Summary — raw", fontsize=11)
         fig1.tight_layout(rect=[0, 0, 1, 0.99])  # Leave 1% at top for suptitle
 
-        # Page 2 — NORMALIZED
+        # Page 2 — NORMALIZED (time-based)
         fig2, axes2 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
         _plot_grid(fig2, axes2, y2_ds_by_key_norm, hist_vals_norm, sigh_vals_norm_by_key, sigh_times_rel, title_suffix=" (norm)")
-        fig2.suptitle("Summary — normalized", fontsize=11)
+        fig2.suptitle("Summary — normalized (time-based)", fontsize=11)
         fig2.tight_layout(rect=[0, 0, 1, 0.99])  # Leave 1% at top for suptitle
+
+        # Page 3 — NORMALIZED (eupnea-based)
+        fig3, axes3 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
+        _plot_grid(fig3, axes3, y2_ds_by_key_norm_eupnea, hist_vals_norm_eupnea, sigh_vals_norm_eupnea_by_key, sigh_times_rel, title_suffix=" (norm eupnea)")
+        fig3.suptitle("Summary — normalized (eupnea-based)", fontsize=11)
+        fig3.tight_layout(rect=[0, 0, 1, 0.99])  # Leave 1% at top for suptitle
 
         # Either return figures or save to PDF
         if return_figures:
-            return fig1, fig2
+            return fig1, fig2, fig3
         else:
             with PdfPages(out_path) as pdf:
                 pdf.savefig(fig1, dpi=150)
                 pdf.savefig(fig2, dpi=150)
+                pdf.savefig(fig3, dpi=150)
             plt.close(fig1)
             plt.close(fig2)
+            plt.close(fig3)
 
 
     def _show_summary_preview_dialog(self, t_ds_csv, y2_ds_by_key, keys_for_csv, label_by_key, stim_zero, stim_dur):
-        """Display interactive preview dialog with the two summary figures."""
+        """Display interactive preview dialog with the three summary figures."""
         import matplotlib.pyplot as plt
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
         # Generate figures using the same method that saves PDFs, but get figures back instead
-        fig1, fig2 = self._save_metrics_summary_pdf(
+        fig1, fig2, fig3 = self._save_metrics_summary_pdf(
             out_path=None,  # Not used when return_figures=True
             t_ds_csv=t_ds_csv,
             y2_ds_by_key=y2_ds_by_key,
@@ -5037,7 +5736,7 @@ class MainWindow(QMainWindow):
 
         # Page selector controls at top
         control_layout = QHBoxLayout()
-        page_label = QLabel("Page 1 of 2 (Raw)")
+        page_label = QLabel("Page 1 of 3 (Raw)")
         prev_btn = QPushButton("← Previous")
         next_btn = QPushButton("Next →")
         close_btn = QPushButton("Close")
@@ -5062,19 +5761,21 @@ class MainWindow(QMainWindow):
         # Canvas for displaying matplotlib figures
         canvas1 = FigureCanvas(fig1)
         canvas2 = FigureCanvas(fig2)
+        canvas3 = FigureCanvas(fig3)
 
         # Set size policies to allow width scaling but keep height fixed
         from PyQt6.QtWidgets import QSizePolicy
         from PyQt6.QtCore import QEvent
-        for canvas in [canvas1, canvas2]:
+        for canvas in [canvas1, canvas2, canvas3]:
             canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             canvas.setMinimumWidth(800)  # Minimum width
 
-        # Create a container widget to hold both canvases (so they don't get deleted)
+        # Create a container widget to hold all three canvases (so they don't get deleted)
         from PyQt6.QtWidgets import QWidget, QStackedWidget
         canvas_stack = QStackedWidget()
         canvas_stack.addWidget(canvas1)  # index 0
         canvas_stack.addWidget(canvas2)  # index 1
+        canvas_stack.addWidget(canvas3)  # index 2
         canvas_stack.setCurrentIndex(0)  # Start with page 1
 
         # Install event filter on canvases to forward wheel events to scroll area
@@ -5104,6 +5805,7 @@ class MainWindow(QMainWindow):
         filter_obj = EventFilterObject(wheel_filter.eventFilter)
         canvas1.installEventFilter(filter_obj)
         canvas2.installEventFilter(filter_obj)
+        canvas3.installEventFilter(filter_obj)
 
         # Put the stacked widget in the scroll area
         scroll_area.setWidget(canvas_stack)
@@ -5115,12 +5817,17 @@ class MainWindow(QMainWindow):
         def update_page():
             if current_page[0] == 1:
                 canvas_stack.setCurrentIndex(0)  # Show canvas1
-                page_label.setText("Page 1 of 2 (Raw)")
+                page_label.setText("Page 1 of 3 (Raw)")
                 prev_btn.setEnabled(False)
                 next_btn.setEnabled(True)
-            else:
+            elif current_page[0] == 2:
                 canvas_stack.setCurrentIndex(1)  # Show canvas2
-                page_label.setText("Page 2 of 2 (Normalized)")
+                page_label.setText("Page 2 of 3 (Normalized - Time-based)")
+                prev_btn.setEnabled(True)
+                next_btn.setEnabled(True)
+            else:
+                canvas_stack.setCurrentIndex(2)  # Show canvas3
+                page_label.setText("Page 3 of 3 (Normalized - Eupnea-based)")
                 prev_btn.setEnabled(True)
                 next_btn.setEnabled(False)
             # Reset scroll position to top when changing pages
@@ -5131,7 +5838,7 @@ class MainWindow(QMainWindow):
             update_page()
 
         def go_next():
-            current_page[0] = min(2, current_page[0] + 1)
+            current_page[0] = min(3, current_page[0] + 1)
             update_page()
 
         prev_btn.clicked.connect(go_prev)
@@ -5144,6 +5851,7 @@ class MainWindow(QMainWindow):
         # Cleanup
         plt.close(fig1)
         plt.close(fig2)
+        plt.close(fig3)
 
 
     def _sigh_sample_indices(self, s: int, pks: np.ndarray | None) -> set[int]:
@@ -5804,47 +6512,92 @@ class MainWindow(QMainWindow):
     def on_consolidate_save_data_clicked(self):
         """Consolidate data from selected files into a single Excel file."""
         from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QProgressDialog
         import pandas as pd
         from pathlib import Path
-        
+
         # Get all selected files from right list
         items = []
         for i in range(self.FilestoConsolidateList.count()):
             item = self.FilestoConsolidateList.item(i)
             if item:
                 items.append(item)
-        
+
         if not items:
             QMessageBox.warning(self, "Consolidate", "No files selected to consolidate.")
             return
-        
+
         # Separate by file type
         means_files = []
         breaths_files = []
-        
+
         for item in items:
             meta = item.data(Qt.ItemDataRole.UserRole) or {}
             if meta.get("means"):
                 means_files.append((meta["root"], Path(meta["means"])))
             if meta.get("breaths"):
                 breaths_files.append((meta["root"], Path(meta["breaths"])))
-        
+
         if not means_files and not breaths_files:
             QMessageBox.warning(self, "Consolidate", "No CSV files selected.")
             return
-        
+
+        # Choose save location first
+        default_name = "consolidated_data.xlsx"
+        if means_files:
+            default_name = str(means_files[0][1].parent / "consolidated_data.xlsx")
+        elif breaths_files:
+            default_name = str(breaths_files[0][1].parent / "consolidated_data.xlsx")
+
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, "Save consolidated data as...",
+            default_name,
+            "Excel Files (*.xlsx)"
+        )
+
+        if not save_path:
+            return
+
+        # Create progress dialog
+        n_total_files = len(means_files) + len(breaths_files)
+        progress = QProgressDialog("Consolidating data...", "Cancel", 0, 100, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
         # Process files
         try:
             consolidated_data = {}
-            
+
             if means_files:
+                progress.setLabelText(f"Processing time series data ({len(means_files)} files)...")
+                progress.setValue(10)
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    return
+
                 consolidated_data.update(self._consolidate_means_files(means_files))
-            
+                progress.setValue(40)
+                QApplication.processEvents()
+
             if breaths_files:
+                if progress.wasCanceled():
+                    return
+
+                progress.setLabelText(f"Processing breath histograms ({len(breaths_files)} files)...")
+                progress.setValue(50)
+                QApplication.processEvents()
+
                 histogram_data = self._consolidate_breaths_histograms(breaths_files)
                 consolidated_data.update(histogram_data)
-                
+
+                progress.setValue(70)
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    return
+
                 # Extract sigh data
+                progress.setLabelText("Extracting sigh data...")
                 sighs_df = self._consolidate_breaths_sighs(breaths_files)
                 consolidated_data['sighs'] = {
                     'time_series': sighs_df,
@@ -5852,32 +6605,44 @@ class MainWindow(QMainWindow):
                     'norm_summary': {},
                     'windows': []
                 }
-            
-            # Choose save location
-            default_name = "consolidated_data.xlsx"
-            if means_files:
-                default_name = str(means_files[0][1].parent / "consolidated_data.xlsx")
-            elif breaths_files:
-                default_name = str(breaths_files[0][1].parent / "consolidated_data.xlsx")
-                
-            save_path, _ = QFileDialog.getSaveFileName(
-                self, "Save consolidated data as...",
-                default_name,
-                "Excel Files (*.xlsx)"
-            )
-            
-            if save_path:
-                self._save_consolidated_to_excel(consolidated_data, Path(save_path))
-                n_files = len(means_files) + len(breaths_files)
+                progress.setValue(80)
+                QApplication.processEvents()
+
+            if progress.wasCanceled():
+                return
+
+            progress.setLabelText("Saving Excel file and generating charts...")
+            progress.setValue(85)
+            QApplication.processEvents()
+
+            self._save_consolidated_to_excel(consolidated_data, Path(save_path))
+            progress.setValue(100)
+
+            n_files = len(means_files) + len(breaths_files)
+
+            # Check for warnings from consolidation
+            if '_warnings' in consolidated_data:
+                warnings_text = consolidated_data['_warnings']
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                msg_box.setWindowTitle("Consolidation Completed with Warnings")
+                msg_box.setText(f"Consolidated {n_files} files successfully.\nSaved to: {save_path}\n\nHowever, some files required special handling:")
+                msg_box.setDetailedText(warnings_text)
+                msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg_box.exec()
+            else:
                 QMessageBox.information(
-                    self, "Success", 
+                    self, "Success",
                     f"Consolidated {n_files} files.\nSaved to: {save_path}"
                 )
-        
+
         except Exception as e:
+            progress.close()
             QMessageBox.critical(self, "Consolidation Error", f"Failed to consolidate:\n{e}")
             import traceback
             traceback.print_exc()
+        finally:
+            progress.close()
 
     # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     """
@@ -7500,17 +8265,25 @@ class MainWindow(QMainWindow):
         import pandas as pd
         import numpy as np
         from scipy.interpolate import interp1d
-        
+
         metrics = [
-            'if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 
+            'if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp',
             'ti', 'te', 'vent_proxy'
         ]
-        
+
         # Determine common time base (use first file's time)
         first_root, first_path = files[0]
         df_first = pd.read_csv(first_path)
         t_common = df_first['t'].values
-        
+        t_common_min, t_common_max = t_common.min(), t_common.max()
+        t_common_step = np.median(np.diff(t_common)) if len(t_common) > 1 else np.nan
+
+        # Track files with potential issues
+        warning_messages = []
+        files_needing_interpolation = []
+        files_with_poor_overlap = []
+        files_with_different_sampling = []
+
         consolidated = {}
         
         # Helper function to calculate mean and SEM
@@ -7563,37 +8336,72 @@ class MainWindow(QMainWindow):
             raw_data_cols = []
             for root, path in files:
                 df = pd.read_csv(path)
-                
+
                 if metric_mean_col not in df.columns:
                     print(f"Warning: {metric_mean_col} not found in {root}")
                     continue
-                
+
                 t_file = df['t'].values
                 y_file = df[metric_mean_col].values
-                
+
+                # Check time range and sampling
+                t_file_min, t_file_max = t_file.min(), t_file.max()
+                t_file_step = np.median(np.diff(t_file)) if len(t_file) > 1 else np.nan
+
+                # Calculate overlap percentage
+                overlap_start = max(t_common_min, t_file_min)
+                overlap_end = min(t_common_max, t_file_max)
+                overlap_range = overlap_end - overlap_start
+                common_range = t_common_max - t_common_min
+                overlap_pct = 100 * overlap_range / common_range if common_range > 0 else 0
+
+                # Check for different sampling rates
+                if not np.isnan(t_file_step) and not np.isnan(t_common_step):
+                    sampling_diff_pct = 100 * abs(t_file_step - t_common_step) / t_common_step
+                    if sampling_diff_pct > 10 and root != first_root:
+                        files_with_different_sampling.append(
+                            f"{root}: {t_file_step:.4f}s vs reference {t_common_step:.4f}s ({sampling_diff_pct:.1f}% difference)"
+                        )
+
+                # Check for poor overlap
+                if overlap_pct < 80 and root != first_root:
+                    files_with_poor_overlap.append(
+                        f"{root}: {overlap_pct:.1f}% overlap (range: {t_file_min:.1f} to {t_file_max:.1f}s)"
+                    )
+
                 if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
                     result_df[root] = y_file
                     raw_data_dict[root] = (t_common, y_file)
                 else:
+                    if root not in files_needing_interpolation:
+                        files_needing_interpolation.append(root)
                     print(f"Interpolating {root} to common time base for {metric}")
                     mask = np.isfinite(y_file)
                     if mask.sum() >= 2:
                         try:
                             f_interp = interp1d(
-                                t_file[mask], y_file[mask], 
-                                kind='linear', 
-                                bounds_error=False, 
+                                t_file[mask], y_file[mask],
+                                kind='linear',
+                                bounds_error=False,
                                 fill_value=np.nan
                             )
                             y_interp = f_interp(t_common)
                             result_df[root] = y_interp
                             raw_data_dict[root] = (t_common, y_interp)
+
+                            # Count how many points were extrapolated (NaN after interpolation)
+                            n_extrapolated = np.sum(np.isnan(y_interp) & ~np.isnan(t_common))
+                            if n_extrapolated > 0:
+                                extrap_pct = 100 * n_extrapolated / len(t_common)
+                                if extrap_pct > 5:
+                                    print(f"  Warning: {extrap_pct:.1f}% of points extrapolated (outside data range)")
                         except Exception as e:
                             print(f"Error interpolating {root} for {metric}: {e}")
                             result_df[root] = np.nan
                     else:
+                        print(f"  Warning: Insufficient data points for interpolation in {root}")
                         result_df[root] = np.nan
-                
+
                 raw_data_cols.append(root)
             
             # Calculate raw mean and SEM
@@ -7660,7 +8468,35 @@ class MainWindow(QMainWindow):
                 'norm_summary': norm_data_dict,
                 'windows': windows
             }
-        
+
+        # Build warning summary
+        if files_needing_interpolation or files_with_poor_overlap or files_with_different_sampling:
+            warning_parts = []
+
+            if files_needing_interpolation:
+                warning_parts.append("FILES REQUIRING INTERPOLATION:")
+                warning_parts.append(f"Reference file (no interpolation): {first_root}")
+                warning_parts.append(f"Time range: {t_common_min:.2f} to {t_common_max:.2f}s")
+                warning_parts.append(f"Sample interval: {t_common_step:.4f}s\n")
+                for f in files_needing_interpolation:
+                    warning_parts.append(f"  • {f}")
+                warning_parts.append("")
+
+            if files_with_different_sampling:
+                warning_parts.append("FILES WITH DIFFERENT SAMPLING RATES:")
+                for msg in files_with_different_sampling:
+                    warning_parts.append(f"  • {msg}")
+                warning_parts.append("")
+
+            if files_with_poor_overlap:
+                warning_parts.append("FILES WITH POOR TIME OVERLAP (<80%):")
+                for msg in files_with_poor_overlap:
+                    warning_parts.append(f"  • {msg}")
+                warning_parts.append("")
+
+            # Store warning message for display after processing
+            consolidated['_warnings'] = '\n'.join(warning_parts)
+
         return consolidated
 
 
@@ -8872,6 +9708,10 @@ class MainWindow(QMainWindow):
         
         with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
             for metric_name, data_dict in consolidated.items():
+                # Skip internal warning data
+                if metric_name == '_warnings':
+                    continue
+
                 time_series_df = data_dict['time_series']
                 raw_summary = data_dict.get('raw_summary', {})
                 norm_summary = data_dict.get('norm_summary', {})
@@ -8966,6 +9806,25 @@ class MainWindow(QMainWindow):
                 chart1.style = 2
                 chart1.x_axis.title = "Bin Center"
                 chart1.y_axis.title = "Density"
+
+                # Enable axes display
+                chart1.x_axis.delete = False
+                chart1.y_axis.delete = False
+
+                # Enable axis tick marks and labels (major only, no minor)
+                chart1.x_axis.tickLblPos = "nextTo"  # Changed from "low" to fix label positioning
+                chart1.y_axis.tickLblPos = "nextTo"
+                chart1.x_axis.majorTickMark = "out"
+                chart1.y_axis.majorTickMark = "out"
+                chart1.x_axis.minorTickMark = "none"
+                chart1.y_axis.minorTickMark = "none"
+
+                # Disable gridlines
+                chart1.x_axis.majorGridlines = None
+                chart1.y_axis.majorGridlines = None
+
+                # Set y-axis to start at 0
+                chart1.y_axis.scaling.min = 0
                 
                 for region in regions:
                     bin_col = None
@@ -8994,6 +9853,25 @@ class MainWindow(QMainWindow):
                 chart2.style = 2
                 chart2.x_axis.title = "Bin Center (normalized)"
                 chart2.y_axis.title = "Density"
+
+                # Enable axes display
+                chart2.x_axis.delete = False
+                chart2.y_axis.delete = False
+
+                # Enable axis tick marks and labels (major only, no minor)
+                chart2.x_axis.tickLblPos = "nextTo"  # Changed from "low" to fix label positioning
+                chart2.y_axis.tickLblPos = "nextTo"
+                chart2.x_axis.majorTickMark = "out"
+                chart2.y_axis.majorTickMark = "out"
+                chart2.x_axis.minorTickMark = "none"
+                chart2.y_axis.minorTickMark = "none"
+
+                # Disable gridlines
+                chart2.x_axis.majorGridlines = None
+                chart2.y_axis.majorGridlines = None
+
+                # Set y-axis to start at 0
+                chart2.y_axis.scaling.min = 0
                 
                 for region in regions:
                     bin_col_norm = None
@@ -9020,41 +9898,162 @@ class MainWindow(QMainWindow):
             elif '_histogram' not in sheet_name:
                 t_col = None
                 mean_col = None
+                sem_col = None
                 mean_norm_col = None
-                
-                # Find t, mean, and mean_norm columns
+                sem_norm_col = None
+
+                # Find t, mean, sem, mean_norm, and sem_norm columns
                 for idx, cell in enumerate(header_row, start=1):
                     if cell.value == 't':
                         t_col = idx
                     elif cell.value == 'mean':
                         mean_col = idx
+                    elif cell.value == 'sem':
+                        sem_col = idx
                     elif cell.value == 'mean_norm':
                         mean_norm_col = idx
+                    elif cell.value == 'sem_norm':
+                        sem_norm_col = idx
                 
                 # Position charts near top of sheet (row 5)
                 chart_row = 5
-                
+
+                # Add helper columns for mean ± SEM bounds if SEM exists
+                if mean_col and sem_col:
+                    # Add upper and lower bounds columns to the right of existing data
+                    upper_col = ws.max_column + 1
+                    lower_col = ws.max_column + 2
+
+                    ws.cell(row=1, column=upper_col, value='mean_upper')
+                    ws.cell(row=1, column=lower_col, value='mean_lower')
+
+                    for row_idx in range(2, ws.max_row + 1):
+                        mean_val = ws.cell(row=row_idx, column=mean_col).value
+                        sem_val = ws.cell(row=row_idx, column=sem_col).value
+                        if mean_val is not None and sem_val is not None:
+                            ws.cell(row=row_idx, column=upper_col, value=mean_val + sem_val)
+                            ws.cell(row=row_idx, column=lower_col, value=mean_val - sem_val)
+
+                if mean_norm_col and sem_norm_col:
+                    # Add upper and lower bounds columns for normalized
+                    upper_norm_col = ws.max_column + 1
+                    lower_norm_col = ws.max_column + 2
+
+                    ws.cell(row=1, column=upper_norm_col, value='mean_norm_upper')
+                    ws.cell(row=1, column=lower_norm_col, value='mean_norm_lower')
+
+                    for row_idx in range(2, ws.max_row + 1):
+                        mean_val = ws.cell(row=row_idx, column=mean_norm_col).value
+                        sem_val = ws.cell(row=row_idx, column=sem_norm_col).value
+                        if mean_val is not None and sem_val is not None:
+                            ws.cell(row=row_idx, column=upper_norm_col, value=mean_val + sem_val)
+                            ws.cell(row=row_idx, column=lower_norm_col, value=mean_val - sem_val)
+
                 # Chart 1: Raw mean vs time
                 if t_col and mean_col:
                     chart1 = ScatterChart()
                     chart1.title = f"{sheet_name} - Mean vs Time (Raw)"
                     chart1.style = 13
-                    
+
                     chart1.x_axis.title = "Time (s)"
                     chart1.y_axis.title = sheet_name
-                    
+
+                    # Enable axes display
+                    chart1.x_axis.delete = False
+                    chart1.y_axis.delete = False
+
+                    # Enable axis tick marks and labels (major only, no minor)
+                    chart1.x_axis.tickLblPos = "nextTo"  # Changed from "low" to fix label positioning
+                    chart1.y_axis.tickLblPos = "nextTo"
+                    chart1.x_axis.majorTickMark = "out"
+                    chart1.y_axis.majorTickMark = "out"
+                    chart1.x_axis.minorTickMark = "none"
+                    chart1.y_axis.minorTickMark = "none"
+
+                    # Position y-axis on the left side
+                    chart1.y_axis.crosses = "min"
+
+                    # Disable gridlines
+                    chart1.x_axis.majorGridlines = None
+                    chart1.y_axis.majorGridlines = None
+
                     # Hide legend
                     chart1.legend = None
-                    
+
                     xvalues = Reference(ws, min_col=t_col, min_row=2, max_row=ws.max_row)
+
+                    # Get full y-range from chart data for vertical line
+                    y_vals_all = []
+                    for row_idx in range(2, ws.max_row + 1):
+                        y_val = ws.cell(row=row_idx, column=mean_col).value
+                        if y_val is not None:
+                            y_vals_all.append(y_val)
+                        if sem_col:
+                            y_upper_val = ws.cell(row=row_idx, column=mean_col).value
+                            y_sem_val = ws.cell(row=row_idx, column=sem_col).value
+                            if y_upper_val is not None and y_sem_val is not None:
+                                y_vals_all.append(y_upper_val + y_sem_val)
+                                y_vals_all.append(y_upper_val - y_sem_val)
+
+                    if y_vals_all:
+                        # Add some padding to span full chart height
+                        y_min_chart = min(y_vals_all)
+                        y_max_chart = max(y_vals_all)
+                        y_range = y_max_chart - y_min_chart
+                        y_min_chart -= 0.1 * y_range
+                        y_max_chart += 0.1 * y_range
+
+                        # Add vertical line at x=0
+                        vline_x_col = ws.max_column + 1
+                        vline_y_col = ws.max_column + 2
+                        ws.cell(row=1, column=vline_x_col, value='vline_x')
+                        ws.cell(row=1, column=vline_y_col, value='vline_y')
+                        ws.cell(row=2, column=vline_x_col, value=0)
+                        ws.cell(row=2, column=vline_y_col, value=y_min_chart)
+                        ws.cell(row=3, column=vline_x_col, value=0)
+                        ws.cell(row=3, column=vline_y_col, value=y_max_chart)
+
+                        vline_x = Reference(ws, min_col=vline_x_col, min_row=2, max_row=3)
+                        vline_y = Reference(ws, min_col=vline_y_col, min_row=2, max_row=3)
+                        series_vline = Series(vline_y, vline_x, title="x=0")
+                        series_vline.marker = Marker('none')
+                        series_vline.smooth = False
+                        # Thin dashed line with small dashes and gaps
+                        series_vline.graphicalProperties.line.width = 25400  # 2pt in EMUs (doubled from 1pt)
+                        series_vline.graphicalProperties.line.dashStyle = "sysDot"  # Small dots
+                        series_vline.graphicalProperties.line.solidFill = "808080"  # Gray
+                        chart1.series.append(series_vline)
+
+                        # Store for use in chart2
+                        zero_x_rows = True
+
+                    # Add SEM shaded region (upper bound)
+                    if sem_col and 'upper_col' in locals():
+                        y_upper = Reference(ws, min_col=upper_col, min_row=2, max_row=ws.max_row)
+                        series_upper = Series(y_upper, xvalues, title="Upper")
+                        series_upper.marker = Marker('none')
+                        series_upper.smooth = True
+                        series_upper.graphicalProperties.line.noFill = True
+                        series_upper.graphicalProperties.solidFill = "D6E9F8"  # Light blue fill
+                        chart1.series.append(series_upper)
+
+                        # Add SEM shaded region (lower bound)
+                        y_lower = Reference(ws, min_col=lower_col, min_row=2, max_row=ws.max_row)
+                        series_lower = Series(y_lower, xvalues, title="Lower")
+                        series_lower.marker = Marker('none')
+                        series_lower.smooth = True
+                        series_lower.graphicalProperties.line.noFill = True
+                        series_lower.graphicalProperties.solidFill = "D6E9F8"  # Light blue fill
+                        chart1.series.append(series_lower)
+
+                    # Add mean line on top
                     yvalues = Reference(ws, min_col=mean_col, min_row=2, max_row=ws.max_row)
-                    
                     series = Series(yvalues, xvalues, title="Mean")
                     series.marker = Marker('none')  # No markers, just line
                     series.smooth = True
                     series.graphicalProperties.line.solidFill = "4472C4"  # Solid blue line
                     chart1.series.append(series)
-                    
+
                     chart1.width = 20
                     chart1.height = 12
                     ws.add_chart(chart1, f"A{chart_row}")
@@ -9064,22 +10063,132 @@ class MainWindow(QMainWindow):
                     chart2 = ScatterChart()
                     chart2.title = f"{sheet_name} - Mean vs Time (Normalized)"
                     chart2.style = 13
-                    
+
                     chart2.x_axis.title = "Time (s)"
                     chart2.y_axis.title = f"{sheet_name} (normalized)"
-                    
+
+                    # Enable axes display
+                    chart2.x_axis.delete = False
+                    chart2.y_axis.delete = False
+
+                    # Enable axis tick marks and labels (major only, no minor)
+                    chart2.x_axis.tickLblPos = "nextTo"  # Changed from "low" to fix label positioning
+                    chart2.y_axis.tickLblPos = "nextTo"
+                    chart2.x_axis.majorTickMark = "out"
+                    chart2.y_axis.majorTickMark = "out"
+                    chart2.x_axis.minorTickMark = "none"
+                    chart2.y_axis.minorTickMark = "none"
+
+                    # Position y-axis on the left side
+                    chart2.y_axis.crosses = "min"
+
+                    # Disable gridlines
+                    chart2.x_axis.majorGridlines = None
+                    chart2.y_axis.majorGridlines = None
+
                     # Hide legend
                     chart2.legend = None
-                    
+
                     xvalues = Reference(ws, min_col=t_col, min_row=2, max_row=ws.max_row)
+
+                    # Get full y-range and x-range from normalized data
+                    y_vals_all_norm = []
+                    x_vals_all_norm = []
+                    for row_idx in range(2, ws.max_row + 1):
+                        x_val = ws.cell(row=row_idx, column=t_col).value
+                        y_val = ws.cell(row=row_idx, column=mean_norm_col).value
+                        if x_val is not None:
+                            x_vals_all_norm.append(x_val)
+                        if y_val is not None:
+                            y_vals_all_norm.append(y_val)
+                        if sem_norm_col:
+                            y_upper_val = ws.cell(row=row_idx, column=mean_norm_col).value
+                            y_sem_val = ws.cell(row=row_idx, column=sem_norm_col).value
+                            if y_upper_val is not None and y_sem_val is not None:
+                                y_vals_all_norm.append(y_upper_val + y_sem_val)
+                                y_vals_all_norm.append(y_upper_val - y_sem_val)
+
+                    if y_vals_all_norm:
+                        # Add padding to span full chart height
+                        y_min_chart_norm = min(y_vals_all_norm)
+                        y_max_chart_norm = max(y_vals_all_norm)
+                        y_range_norm = y_max_chart_norm - y_min_chart_norm
+                        y_min_chart_norm -= 0.1 * y_range_norm
+                        y_max_chart_norm += 0.1 * y_range_norm
+
+                        # Add vertical line at x=0
+                        vline_x_col_norm = ws.max_column + 1
+                        vline_y_col_norm = ws.max_column + 2
+                        ws.cell(row=1, column=vline_x_col_norm, value='vline_x_norm')
+                        ws.cell(row=1, column=vline_y_col_norm, value='vline_y_norm')
+                        ws.cell(row=2, column=vline_x_col_norm, value=0)
+                        ws.cell(row=2, column=vline_y_col_norm, value=y_min_chart_norm)
+                        ws.cell(row=3, column=vline_x_col_norm, value=0)
+                        ws.cell(row=3, column=vline_y_col_norm, value=y_max_chart_norm)
+
+                        vline_x_norm = Reference(ws, min_col=vline_x_col_norm, min_row=2, max_row=3)
+                        vline_y_norm = Reference(ws, min_col=vline_y_col_norm, min_row=2, max_row=3)
+                        series_vline_norm = Series(vline_y_norm, vline_x_norm, title="x=0")
+                        series_vline_norm.marker = Marker('none')
+                        series_vline_norm.smooth = False
+                        # Thin dashed line with small dashes and gaps
+                        series_vline_norm.graphicalProperties.line.width = 25400  # 2pt (doubled)
+                        series_vline_norm.graphicalProperties.line.dashStyle = "sysDot"
+                        series_vline_norm.graphicalProperties.line.solidFill = "808080"
+                        chart2.series.append(series_vline_norm)
+
+                    if x_vals_all_norm:
+                        # Add horizontal line at y=1 spanning full x-range
+                        x_min_chart_norm = min(x_vals_all_norm)
+                        x_max_chart_norm = max(x_vals_all_norm)
+
+                        hline_x_col_norm = ws.max_column + 1
+                        hline_y_col_norm = ws.max_column + 2
+                        ws.cell(row=1, column=hline_x_col_norm, value='hline_x_norm')
+                        ws.cell(row=1, column=hline_y_col_norm, value='hline_y_norm')
+                        ws.cell(row=2, column=hline_x_col_norm, value=x_min_chart_norm)
+                        ws.cell(row=2, column=hline_y_col_norm, value=1)  # Changed from 0 to 1
+                        ws.cell(row=3, column=hline_x_col_norm, value=x_max_chart_norm)
+                        ws.cell(row=3, column=hline_y_col_norm, value=1)  # Changed from 0 to 1
+
+                        hline_x_norm = Reference(ws, min_col=hline_x_col_norm, min_row=2, max_row=3)
+                        hline_y_norm = Reference(ws, min_col=hline_y_col_norm, min_row=2, max_row=3)
+                        series_hline_norm = Series(hline_y_norm, hline_x_norm, title="y=1")
+                        series_hline_norm.marker = Marker('none')
+                        series_hline_norm.smooth = False
+                        # Same style as vertical line
+                        series_hline_norm.graphicalProperties.line.width = 25400  # 2pt (doubled)
+                        series_hline_norm.graphicalProperties.line.dashStyle = "sysDot"
+                        series_hline_norm.graphicalProperties.line.solidFill = "808080"
+                        chart2.series.append(series_hline_norm)
+
+                    # Add SEM shaded region (upper bound)
+                    if sem_norm_col and 'upper_norm_col' in locals():
+                        y_upper_norm = Reference(ws, min_col=upper_norm_col, min_row=2, max_row=ws.max_row)
+                        series_upper_norm = Series(y_upper_norm, xvalues, title="Upper (norm)")
+                        series_upper_norm.marker = Marker('none')
+                        series_upper_norm.smooth = True
+                        series_upper_norm.graphicalProperties.line.noFill = True
+                        series_upper_norm.graphicalProperties.solidFill = "FCE4D6"  # Light orange fill
+                        chart2.series.append(series_upper_norm)
+
+                        # Add SEM shaded region (lower bound)
+                        y_lower_norm = Reference(ws, min_col=lower_norm_col, min_row=2, max_row=ws.max_row)
+                        series_lower_norm = Series(y_lower_norm, xvalues, title="Lower (norm)")
+                        series_lower_norm.marker = Marker('none')
+                        series_lower_norm.smooth = True
+                        series_lower_norm.graphicalProperties.line.noFill = True
+                        series_lower_norm.graphicalProperties.solidFill = "FCE4D6"  # Light orange fill
+                        chart2.series.append(series_lower_norm)
+
+                    # Add mean line on top
                     yvalues = Reference(ws, min_col=mean_norm_col, min_row=2, max_row=ws.max_row)
-                    
                     series = Series(yvalues, xvalues, title="Mean (normalized)")
                     series.marker = Marker('none')
                     series.smooth = True
                     series.graphicalProperties.line.solidFill = "ED7D31"  # Solid orange line
                     chart2.series.append(series)
-                    
+
                     chart2.width = 20
                     chart2.height = 12
                     ws.add_chart(chart2, f"M{chart_row}")

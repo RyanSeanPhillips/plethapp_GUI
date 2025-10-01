@@ -488,6 +488,9 @@ QPushButton#BrowseButton:disabled {
               <property name="text">
                <string>Browse</string>
               </property>
+              <property name="toolTip">
+               <string>Open an ABF file for respiratory signal analysis</string>
+              </property>
              </widget>
             </item>
             <item>
@@ -719,6 +722,9 @@ QPushButton#ApplyChanPushButton:disabled {
               <property name="text">
                <string>Apply</string>
               </property>
+              <property name="toolTip">
+               <string>Apply selected channel and filtering settings to the respiratory signal</string>
+              </property>
              </widget>
             </item>
            </layout>
@@ -757,6 +763,9 @@ QPushButton#ApplyChanPushButton:disabled {
               <property name="text">
                <string>Low Pass (Hz):</string>
               </property>
+              <property name="toolTip">
+               <string>Apply low-pass Butterworth filter to remove high-frequency noise</string>
+              </property>
              </widget>
             </item>
             <item>
@@ -785,6 +794,9 @@ QPushButton#ApplyChanPushButton:disabled {
               <property name="text">
                <string>High Pass (Hz):</string>
               </property>
+              <property name="toolTip">
+               <string>Apply high-pass Butterworth filter to remove low-frequency drift</string>
+              </property>
              </widget>
             </item>
             <item>
@@ -812,6 +824,9 @@ QPushButton#ApplyChanPushButton:disabled {
               </property>
               <property name="text">
                <string>Mean Subtraction (s):</string>
+              </property>
+              <property name="toolTip">
+               <string>Subtract rolling mean baseline from the signal using specified time window</string>
               </property>
              </widget>
             </item>
@@ -852,6 +867,9 @@ QCheckBox:disabled {
               </property>
               <property name="text">
                <string>Invert Signal</string>
+              </property>
+              <property name="toolTip">
+               <string>Invert the signal polarity (flip upside down)</string>
               </property>
              </widget>
             </item>
@@ -897,6 +915,9 @@ QCheckBox:disabled {
               <property name="text">
                <string>Threshold:</string>
               </property>
+              <property name="toolTip">
+               <string>Minimum signal amplitude required to detect a peak (absolute value)</string>
+              </property>
              </widget>
             </item>
             <item>
@@ -937,6 +958,9 @@ QCheckBox:disabled {
               <property name="text">
                <string>Prominence:</string>
               </property>
+              <property name="toolTip">
+               <string>Minimum vertical distance between peak and surrounding baseline required to detect a breath</string>
+              </property>
              </widget>
             </item>
             <item>
@@ -976,6 +1000,9 @@ QCheckBox:disabled {
               </property>
               <property name="text">
                <string>Min Peak Distance (s):</string>
+              </property>
+              <property name="toolTip">
+               <string>Minimum time interval between consecutive breath peaks (prevents detecting multiple peaks per breath)</string>
               </property>
              </widget>
             </item>
@@ -1101,6 +1128,9 @@ QPushButton#ApplyPeakFindPushButton:disabled {
               <property name="text">
                <string>Apply</string>
               </property>
+              <property name="toolTip">
+               <string>Detect breath peaks using the specified threshold, prominence, and distance settings</string>
+              </property>
              </widget>
             </item>
            </layout>
@@ -1212,6 +1242,9 @@ QTabBar::tab:bottom:selected {
                 <property name="text">
                  <string>◀ Prev Sweep</string>
                 </property>
+                <property name="toolTip">
+                 <string>Navigate to the previous sweep</string>
+                </property>
                </widget>
               </item>
               <item>
@@ -1237,6 +1270,9 @@ QTabBar::tab:bottom:selected {
                 <property name="text">
                  <string>Next Sweep ▶</string>
                 </property>
+                <property name="toolTip">
+                 <string>Navigate to the next sweep</string>
+                </property>
                </widget>
               </item>
              </layout>
@@ -1257,6 +1293,9 @@ QTabBar::tab:bottom:selected {
               </property>
               <property name="text">
                <string>Go to Sweep View</string>
+              </property>
+              <property name="toolTip">
+               <string>Jump to a specific sweep number</string>
               </property>
              </widget>
             </item>
@@ -1289,6 +1328,9 @@ QTabBar::tab:bottom:selected {
                 <property name="text">
                  <string>◀ Prev Window </string>
                 </property>
+                <property name="toolTip">
+                 <string>Move to the previous time window</string>
+                </property>
                </widget>
               </item>
               <item>
@@ -1313,6 +1355,9 @@ QTabBar::tab:bottom:selected {
                 </property>
                 <property name="text">
                  <string>Next Window ▶</string>
+                </property>
+                <property name="toolTip">
+                 <string>Move to the next time window</string>
                 </property>
                </widget>
               </item>
@@ -1342,6 +1387,9 @@ QTabBar::tab:bottom:selected {
                 </property>
                 <property name="text">
                  <string>Go to Window View</string>
+                </property>
+                <property name="toolTip">
+                 <string>Jump to a specific time point</string>
                 </property>
                </widget>
               </item>
@@ -1489,6 +1537,9 @@ QTabBar::tab:bottom:selected {
                 <property name="text">
                  <string>Apnea Dur (s)</string>
                 </property>
+                <property name="toolTip">
+                 <string>Minimum gap duration (in seconds) between breaths to be classified as an apnea event</string>
+                </property>
                </widget>
               </item>
               <item>
@@ -1523,6 +1574,9 @@ QTabBar::tab:bottom:selected {
                 </property>
                 <property name="text">
                  <string>Eupnea Thresh (Hz)</string>
+                </property>
+                <property name="toolTip">
+                 <string>Maximum breathing frequency (Hz) to classify a region as normal eupneic breathing</string>
                 </property>
                </widget>
               </item>
@@ -1564,6 +1618,9 @@ QTabBar::tab:bottom:selected {
                 </property>
                 <property name="text">
                  <string>Outlier Thresh (SD):</string>
+                </property>
+                <property name="toolTip">
+                 <string>Number of standard deviations from mean to flag breath cycles as statistical outliers</string>
                 </property>
                </widget>
               </item>
@@ -1625,6 +1682,9 @@ QPushButton:pressed {
               <property name="text">
                <string>ADD Peaks</string>
               </property>
+              <property name="toolTip">
+               <string>Manually add peaks by clicking on the trace</string>
+              </property>
              </widget>
             </item>
             <item row="0" column="1">
@@ -1662,6 +1722,9 @@ QPushButton:pressed {
               </property>
               <property name="text">
                <string>DELETE Peaks</string>
+              </property>
+              <property name="toolTip">
+               <string>Manually delete peaks by clicking near them</string>
               </property>
              </widget>
             </item>
@@ -1701,6 +1764,9 @@ QPushButton:pressed {
               </property>
               <property name="text">
                <string>ADD/DEL Sigh</string>
+              </property>
+              <property name="toolTip">
+               <string>Mark selected peaks as sighs (augmented breaths)</string>
               </property>
               <property name="startHidden" stdset="0">
                <bool>false</bool>
@@ -1744,6 +1810,9 @@ QPushButton:pressed {
               <property name="text">
                <string>Omit Sweep</string>
               </property>
+              <property name="toolTip">
+               <string>Exclude the current sweep from analysis</string>
+              </property>
               <property name="startHidden" stdset="0">
                <bool>false</bool>
               </property>
@@ -1775,6 +1844,9 @@ QPushButton:pressed {
               </property>
               <property name="text">
                <string>View Summary</string>
+              </property>
+              <property name="toolTip">
+               <string>Preview the PDF summary of analyzed metrics</string>
               </property>
               <property name="startHidden" stdset="0">
                <bool>false</bool>
@@ -1839,6 +1911,9 @@ QPushButton#SaveAnalyzedDataButton:disabled {
               </property>
               <property name="text">
                <string>Save Data</string>
+              </property>
+              <property name="toolTip">
+               <string>Export analyzed data (NPZ, CSV, breath metrics, and PDF summary)</string>
               </property>
              </widget>
             </item>
@@ -2358,7 +2433,7 @@ QPushButton:disabled {
 </string>
               </property>
               <property name="text">
-               <string>Consolidate &amp; Save Data</string>
+               <string>Consolidate &amp;&amp; Save Data</string>
               </property>
              </widget>
             </item>
