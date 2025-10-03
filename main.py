@@ -60,6 +60,13 @@ class MainWindow(QMainWindow):
         self.state.y2_metric_key = None
         self.state.y2_values_by_sweep = {}
 
+        # Notch filter parameters
+        self.notch_filter_lower = None
+        self.notch_filter_upper = None
+
+        # Filter order
+        self.filter_order = 4  # Default Butterworth filter order
+
         # --- Embed Matplotlib into MainPlot (QFrame in Designer) ---
         self.plot_host = PlotHost(self.MainPlot)
         layout = self.MainPlot.layout()
@@ -97,12 +104,16 @@ class MainWindow(QMainWindow):
         self.LowPassVal.editingFinished.connect(self.update_and_redraw)
         self.HighPassVal.editingFinished.connect(self.update_and_redraw)
         self.MeanSubractVal.editingFinished.connect(self.update_and_redraw)
+        self.FilterOrderSpin.valueChanged.connect(self.update_and_redraw)
 
         # checkboxes toggled immediately, but we debounce the draw
         self.LowPass_checkBox.toggled.connect(self.update_and_redraw)
         self.HighPass_checkBox.toggled.connect(self.update_and_redraw)
         self.MeanSubtract_checkBox.toggled.connect(self.update_and_redraw)
         self.InvertSignal_checkBox.toggled.connect(self.update_and_redraw)
+
+        # Spectral Analysis button
+        self.SpectralAnalysisButton.clicked.connect(self.on_spectral_analysis_clicked)
 
 
         # --- Wire sweep navigation ---
@@ -223,7 +234,7 @@ class MainWindow(QMainWindow):
         self.moveAllLeft.clicked.connect(self.on_move_all_left)
         # Wire up search/filter for the detected files list
         self.FileListSearchBox.textChanged.connect(self._filter_file_list)
-        self.FileListSearchBox.setPlaceholderText("Filter by keyword (e.g., 10mW)...")
+        self.FileListSearchBox.setPlaceholderText("Filter by keywords (e.g., 'gfp 2.5mW' or 'gfp, chr2')...")
         # Wire consolidate button
         self.ConsolidateSaveDataButton.clicked.connect(self.on_consolidate_save_data_clicked)
         
@@ -353,7 +364,9 @@ class MainWindow(QMainWindow):
             st.use_low,  st.low_hz,
             st.use_high, st.high_hz,
             st.use_mean_sub, st.mean_val,
-            st.use_invert
+            st.use_invert,
+            self.filter_order,
+            self.notch_filter_lower, self.notch_filter_upper
         )
 
     def plot_all_channels(self):
@@ -528,6 +541,9 @@ class MainWindow(QMainWindow):
         st.use_mean_sub  = self.MeanSubtract_checkBox.isChecked()
         st.use_invert    = self.InvertSignal_checkBox.isChecked()
 
+        # Filter order
+        self.filter_order = self.FilterOrderSpin.value()
+
 
         # Peaks/breaths no longer valid if filters change
         if hasattr(self.state, "peaks_by_sweep"):
@@ -598,8 +614,14 @@ class MainWindow(QMainWindow):
             st.use_low,  st.low_hz,
             st.use_high, st.high_hz,
             st.use_mean_sub, st.mean_val,
-            st.use_invert
+            st.use_invert,
+            order=self.filter_order
         )
+
+        # Apply notch filter if configured
+        if self.notch_filter_lower is not None and self.notch_filter_upper is not None:
+            y2 = self._apply_notch_filter(y2, st.sr_hz, self.notch_filter_lower, self.notch_filter_upper)
+
         st.proc_cache[key] = y2
         return st.t, y2
 
@@ -1128,7 +1150,8 @@ class MainWindow(QMainWindow):
         st = self.state
         Y = st.sweeps[chan]
         s = max(0, min(sweep_idx, Y.shape[1]-1))
-        key = (chan, s, st.use_low, st.low_hz, st.use_high, st.high_hz, st.use_mean_sub, st.mean_val, st.use_invert)
+        key = (chan, s, st.use_low, st.low_hz, st.use_high, st.high_hz, st.use_mean_sub, st.mean_val, st.use_invert,
+               self.notch_filter_lower, self.notch_filter_upper)
         if key in st.proc_cache:
             return st.proc_cache[key]
         y = Y[:, s]
@@ -1139,10 +1162,46 @@ class MainWindow(QMainWindow):
             st.use_mean_sub, st.mean_val,
             st.use_invert
         )
+
+        # Apply notch filter if configured
+        if self.notch_filter_lower is not None and self.notch_filter_upper is not None:
+            y2 = self._apply_notch_filter(y2, st.sr_hz, self.notch_filter_lower, self.notch_filter_upper)
+
         st.proc_cache[key] = y2
         return y2
 
-    
+    def _apply_notch_filter(self, y, sr_hz, lower_freq, upper_freq):
+        """Apply a notch (band-stop) filter to remove frequencies between lower_freq and upper_freq."""
+        from scipy import signal
+        import numpy as np
+
+        print(f"[notch-filter] Applying notch filter: {lower_freq:.2f} - {upper_freq:.2f} Hz (sr={sr_hz} Hz)")
+
+        # Design a butterworth band-stop filter
+        nyquist = sr_hz / 2.0
+        low = lower_freq / nyquist
+        high = upper_freq / nyquist
+
+        # Ensure frequencies are in valid range (0, 1)
+        low = np.clip(low, 0.001, 0.999)
+        high = np.clip(high, 0.001, 0.999)
+
+        if low >= high:
+            print(f"[notch-filter] Invalid frequency range: {lower_freq}-{upper_freq} Hz")
+            return y
+
+        try:
+            # Design 4th order Butterworth band-stop filter
+            sos = signal.butter(4, [low, high], btype='bandstop', output='sos')
+            # Apply filter (sos format is more numerically stable)
+            y_filtered = signal.sosfiltfilt(sos, y)
+            print(f"[notch-filter] Filter applied successfully. Signal range before: [{y.min():.3f}, {y.max():.3f}], after: [{y_filtered.min():.3f}, {y_filtered.max():.3f}]")
+            return y_filtered
+        except Exception as e:
+            print(f"[notch-filter] Error applying filter: {e}")
+            return y
+
+
     def on_apply_peak_find_clicked(self):
         """
         Run peak detection on the ANALYZE channel for ALL sweeps,
@@ -1292,7 +1351,7 @@ class MainWindow(QMainWindow):
                 self.addSighButton.blockSignals(False)
                 self.addSighButton.setText("Add Sigh")
 
-            self.addPeaksButton.setText("Add Peaks (ON)")
+            self.addPeaksButton.setText("Add Peaks (ON) [Shift=Del, Ctrl=Sigh]")
             self.plot_host.set_click_callback(self._on_plot_click_add_peak)
             self.plot_host.setCursor(Qt.CursorShape.CrossCursor)
         else:
@@ -1303,12 +1362,30 @@ class MainWindow(QMainWindow):
 
 
 
-    def _on_plot_click_add_peak(self, xdata, ydata, event):
-        # Only when "Add Peaks (ON)"
-        if not getattr(self, "_add_peaks_mode", False):
+    def _on_plot_click_add_peak(self, xdata, ydata, event, _force_mode=None):
+        # Only when "Add Peaks (ON)" or force mode is 'add'
+        if _force_mode != 'add' and not getattr(self, "_add_peaks_mode", False):
             return
         if event.inaxes is None or xdata is None:
             return
+
+        # Check for modifier keys (but not if we're already in force mode to prevent recursion)
+        if _force_mode is None:
+            from PyQt6.QtWidgets import QApplication
+            from PyQt6.QtCore import Qt
+            modifiers = QApplication.keyboardModifiers()
+            shift_held = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+            ctrl_held = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+
+            # Shift toggles to delete mode
+            if shift_held:
+                self._on_plot_click_delete_peak(xdata, ydata, event, _force_mode='delete')
+                return
+
+            # Ctrl switches to add sigh mode
+            if ctrl_held:
+                self._on_plot_click_add_sigh(xdata, ydata, event, _force_mode='sigh')
+                return
 
         import numpy as np
         st = self.state
@@ -1418,7 +1495,7 @@ class MainWindow(QMainWindow):
                 self.addSighButton.blockSignals(False)
                 self.addSighButton.setText("Add Sigh")
 
-            self.deletePeaksButton.setText("Delete Peaks (ON)")
+            self.deletePeaksButton.setText("Delete Peaks (ON) [Shift=Add, Ctrl=Sigh]")
             self.plot_host.set_click_callback(self._on_plot_click_delete_peak)
             self.plot_host.setCursor(Qt.CursorShape.CrossCursor)
         else:
@@ -1429,12 +1506,30 @@ class MainWindow(QMainWindow):
 
 
 
-    def _on_plot_click_delete_peak(self, xdata, ydata, event):
-        # Only when "Delete Peaks (ON)" and only left clicks
-        if not getattr(self, "_delete_peaks_mode", False) or getattr(event, "button", 1) != 1:
+    def _on_plot_click_delete_peak(self, xdata, ydata, event, _force_mode=None):
+        # Only when "Delete Peaks (ON)" or force mode is 'delete'
+        if _force_mode != 'delete' and (not getattr(self, "_delete_peaks_mode", False) or getattr(event, "button", 1) != 1):
             return
         if event.inaxes is None or xdata is None:
             return
+
+        # Check for modifier keys (but not if we're already in force mode to prevent recursion)
+        if _force_mode is None:
+            from PyQt6.QtWidgets import QApplication
+            from PyQt6.QtCore import Qt
+            modifiers = QApplication.keyboardModifiers()
+            shift_held = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+            ctrl_held = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+
+            # Shift toggles to add mode
+            if shift_held:
+                self._on_plot_click_add_peak(xdata, ydata, event, _force_mode='add')
+                return
+
+            # Ctrl switches to add sigh mode
+            if ctrl_held:
+                self._on_plot_click_add_sigh(xdata, ydata, event, _force_mode='sigh')
+                return
 
         st = self.state
         if st.t is None or st.analyze_chan not in st.sweeps:
@@ -1454,13 +1549,8 @@ class MainWindow(QMainWindow):
         else:
             t_plot = t
 
-        # Same ±80 ms window you use for adding peaks
-        half_win_s = float(getattr(self, "_peak_edit_half_win_s", 0.08))
-        half_win_n = max(1, int(round(half_win_s * st.sr_hz)))
-
-        i_center = int(np.clip(np.searchsorted(t_plot, float(xdata)), 0, len(t_plot) - 1))
-        i0 = max(0, i_center - half_win_n)
-        i1 = min(len(y) - 1, i_center + half_win_n)
+        # Find the index corresponding to the click position
+        i_click = int(np.clip(np.searchsorted(t_plot, float(xdata)), 0, len(t_plot) - 1))
 
         # Existing peaks for this sweep
         pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
@@ -1468,14 +1558,22 @@ class MainWindow(QMainWindow):
             print("[delete-peak] No peaks to delete in this sweep.")
             return
 
-        # Delete any peaks inside [i0, i1] (inclusive)
-        mask_keep = (pks < i0) | (pks > i1)
-        removed = pks[~mask_keep]
-        if removed.size == 0:
-            print("[delete-peak] No peak within the click window.")
+        # Find the closest peak to the click position
+        distances = np.abs(pks - i_click)
+        closest_idx = np.argmin(distances)
+        closest_peak = pks[closest_idx]
+
+        # Optional: Only delete if within reasonable distance (e.g., ±80ms window)
+        half_win_s = float(getattr(self, "_peak_edit_half_win_s", 0.08))
+        half_win_n = max(1, int(round(half_win_s * st.sr_hz)))
+
+        if distances[closest_idx] > half_win_n:
+            print(f"[delete-peak] Closest peak is too far ({distances[closest_idx]} samples > {half_win_n} samples).")
             return
 
-        pks_new = pks[mask_keep]
+        # Delete only the closest peak
+        pks_new = np.delete(pks, closest_idx)
+        print(f"[delete-peak] Deleted peak at index {closest_peak} (distance: {distances[closest_idx]} samples)")
         st.peaks_by_sweep[s] = pks_new
 
         # Recompute breaths with updated peaks (fallback to your available signature)
@@ -1653,9 +1751,11 @@ class MainWindow(QMainWindow):
     #             self.plot_host.clear_click_callback()
     #             self.plot_host.setCursor(Qt.CursorShape.ArrowCursor)
 
-    def _on_plot_click_add_sigh(self, xdata, ydata, event):
-        # Only in sigh mode and valid click
-        if not getattr(self, "_add_sigh_mode", False) or event.inaxes is None or xdata is None:
+    def _on_plot_click_add_sigh(self, xdata, ydata, event, _force_mode=None):
+        # Only in sigh mode or force mode is 'sigh'
+        if _force_mode != 'sigh' and (not getattr(self, "_add_sigh_mode", False) or event.inaxes is None or xdata is None):
+            return
+        if event.inaxes is None or xdata is None:
             return
 
         st = self.state
@@ -1731,6 +1831,49 @@ class MainWindow(QMainWindow):
                 self.plot_host.setCursor(Qt.CursorShape.ArrowCursor)
 
 
+    def on_spectral_analysis_clicked(self):
+        """Open spectral analysis dialog and optionally apply notch filter."""
+        st = self.state
+        if st.t is None or not st.analyze_chan or st.analyze_chan not in st.sweeps:
+            QMessageBox.warning(self, "Spectral Analysis", "Please load data and select an analyze channel first.")
+            return
+
+        # Get current sweep data
+        t, y = self._current_trace()
+        if t is None or y is None:
+            QMessageBox.warning(self, "Spectral Analysis", "No data available for current sweep.")
+            return
+
+        # Get stimulation spans for current sweep if available
+        s = max(0, min(st.sweep_idx, self._sweep_count() - 1))
+        stim_spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
+
+        # Open dialog
+        dlg = self.SpectralAnalysisDialog(parent=self, t=t, y=y, sr_hz=st.sr_hz, stim_spans=stim_spans, parent_window=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            # Get filter parameters
+            lower, upper = dlg.get_filter_params()
+            print(f"[spectral-dialog] Dialog accepted. Filter params: lower={lower}, upper={upper}")
+
+            if lower is not None and upper is not None:
+                # Apply notch filter
+                self.notch_filter_lower = lower
+                self.notch_filter_upper = upper
+                print(f"[notch-filter] Set notch filter: {lower:.2f} - {upper:.2f} Hz")
+
+                # Clear processing cache to force recomputation with new filter
+                st.proc_cache.clear()
+                print(f"[notch-filter] Cleared processing cache")
+
+                # Redraw to show filtered signal
+                self.redraw_main_plot()
+                print(f"[notch-filter] Main plot redrawn")
+
+            else:
+                print("[notch-filter] No filter applied (lower or upper is None)")
+        else:
+            print("[spectral-dialog] Dialog was not accepted (user cancelled or closed)")
+
     def _refresh_omit_button_label(self):
         """Update Omit button text based on whether current sweep is omitted."""
         s = max(0, min(self.state.sweep_idx, self._sweep_count() - 1))
@@ -1772,6 +1915,55 @@ class MainWindow(QMainWindow):
     ##################################################
     ##Save Data to File                             ##
     ##################################################
+    def _load_save_dialog_history(self) -> dict:
+        """Load autocomplete history for the Save Data dialog from QSettings."""
+        history = {
+            'strain': [],
+            'virus': [],
+            'location': [],
+            'stim': [],
+            'power': [],
+            'animal': []
+        }
+
+        for key in history.keys():
+            saved_list = self.settings.value(f"save_history/{key}", [])
+            if isinstance(saved_list, str):
+                # Single value, convert to list
+                saved_list = [saved_list] if saved_list else []
+            history[key] = saved_list if saved_list else []
+
+        return history
+
+    def _update_save_dialog_history(self, vals: dict):
+        """Update autocomplete history with new values from the Save Data dialog."""
+        max_history = 20  # Keep last 20 unique values for each field
+
+        for key in ['strain', 'virus', 'location', 'stim', 'power', 'animal']:
+            value = vals.get(key, '').strip()
+            if not value:
+                continue
+
+            # Get current history
+            current = self.settings.value(f"save_history/{key}", [])
+            if isinstance(current, str):
+                current = [current] if current else []
+            elif not isinstance(current, list):
+                current = []
+
+            # Remove value if already exists (we'll re-add at front)
+            if value in current:
+                current.remove(value)
+
+            # Add to front
+            current.insert(0, value)
+
+            # Trim to max_history
+            current = current[:max_history]
+
+            # Save back
+            self.settings.setValue(f"save_history/{key}", current)
+
     def _sanitize_token(self, s: str) -> str:
         if not s:
             return ""
@@ -1785,44 +1977,450 @@ class MainWindow(QMainWindow):
         return s
 
 
+    ##################################################
+    ##Spectral Analysis Dialog                      ##
+    ##################################################
+    class SpectralAnalysisDialog(QDialog):
+        def __init__(self, parent=None, t=None, y=None, sr_hz=None, stim_spans=None, parent_window=None):
+            from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, QPushButton, QMessageBox
+            from PyQt6.QtCore import Qt
+            import numpy as np
+
+            super().__init__(parent)
+            self.setWindowTitle("Spectral Analysis & Notch Filter")
+            self.resize(1400, 900)
+
+            self.parent_window = parent_window  # Reference to main window for sweep navigation
+            self.t = t
+            self.y = y
+            self.sr_hz = sr_hz
+            self.stim_spans = stim_spans  # List of (start, end) tuples for stimulation periods
+            self.notch_lower = None
+            self.notch_upper = None
+
+            # Normalize time to stim onset if stim available
+            self.t_offset = 0
+            if stim_spans and len(stim_spans) > 0:
+                self.t_offset = stim_spans[0][0]  # First stim onset
+
+            # Main layout
+            main_layout = QVBoxLayout(self)
+
+            # Control panel at top
+            control_layout = QHBoxLayout()
+
+            # Sweep navigation controls
+            if parent_window:
+                self.prev_sweep_btn = QPushButton("◄ Prev Sweep")
+                self.prev_sweep_btn.clicked.connect(self.on_prev_sweep)
+                control_layout.addWidget(self.prev_sweep_btn)
+
+                self.sweep_label = QLabel(f"Sweep: {getattr(parent_window.state, 'sweep_idx', 0) + 1}")
+                self.sweep_label.setStyleSheet("color: white; font-size: 12pt; font-weight: bold;")
+                control_layout.addWidget(self.sweep_label)
+
+                self.next_sweep_btn = QPushButton("Next Sweep ►")
+                self.next_sweep_btn.clicked.connect(self.on_next_sweep)
+                control_layout.addWidget(self.next_sweep_btn)
+
+                control_layout.addWidget(QLabel("  |  "))  # Separator
+
+            # Notch filter controls
+            control_layout.addWidget(QLabel("Notch Filter (Hz):"))
+
+            self.lower_freq_spin = QDoubleSpinBox()
+            self.lower_freq_spin.setRange(0.0, sr_hz/2 if sr_hz else 100)
+            self.lower_freq_spin.setValue(0.0)
+            self.lower_freq_spin.setDecimals(2)
+            self.lower_freq_spin.setSuffix(" Hz")
+            control_layout.addWidget(QLabel("Lower:"))
+            control_layout.addWidget(self.lower_freq_spin)
+
+            self.upper_freq_spin = QDoubleSpinBox()
+            self.upper_freq_spin.setRange(0.0, sr_hz/2 if sr_hz else 100)
+            self.upper_freq_spin.setValue(0.0)
+            self.upper_freq_spin.setDecimals(2)
+            self.upper_freq_spin.setSuffix(" Hz")
+            control_layout.addWidget(QLabel("Upper:"))
+            control_layout.addWidget(self.upper_freq_spin)
+
+            self.apply_filter_btn = QPushButton("Apply Filter")
+            self.apply_filter_btn.clicked.connect(self.on_apply_filter)
+            control_layout.addWidget(self.apply_filter_btn)
+
+            self.reset_filter_btn = QPushButton("Reset Filter")
+            self.reset_filter_btn.clicked.connect(self.on_reset_filter)
+            control_layout.addWidget(self.reset_filter_btn)
+
+            control_layout.addStretch()
+            main_layout.addLayout(control_layout)
+
+            # Plot area with matplotlib
+            from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+            from matplotlib.figure import Figure
+
+            # Create figure with dark background
+            self.figure = Figure(figsize=(14, 10), facecolor='#2b2b2b')
+            self.canvas = FigureCanvasQTAgg(self.figure)
+            self.canvas.setStyleSheet("background-color: #2b2b2b;")
+            main_layout.addWidget(self.canvas)
+
+            # Buttons at bottom
+            btn_layout = QHBoxLayout()
+            btn_layout.addStretch()
+
+            self.close_btn = QPushButton("Close")
+            self.close_btn.clicked.connect(self.accept)
+            btn_layout.addWidget(self.close_btn)
+
+            main_layout.addLayout(btn_layout)
+
+            # Initial plot
+            self.update_plots()
+
+        def update_plots(self):
+            """Generate power spectrum and wavelet plots."""
+            import numpy as np
+            from scipy import signal
+            import matplotlib.pyplot as plt
+
+            if self.y is None or len(self.y) == 0:
+                return
+
+            self.figure.clear()
+
+            # Create subplots with aligned axes: power spectrum on top, wavelet on bottom
+            # Use gridspec to ensure panels have same width (accounting for colorbar on ax2)
+            from matplotlib.gridspec import GridSpec
+            gs = GridSpec(2, 1, figure=self.figure, hspace=0.3, left=0.08, right=0.88, top=0.95, bottom=0.06)
+            ax1 = self.figure.add_subplot(gs[0])
+            ax2 = self.figure.add_subplot(gs[1])
+
+            # Power Spectrum (Welch method)
+            if self.sr_hz:
+                # Use extremely long nperseg for maximum frequency resolution at low frequencies
+                nperseg = min(32768, len(self.y)//2)  # Quadrupled from 8192 to 32768
+                noverlap = int(nperseg * 0.9)  # 90% overlap for very smooth estimate
+
+                # Full trace spectrum
+                freqs, psd = signal.welch(self.y, fs=self.sr_hz, nperseg=nperseg, noverlap=noverlap)
+
+                # Only plot frequencies up to 30 Hz (respiratory range)
+                mask = freqs <= 30
+                freqs_plot = freqs[mask]
+                psd_plot = psd[mask]
+
+                ax1.plot(freqs_plot, psd_plot, 'cyan', linewidth=2, label='Full Trace')
+
+                # If stim spans provided, compute spectrum during stim
+                if self.stim_spans and len(self.stim_spans) > 0:
+                    # Extract stimulation periods
+                    stim_segments = []
+                    for start, end in self.stim_spans:
+                        # Find indices in time array
+                        start_idx = np.searchsorted(self.t, start)
+                        end_idx = np.searchsorted(self.t, end)
+                        if end_idx > start_idx:
+                            stim_segments.append(self.y[start_idx:end_idx])
+
+                    if stim_segments:
+                        # Concatenate all stim segments
+                        stim_data = np.concatenate(stim_segments)
+                        if len(stim_data) > nperseg:
+                            freqs_stim, psd_stim = signal.welch(stim_data, fs=self.sr_hz, nperseg=nperseg, noverlap=noverlap)
+                            mask_stim = freqs_stim <= 30
+                            ax1.plot(freqs_stim[mask_stim], psd_stim[mask_stim], 'orange', linewidth=2, label='During Stim', alpha=0.8)
+
+                # Add labels with padding to prevent cutoff
+                ax1.set_xlabel('Frequency (Hz)', color='white', fontsize=16, fontweight='bold', labelpad=10)
+                ax1.set_ylabel('Power Spectral Density', color='white', fontsize=16, fontweight='bold', labelpad=10)
+                ax1.set_title('Power Spectrum (Welch Method)', color='white', fontsize=18, fontweight='bold', pad=15)
+                ax1.set_xlim([0, 30])
+                ax1.grid(True, alpha=0.3, color='gray', linestyle='--')
+                ax1.set_facecolor('#1a1a1a')
+                ax1.tick_params(colors='white', labelsize=13, width=2, length=6, pad=8)
+
+                # Set white spines with thicker lines
+                for spine in ax1.spines.values():
+                    spine.set_edgecolor('white')
+                    spine.set_linewidth(2)
+
+                # Highlight notch filter region if set
+                if self.notch_lower is not None and self.notch_upper is not None:
+                    ax1.axvspan(self.notch_lower, self.notch_upper, alpha=0.3, color='red', label='Notch Filter')
+
+                ax1.legend(facecolor='#2b2b2b', edgecolor='white', labelcolor='white', fontsize=11)
+
+            # Wavelet Analysis (Continuous Wavelet Transform)
+            try:
+                if self.sr_hz and self.t is not None and len(self.y) > 0:
+                    print(f"[wavelet] Computing CWT for {len(self.y)} samples at {self.sr_hz} Hz")
+
+                    # Downsample for faster computation if signal is very long
+                    downsample_factor = 1
+                    if len(self.y) > 100000:  # If more than 100k samples
+                        downsample_factor = max(1, len(self.y) // 50000)
+                        y_ds = self.y[::downsample_factor]
+                        t_ds = self.t[::downsample_factor]
+                        print(f"[wavelet] Downsampling by factor {downsample_factor} to {len(y_ds)} samples")
+                    else:
+                        y_ds = self.y
+                        t_ds = self.t
+
+                    # Create frequency array from 0.5 Hz to 30 Hz (fewer frequencies for speed)
+                    frequencies = np.linspace(0.5, 30, 50)  # Restricted to respiratory range
+
+                    # Compute CWT using FFT-based convolution for speed
+                    cwtmatr = np.zeros((len(frequencies), len(y_ds)))
+
+                    for i, freq in enumerate(frequencies):
+                        # Create complex Morlet wavelet for this frequency
+                        w = 6.0  # Standard Morlet parameter
+                        sigma = w / (2 * np.pi * freq)  # Time domain width
+
+                        # Limit wavelet length for speed
+                        max_wavelet_samples = min(int(10 * sigma * self.sr_hz / downsample_factor), len(y_ds) // 2)
+                        wavelet_time = np.arange(-max_wavelet_samples, max_wavelet_samples) / (self.sr_hz / downsample_factor)
+
+                        # Complex Morlet wavelet
+                        wavelet = np.exp(2j * np.pi * freq * wavelet_time) * np.exp(-wavelet_time**2 / (2 * sigma**2))
+                        wavelet = wavelet / np.sqrt(sigma * np.sqrt(np.pi))  # Normalize
+
+                        # FFT-based convolution (much faster)
+                        convolved = signal.fftconvolve(y_ds, wavelet, mode='same')
+                        cwtmatr[i, :] = np.abs(convolved)
+
+                    print(f"[wavelet] CWT matrix shape: {cwtmatr.shape}, min={cwtmatr.min():.2e}, max={cwtmatr.max():.2e}")
+
+                    # Use percentile-based color scaling to handle bright transients (like sniffing bouts)
+                    # This prevents one bright spot from washing out the rest of the signal
+                    vmin = 0
+                    vmax = np.percentile(cwtmatr, 95)  # Use 95th percentile instead of max
+                    print(f"[wavelet] Color scale: vmin={vmin:.2e}, vmax (95th percentile)={vmax:.2e}, actual max={cwtmatr.max():.2e}")
+
+                    # Plot scalogram (use downsampled time array, normalized to stim onset)
+                    t_plot_start = t_ds[0] - self.t_offset
+                    t_plot_end = t_ds[-1] - self.t_offset
+                    im = ax2.imshow(cwtmatr, extent=[t_plot_start, t_plot_end, frequencies[0], frequencies[-1]],
+                               cmap='hot', aspect='auto', interpolation='bilinear', origin='lower',
+                               vmin=vmin, vmax=vmax)
+
+                    # Add vertical lines for stim onset and offset
+                    if self.stim_spans and len(self.stim_spans) > 0:
+                        stim_start_rel = self.stim_spans[0][0] - self.t_offset
+                        stim_end_rel = self.stim_spans[-1][1] - self.t_offset  # Use last span's end time
+                        ax2.axvline(x=stim_start_rel, color='lime', linewidth=2.5, linestyle='--', alpha=0.9)
+                        ax2.axvline(x=stim_end_rel, color='lime', linewidth=2.5, linestyle='--', alpha=0.9)
+                        ax2.legend(['Stim On/Offset'], facecolor='#2b2b2b', edgecolor='white', labelcolor='white', fontsize=10, loc='upper right')
+
+                    # Add labels with padding to prevent cutoff
+                    ax2.set_xlabel('Time (s, rel. to stim onset)', color='white', fontsize=16, fontweight='bold', labelpad=10)
+                    ax2.set_ylabel('Frequency (Hz)', color='white', fontsize=16, fontweight='bold', labelpad=10)
+                    ax2.set_title('Wavelet Analysis (Scalogram)', color='white', fontsize=18, fontweight='bold', pad=15)
+                    ax2.set_ylim([0, 30])
+                    ax2.set_facecolor('#1a1a1a')
+                    ax2.tick_params(colors='white', labelsize=13, width=2, length=6, pad=8)
+
+                    # Set white spines with thicker lines
+                    for spine in ax2.spines.values():
+                        spine.set_edgecolor('white')
+                        spine.set_linewidth(2)
+
+                    # Add colorbar
+                    cbar = self.figure.colorbar(im, ax=ax2, pad=0.02)
+                    cbar.set_label('Magnitude', color='white', fontsize=13, fontweight='bold', labelpad=10)
+                    cbar.ax.tick_params(colors='white', labelsize=11)
+                    # Make colorbar outline white
+                    cbar.outline.set_edgecolor('white')
+                    cbar.outline.set_linewidth(2)
+
+                    print("[wavelet] Scalogram plotted successfully")
+
+            except Exception as e:
+                import traceback
+                error_msg = f'Wavelet analysis error: {str(e)}'
+                print(f"[wavelet] ERROR: {error_msg}")
+                traceback.print_exc()
+
+                ax2.text(0.5, 0.5, error_msg,
+                        ha='center', va='center', transform=ax2.transAxes, color='white', fontsize=12,
+                        bbox=dict(boxstyle='round', facecolor='red', alpha=0.5))
+                ax2.set_facecolor('#1a1a1a')
+                ax2.set_xlabel('Time (s)', color='white', fontsize=14, fontweight='bold')
+                ax2.set_ylabel('Frequency (Hz)', color='white', fontsize=14, fontweight='bold')
+                ax2.set_title('Wavelet Analysis (Error)', color='white', fontsize=16, fontweight='bold')
+                ax2.tick_params(colors='white', labelsize=12, width=2, length=6)
+                for spine in ax2.spines.values():
+                    spine.set_edgecolor('white')
+                    spine.set_linewidth(2)
+
+            # Don't use tight_layout since we're using GridSpec for precise alignment
+            self.canvas.draw()
+
+        def on_apply_filter(self):
+            """Store the notch filter settings."""
+            from PyQt6.QtWidgets import QMessageBox
+
+            self.notch_lower = self.lower_freq_spin.value()
+            self.notch_upper = self.upper_freq_spin.value()
+
+            if self.notch_lower >= self.notch_upper:
+                QMessageBox.warning(self, "Invalid Range", "Lower frequency must be less than upper frequency.")
+                return
+
+            self.update_plots()
+            QMessageBox.information(self, "Filter Applied",
+                                  f"Notch filter set to {self.notch_lower:.2f} - {self.notch_upper:.2f} Hz.\n"
+                                  "Close this dialog to apply the filter to your signal.")
+
+        def on_reset_filter(self):
+            """Reset the notch filter."""
+            self.notch_lower = None
+            self.notch_upper = None
+            self.lower_freq_spin.setValue(0.0)
+            self.upper_freq_spin.setValue(0.0)
+            self.update_plots()
+
+        def get_filter_params(self):
+            """Return the notch filter parameters."""
+            return self.notch_lower, self.notch_upper
+
+        def on_prev_sweep(self):
+            """Navigate to previous sweep."""
+            if not self.parent_window:
+                return
+
+            # Move to previous sweep
+            if self.parent_window.state.sweep_idx > 0:
+                self.parent_window.state.sweep_idx -= 1
+                # Re-extract data for new sweep
+                self._load_sweep_data()
+                self.update_plots()
+
+        def on_next_sweep(self):
+            """Navigate to next sweep."""
+            if not self.parent_window:
+                return
+
+            # Move to next sweep
+            sweep_count = self.parent_window._sweep_count()
+            if self.parent_window.state.sweep_idx < sweep_count - 1:
+                self.parent_window.state.sweep_idx += 1
+                # Re-extract data for new sweep
+                self._load_sweep_data()
+                self.update_plots()
+
+        def _load_sweep_data(self):
+            """Reload data for current sweep from parent window."""
+            if not self.parent_window:
+                return
+
+            # Get current sweep data (already filtered by _current_trace)
+            t_all, y_all = self.parent_window._current_trace()
+            if t_all is None or y_all is None:
+                return
+
+            # Update instance variables
+            self.t = t_all
+            self.y = y_all
+
+            # Get stim spans for this sweep
+            if hasattr(self.parent_window.state, 'stim_markers') and self.parent_window.state.stim_markers:
+                sweep_idx = self.parent_window.state.sweep_idx
+                if sweep_idx in self.parent_window.state.stim_markers:
+                    self.stim_spans = self.parent_window.state.stim_markers[sweep_idx]
+                else:
+                    self.stim_spans = None
+
+            # Update sweep label if it exists
+            if hasattr(self, 'sweep_label'):
+                self.sweep_label.setText(f"Sweep: {self.parent_window.state.sweep_idx + 1}")
+
+            # Calculate stim onset offset for time normalization
+            if self.stim_spans and len(self.stim_spans) > 0:
+                self.t_offset = self.stim_spans[0][0]  # Use first stim onset
+            else:
+                self.t_offset = 0.0
+
 
     class SaveMetaDialog(QDialog):
-        def __init__(self, abf_name: str, channel: str, parent=None, auto_stim: str = ""):
+        def __init__(self, abf_name: str, channel: str, parent=None, auto_stim: str = "", history: dict = None):
             super().__init__(parent)
             self.setWindowTitle("Save analyzed data — name builder")
 
             self._abf_name = abf_name
             self._channel = channel
+            self._history = history or {}
 
             lay = QFormLayout(self)
 
-            # Mouse Strain
+            # Mouse Strain with autocomplete
+            from PyQt6.QtWidgets import QCompleter
+            from PyQt6.QtCore import Qt as QtCore_Qt
+
             self.le_strain = QLineEdit(self)
             self.le_strain.setPlaceholderText("e.g., VgatCre")
+            if self._history.get('strain'):
+                completer = QCompleter(self._history['strain'], self)
+                completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
+                completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
+                self.le_strain.setCompleter(completer)
             lay.addRow("Mouse Strain:", self.le_strain)
 
-            # Virus
+            # Virus with autocomplete
             self.le_virus = QLineEdit(self)
             self.le_virus.setPlaceholderText("e.g., ConFoff-ChR2")
+            if self._history.get('virus'):
+                completer = QCompleter(self._history['virus'], self)
+                completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
+                completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
+                self.le_virus.setCompleter(completer)
             lay.addRow("Virus:", self.le_virus)
 
-            # Stimulation type (can be auto-populated)
+            # Location with autocomplete
+            self.le_location = QLineEdit(self)
+            self.le_location.setPlaceholderText("e.g., preBotC or RTN")
+            if self._history.get('location'):
+                completer = QCompleter(self._history['location'], self)
+                completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
+                completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
+                self.le_location.setCompleter(completer)
+            lay.addRow("Location:", self.le_location)
+
+            # Stimulation type (can be auto-populated) with autocomplete
             self.le_stim = QLineEdit(self)
             self.le_stim.setPlaceholderText("e.g., 20Hz10s15ms or 15msPulse")
             if auto_stim:
                 self.le_stim.setText(auto_stim)
+            if self._history.get('stim'):
+                completer = QCompleter(self._history['stim'], self)
+                completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
+                completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
+                self.le_stim.setCompleter(completer)
             lay.addRow("Stimulation type:", self.le_stim)
 
+            # Laser power with autocomplete
             self.le_power = QLineEdit(self)
             self.le_power.setPlaceholderText("e.g., 8mW")
+            if self._history.get('power'):
+                completer = QCompleter(self._history['power'], self)
+                completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
+                completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
+                self.le_power.setCompleter(completer)
             lay.addRow("Laser power:", self.le_power)
 
             self.cb_sex = QComboBox(self)
             self.cb_sex.addItems(["", "M", "F", "Unknown"])
             lay.addRow("Sex:", self.cb_sex)
 
+            # Animal ID with autocomplete
             self.le_animal = QLineEdit(self)
             self.le_animal.setPlaceholderText("e.g., 25121004")
+            if self._history.get('animal'):
+                completer = QCompleter(self._history['animal'], self)
+                completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
+                completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
+                self.le_animal.setCompleter(completer)
             lay.addRow("Animal ID:", self.le_animal)
 
             # Read-only info
@@ -1850,6 +2448,7 @@ class MainWindow(QMainWindow):
             # Update preview on change
             self.le_strain.textChanged.connect(self._update_preview)
             self.le_virus.textChanged.connect(self._update_preview)
+            self.le_location.textChanged.connect(self._update_preview)
             self.le_stim.textChanged.connect(self._update_preview)
             self.le_power.textChanged.connect(self._update_preview)
             self.cb_sex.currentTextChanged.connect(self._update_preview)
@@ -1880,6 +2479,7 @@ class MainWindow(QMainWindow):
             # Read & normalize
             strain = self._norm_token(self.le_strain.text())
             virus  = self._norm_token(self.le_virus.text())
+            location = self.le_location.text().strip()
 
             stim   = self.le_stim.text().strip()
             power  = self.le_power.text().strip()
@@ -1891,6 +2491,7 @@ class MainWindow(QMainWindow):
             # Sanitize for filename
             strain_s = self._san(strain)
             virus_s  = self._san(virus)
+            location_s = self._san(location)
             stim_s   = self._san(stim)
             power_s  = self._san(power)
             sex_s    = self._san(sex)
@@ -1899,8 +2500,8 @@ class MainWindow(QMainWindow):
             ch_s     = self._san(ch)
 
             # STANDARD ORDER:
-            # Strain_Virus_Sex_Animal_Stim_Power_ABF_Channel
-            parts = [p for p in (strain_s, virus_s, sex_s, animal_s, stim_s, power_s, abf_s, ch_s) if p]
+            # Strain_Virus_Location_Sex_Animal_Stim_Power_ABF_Channel
+            parts = [p for p in (strain_s, virus_s, location_s, sex_s, animal_s, stim_s, power_s, abf_s, ch_s) if p]
             preview = "_".join(parts) if parts else "analysis"
             self.lbl_preview.setText(preview)
 
@@ -1908,6 +2509,7 @@ class MainWindow(QMainWindow):
             return {
                 "strain": self.le_strain.text().strip(),
                 "virus":  self.le_virus.text().strip(),
+                "location": self.le_location.text().strip(),
                 "stim":   self.le_stim.text().strip(),
                 "power":  self.le_power.text().strip(),
                 "sex":    self.cb_sex.currentText().strip(),
@@ -3581,12 +4183,18 @@ class MainWindow(QMainWindow):
             chan = st.analyze_chan or ""
             auto_stim = _auto_stim_from_metrics()
 
+            # --- Load autocomplete history ---
+            history = self._load_save_dialog_history()
+
             # --- Name builder dialog (with auto stim suggestion) ---
-            dlg = self.SaveMetaDialog(abf_name=abf_stem, channel=chan, parent=self, auto_stim=auto_stim)
+            dlg = self.SaveMetaDialog(abf_name=abf_stem, channel=chan, parent=self, auto_stim=auto_stim, history=history)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
 
             vals = dlg.values()
+
+            # --- Update history with new values ---
+            self._update_save_dialog_history(vals)
             suggested = self._sanitize_token(vals["preview"]) or "analysis"
             want_picker = bool(vals.get("choose_dir", False))
 
@@ -4623,6 +5231,13 @@ class MainWindow(QMainWindow):
                 self.statusbar.showMessage(msg, 6000)
             except Exception:
                 pass
+
+            # Show success dialog
+            QMessageBox.information(
+                self,
+                "Save Successful",
+                f"Files saved successfully to:\n{self._save_dir}\n\n{msg}"
+            )
 
 
     def _mean_sem_1d(self, arr: np.ndarray):
@@ -6090,25 +6705,51 @@ class MainWindow(QMainWindow):
         self.FileList.sortItems()
 
     def _filter_file_list(self, text: str):
-        """Show/hide items in FileList based on search text."""
+        """Show/hide items in FileList based on search text.
+
+        Supports multiple search modes:
+        - Single keyword: 'gfp' - shows files containing 'gfp'
+        - Multiple keywords (AND): 'gfp 2.5mW' - shows files containing BOTH 'gfp' AND '2.5mW'
+        - Multiple keywords (OR): 'gfp, chr2' - shows files containing EITHER 'gfp' OR 'chr2'
+        """
         search_text = text.strip().lower()
-        
+
+        # Determine search mode
+        if ',' in search_text:
+            # OR mode: split by comma
+            keywords = [k.strip() for k in search_text.split(',') if k.strip()]
+            search_mode = 'OR'
+        else:
+            # AND mode: split by whitespace
+            keywords = [k.strip() for k in search_text.split() if k.strip()]
+            search_mode = 'AND'
+
         for i in range(self.FileList.count()):
             item = self.FileList.item(i)
             if not item:
                 continue
-                
+
             # Get the display text
             item_text = item.text().lower()
-            
+
             # Also search in tooltip (which contains full path)
             tooltip = (item.toolTip() or "").lower()
-            
-            # Show item if search text is empty or found in item text/tooltip
-            if not search_text or search_text in item_text or search_text in tooltip:
+            combined_text = f"{item_text} {tooltip}"
+
+            # Show item if search text is empty
+            if not keywords:
                 item.setHidden(False)
-            else:
-                item.setHidden(True)
+                continue
+
+            # Apply search logic
+            if search_mode == 'AND':
+                # ALL keywords must be present
+                matches = all(kw in combined_text for kw in keywords)
+            else:  # OR mode
+                # ANY keyword must be present
+                matches = any(kw in combined_text for kw in keywords)
+
+            item.setHidden(not matches)
 
     def _curation_scan_and_fill(self, root: Path):
         """Scan for matching CSVs and fill FileList with filenames (store full paths in item data)."""
@@ -6562,6 +7203,100 @@ class MainWindow(QMainWindow):
     #         import traceback
     #         traceback.print_exc()
 
+    def _propose_consolidated_filename(self, files: list) -> tuple[str, list[str]]:
+        """Generate a descriptive filename based on the files being consolidated.
+
+        Returns:
+            tuple: (proposed_filename, list of warnings)
+        """
+        warnings = []
+
+        if not files:
+            return "consolidated_data.xlsx", warnings
+
+        # Parse filenames to extract common metadata
+        # Expected format: Strain_Virus_Location_Sex_Animal_Stim_Power_ABF_Channel_*.csv
+        # Also support older format without Location
+        parsed_files = []
+        for _, filepath in files:
+            stem = filepath.stem  # filename without extension
+            parts = stem.split('_')
+
+            # Try to intelligently parse - check if we have location field
+            # Location field is typically anatomical abbreviations like preBotC, RTN, etc.
+            # Sex is typically M, F, or Unknown (short)
+            # We'll use heuristics: if part[2] is 1-2 chars, it's probably sex (old format)
+
+            if len(parts) >= 7 and len(parts[3]) <= 2:
+                # New format with location: Strain_Virus_Location_Sex_Animal_Stim_Power_...
+                parsed_files.append({
+                    'strain': parts[0] if len(parts) > 0 else '',
+                    'virus': parts[1] if len(parts) > 1 else '',
+                    'location': parts[2] if len(parts) > 2 else '',
+                    'sex': parts[3] if len(parts) > 3 else '',
+                    'animal': parts[4] if len(parts) > 4 else '',
+                    'stim': parts[5] if len(parts) > 5 else '',
+                    'power': parts[6] if len(parts) > 6 else '',
+                })
+            elif len(parts) >= 6 and len(parts[2]) <= 2:
+                # Old format without location: Strain_Virus_Sex_Animal_Stim_Power_...
+                parsed_files.append({
+                    'strain': parts[0] if len(parts) > 0 else '',
+                    'virus': parts[1] if len(parts) > 1 else '',
+                    'location': '',
+                    'sex': parts[2] if len(parts) > 2 else '',
+                    'animal': parts[3] if len(parts) > 3 else '',
+                    'stim': parts[4] if len(parts) > 4 else '',
+                    'power': parts[5] if len(parts) > 5 else '',
+                })
+
+        if not parsed_files:
+            return "consolidated_data.xlsx", warnings
+
+        # Find common values across all files and check for variations
+        common = {}
+        for key in ['strain', 'virus', 'location', 'sex', 'stim', 'power']:
+            values = set(f[key] for f in parsed_files if f.get(key))
+            if len(values) == 1:
+                common[key] = values.pop()
+            elif len(values) > 1:
+                # Warn about different stimulation parameters
+                if key == 'stim':
+                    warnings.append(f"Multiple stimulation types detected: {', '.join(sorted(values))}")
+                elif key == 'power':
+                    warnings.append(f"Multiple laser powers detected: {', '.join(sorted(values))}")
+
+        # Build descriptive filename from common fields
+        parts = []
+        if common.get('strain'):
+            parts.append(common['strain'])
+        if common.get('virus'):
+            parts.append(common['virus'])
+        if common.get('location'):
+            parts.append(common['location'])
+        if common.get('sex'):
+            parts.append(common['sex'])
+
+        # If multiple animals, indicate that
+        animals = set(f['animal'] for f in parsed_files if f.get('animal'))
+        if len(animals) == 1:
+            parts.append(animals.pop())
+        elif len(animals) > 1:
+            parts.append(f"N{len(animals)}")  # Capital N
+
+        if common.get('stim'):
+            parts.append(common['stim'])
+        if common.get('power'):
+            parts.append(common['power'])
+
+        # Add "consolidated" suffix
+        parts.append("consolidated")
+
+        if parts:
+            return "_".join(parts) + ".xlsx", warnings
+        else:
+            return "consolidated_data.xlsx", warnings
+
     def on_consolidate_save_data_clicked(self):
         """Consolidate data from selected files into a single Excel file."""
         from PyQt6.QtCore import Qt
@@ -6598,12 +7333,28 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Consolidate", "No CSV files selected.")
             return
 
-        # Choose save location first
-        default_name = "consolidated_data.xlsx"
+        # Choose save location first with intelligent default name
+        files_for_naming = means_files or breaths_files
+        proposed_filename, warnings = self._propose_consolidated_filename(files_for_naming)
+
+        # Show warnings if any
+        if warnings:
+            warning_msg = "Warning about files being consolidated:\n\n" + "\n".join(f"• {w}" for w in warnings)
+            warning_msg += "\n\nDo you want to continue?"
+            reply = QMessageBox.question(
+                self, "Consolidation Warning",
+                warning_msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+
         if means_files:
-            default_name = str(means_files[0][1].parent / "consolidated_data.xlsx")
+            default_name = str(means_files[0][1].parent / proposed_filename)
         elif breaths_files:
-            default_name = str(breaths_files[0][1].parent / "consolidated_data.xlsx")
+            default_name = str(breaths_files[0][1].parent / proposed_filename)
+        else:
+            default_name = proposed_filename
 
         save_path, _ = QFileDialog.getSaveFileName(
             self, "Save consolidated data as...",
@@ -8536,12 +9287,34 @@ class MainWindow(QMainWindow):
             'ti', 'te', 'vent_proxy'
         ]
 
-        # Determine common time base (use first file's time)
+        # Determine common time base by scanning all files
+        # This allows experiments with different durations to be consolidated
+        print("Scanning all files to determine common time range...")
+        all_t_mins = []
+        all_t_maxs = []
+        all_steps = []
+
+        for root, path in files:
+            df_temp = pd.read_csv(path, low_memory=False)
+            t_temp = df_temp['t'].values
+            all_t_mins.append(t_temp.min())
+            all_t_maxs.append(t_temp.max())
+            if len(t_temp) > 1:
+                all_steps.append(np.median(np.diff(t_temp)))
+
+        # Create common time grid spanning the union of all time ranges
+        t_common_min = min(all_t_mins)
+        t_common_max = max(all_t_maxs)
+        t_common_step = np.median(all_steps) if all_steps else 0.1
+
+        # Generate uniform time grid
+        t_common = np.arange(t_common_min, t_common_max + t_common_step/2, t_common_step)
+
+        print(f"Common time grid: {t_common_min:.2f}s to {t_common_max:.2f}s, step={t_common_step:.4f}s ({len(t_common)} points)")
+
+        # Load first file for column checking
         first_root, first_path = files[0]
         df_first = pd.read_csv(first_path, low_memory=False)
-        t_common = df_first['t'].values
-        t_common_min, t_common_max = t_common.min(), t_common.max()
-        t_common_step = np.median(np.diff(t_common)) if len(t_common) > 1 else np.nan
 
         # Track files with potential issues
         warning_messages = []
@@ -8650,16 +9423,19 @@ class MainWindow(QMainWindow):
                         f"{root}: {overlap_pct:.1f}% overlap (range: {t_file_min:.1f} to {t_file_max:.1f}s)"
                     )
 
-                if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
-                    result_df[root] = y_file
-                    raw_data_dict[root] = (t_common, y_file)
-                else:
-                    if root not in files_needing_interpolation:
-                        files_needing_interpolation.append(root)
-                    print(f"Interpolating {root} to common time base for {metric}")
-                    mask = np.isfinite(y_file)
-                    if mask.sum() >= 2:
-                        try:
+                # Always interpolate to common time grid (different files may have different durations)
+                mask = np.isfinite(y_file)
+                if mask.sum() >= 2:
+                    try:
+                        # Check if exact match first (optimization)
+                        if len(t_file) == len(t_common) and np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
+                            result_df[root] = y_file
+                            raw_data_dict[root] = (t_common, y_file)
+                        else:
+                            # Interpolate to common grid
+                            if root not in files_needing_interpolation:
+                                files_needing_interpolation.append(root)
+                            print(f"Interpolating {root} to common time base for {metric}")
                             f_interp = interp1d(
                                 t_file[mask], y_file[mask],
                                 kind='linear',
@@ -8676,12 +9452,12 @@ class MainWindow(QMainWindow):
                                 extrap_pct = 100 * n_extrapolated / len(t_common)
                                 if extrap_pct > 5:
                                     print(f"  Warning: {extrap_pct:.1f}% of points extrapolated (outside data range)")
-                        except Exception as e:
-                            print(f"Error interpolating {root} for {metric}: {e}")
-                            result_df[root] = np.nan
-                    else:
-                        print(f"  Warning: Insufficient data points for interpolation in {root}")
+                    except Exception as e:
+                        print(f"Error interpolating {root} for {metric}: {e}")
                         result_df[root] = np.nan
+                else:
+                    print(f"  Warning: Insufficient data points for interpolation in {root}")
+                    result_df[root] = np.nan
 
                 raw_data_cols.append(root)
             
@@ -8703,27 +9479,29 @@ class MainWindow(QMainWindow):
                     y_file = df[metric_norm_col].values
                     
                     norm_col_name = f"{root}_norm"
-                    
-                    if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
-                        result_df[norm_col_name] = y_file
-                        norm_data_dict[root] = (t_common, y_file)
-                    else:
-                        mask = np.isfinite(y_file)
-                        if mask.sum() >= 2:
-                            try:
+
+                    # Always interpolate to common time grid
+                    mask = np.isfinite(y_file)
+                    if mask.sum() >= 2:
+                        try:
+                            # Check if exact match first (optimization)
+                            if len(t_file) == len(t_common) and np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
+                                result_df[norm_col_name] = y_file
+                                norm_data_dict[root] = (t_common, y_file)
+                            else:
                                 f_interp = interp1d(
-                                    t_file[mask], y_file[mask], 
-                                    kind='linear', 
-                                    bounds_error=False, 
+                                    t_file[mask], y_file[mask],
+                                    kind='linear',
+                                    bounds_error=False,
                                     fill_value=np.nan
                                 )
                                 y_interp = f_interp(t_common)
                                 result_df[norm_col_name] = y_interp
                                 norm_data_dict[root] = (t_common, y_interp)
-                            except:
-                                result_df[norm_col_name] = np.nan
-                        else:
+                        except:
                             result_df[norm_col_name] = np.nan
+                    else:
+                        result_df[norm_col_name] = np.nan
                     
                     norm_data_cols.append(norm_col_name)
                 
@@ -8746,13 +9524,15 @@ class MainWindow(QMainWindow):
 
                     eupnea_col_name = f"{root}_eupnea"
 
-                    if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
-                        result_df[eupnea_col_name] = y_file
-                        eupnea_data_dict[root] = (t_common, y_file)
-                    else:
-                        mask = np.isfinite(y_file)
-                        if mask.sum() >= 2:
-                            try:
+                    # Always interpolate to common time grid
+                    mask = np.isfinite(y_file)
+                    if mask.sum() >= 2:
+                        try:
+                            # Check if exact match first (optimization)
+                            if len(t_file) == len(t_common) and np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
+                                result_df[eupnea_col_name] = y_file
+                                eupnea_data_dict[root] = (t_common, y_file)
+                            else:
                                 f_interp = interp1d(
                                     t_file[mask], y_file[mask],
                                     kind='linear',
@@ -8762,10 +9542,10 @@ class MainWindow(QMainWindow):
                                 y_interp = f_interp(t_common)
                                 result_df[eupnea_col_name] = y_interp
                                 eupnea_data_dict[root] = (t_common, y_interp)
-                            except:
-                                result_df[eupnea_col_name] = np.nan
-                        else:
+                        except:
                             result_df[eupnea_col_name] = np.nan
+                    else:
+                        result_df[eupnea_col_name] = np.nan
 
                     eupnea_data_cols.append(eupnea_col_name)
 

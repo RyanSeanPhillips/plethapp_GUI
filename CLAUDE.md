@@ -40,7 +40,8 @@ plethapp/
 - **Breathing Regularity Score**: RMSSD-based assessment of breathing pattern variability
 - **Real-time Visual Overlays**: Automatic green/red line overlays for eupnea and apnea regions
 - **Interactive Data Navigation**: Window-based and sweep-based data exploration
-- **Manual Peak Editing**: Add/delete peaks and annotate sighs
+- **Manual Peak Editing**: Add/delete peaks and annotate sighs with keyboard shortcuts (Shift/Ctrl modifiers)
+- **Spectral Analysis Window**: Power spectrum, wavelet scalogram, and notch filter configuration
 - **Data Export**: CSV export of analyzed breathing metrics
 - **Multi-format Support**: ABF file format support with extensible I/O architecture
 
@@ -84,10 +85,12 @@ Advanced error-resistant metrics calculation system:
 - `robust_compute_ti()`: Inspiratory timing with direct, estimated, and default calculations
 
 ### Signal Processing (core/filters.py)
-- Low-pass and high-pass Butterworth filtering
+- Low-pass and high-pass Butterworth filtering with adjustable filter order
 - Mean subtraction with configurable time windows
 - Signal inversion capabilities
 - Real-time filter parameter adjustment
+- **Notch (band-stop) filtering** for removing specific frequency ranges
+- **Spectral analysis tools** for identifying noise contamination
 
 ## Development Commands
 
@@ -217,6 +220,92 @@ To enable the enhanced robust metrics (optional):
    ```
 
 2. **Restart the application** - the robust metrics will be used automatically for all calculations
+
+## Recent Feature Additions
+
+### Spectral Analysis Window (2025-10-02)
+A comprehensive spectral analysis tool for identifying and filtering oscillatory noise contamination:
+
+**Features:**
+- **Power Spectrum (Welch method)**: High-resolution frequency analysis (0-30 Hz range optimized for breathing)
+  - Separate spectra for full trace (blue) and during-stimulation periods (orange)
+  - nperseg=32768, 90% overlap for maximum resolution
+- **Wavelet Scalogram**: Time-frequency analysis using complex Morlet wavelets
+  - Frequency range: 0.5-30 Hz
+  - Time normalized to stimulation onset (t=0)
+  - Percentile-based color scaling (95th) to handle transient sniffing bouts
+  - Stim on/offset markers (lime green dashed lines)
+- **Notch Filter Controls**: Interactive band-stop filter configuration
+  - Specify lower and upper frequency bounds
+  - 4th-order Butterworth band-stop filter
+  - Applied to main signal when dialog is closed
+- **Sweep Navigation**: Step through sweeps within the spectral analysis view
+- **Aligned Panels**: GridSpec layout ensures power spectrum and wavelet plots have matching edges
+
+**Implementation Details:**
+- Located in `main.py` as `SpectralAnalysisDialog` class (lines ~1970-2330)
+- Button added to filter controls: `SpectralAnalysisButton`
+- Notch filter integrated into signal processing pipeline (`_current_trace()`, `_apply_notch_filter()`)
+- Filter parameters included in cache key (`_proc_key()`) to trigger recomputation
+
+**To Remove This Feature:**
+1. Delete `SpectralAnalysisDialog` class from `main.py`
+2. Remove `SpectralAnalysisButton` from `ui/pleth_app_layout_02.ui` (horizontalLayout_9)
+3. Remove notch filter code from `_current_trace()` (lines ~621-623)
+4. Remove `_apply_notch_filter()` method (lines ~1164-1193)
+5. Remove notch filter from `_proc_key()` cache key (lines ~369-370)
+6. Remove notch filter instance variables from `__init__()` (lines ~63-65)
+7. Remove button connection: `self.SpectralAnalysisButton.clicked.connect(...)` (line ~116)
+8. Remove `on_spectral_analysis_clicked()` method (lines ~1816-1863)
+
+### Adjustable Filter Order (2025-10-02)
+Added UI control for Butterworth filter order to enable stronger frequency attenuation:
+
+**Features:**
+- **Filter Order Spinbox**: Range 2-10, default 4
+  - Located in filter controls (horizontalLayout_9)
+  - Higher order = steeper roll-off at cutoff frequency
+  - More aggressive elimination of frequencies beyond cutoff
+- **Cache Integration**: Filter order included in processing cache key
+- **Real-time Updates**: Changes trigger immediate signal reprocessing
+
+**Implementation Details:**
+- UI widget: `FilterOrderSpin` (QSpinBox) in `ui/pleth_app_layout_02.ui` (lines ~834-853)
+- Label: `FilterOrderLabel` (lines ~813-831)
+- Connected to `update_and_redraw()` via `valueChanged` signal (line ~107)
+- Stored in `self.filter_order` instance variable (line ~68)
+- Passed to `filters.apply_all_1d()` as `order` parameter (line ~618)
+- Included in `_proc_key()` for cache invalidation (line ~368)
+
+**To Remove This Feature:**
+1. Delete `FilterOrderSpin` and `FilterOrderLabel` from `ui/pleth_app_layout_02.ui` (lines ~812-854)
+2. Remove `self.filter_order` instance variable from `__init__()` (line ~68)
+3. Remove spinbox connection from `__init__()` (line ~107)
+4. Remove filter order update in `update_and_redraw()` (line ~544)
+5. Remove `order=self.filter_order` from `_current_trace()` call to `apply_all_1d()` (line ~618)
+6. Remove filter order from `_proc_key()` cache key (line ~368)
+
+### Manual Peak Editing Enhancements (2025-10-02)
+Improved peak editing workflow with keyboard modifiers and precision controls:
+
+**Features:**
+- **Keyboard Shortcuts**:
+  - Shift key: Toggle to Delete Peak mode from Add Peak mode (and vice versa)
+  - Ctrl key: Switch to Add Sigh mode from any mode
+  - Allows quick mode switching without button clicks
+- **Precise Peak Deletion**: Only deletes the single closest peak within ±80ms window
+  - Previous behavior: deleted all peaks in window
+  - New behavior: finds closest peak using `np.argmin(distances)` and deletes only that one
+
+**Implementation Details:**
+- Mode switching in `_on_plot_click_add_peak()` and `_on_plot_click_delete_peak()`
+- Uses `QApplication.keyboardModifiers()` to detect Shift/Ctrl
+- `_force_mode` parameter prevents infinite recursion
+- Button labels updated to show shortcuts (e.g., "Add Peak (Shift: Delete)")
+
+**To Revert to Previous Behavior:**
+1. Remove modifier key detection from `_on_plot_click_add_peak()` and `_on_plot_click_delete_peak()`
+2. Change delete logic back to: `pks_new = pks[(pks < i_lo) | (pks > i_hi)]` (deletes all in window)
 
 ## Future Enhancements
 - Code signing for professional distribution
