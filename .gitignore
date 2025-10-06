@@ -38,6 +38,11 @@ Pleth_App_analysis/
 # Raw data (do NOT back these up)
 *.abf
 
+# Development/testing files
+dev_testing/
+lib/
+examples/
+
 # Ignore any folder literally named 'old' or 'images' anywhere
 **/old/**
 **/images/**
