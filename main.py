@@ -579,6 +579,14 @@ class MainWindow(QMainWindow):
                 if hasattr(st, 'breath_by_sweep'):
                     st.breath_by_sweep.clear()
 
+                # Clear sniffing regions
+                if hasattr(st, 'sniff_regions_by_sweep'):
+                    st.sniff_regions_by_sweep.clear()
+
+                # Reset navigation to first sweep
+                st.sweep_idx = 0
+                st.window_start_s = 0.0
+
                 # Switch to single panel mode
                 if not self.single_panel_mode:
                     self.single_panel_mode = True
@@ -2525,7 +2533,7 @@ class MainWindow(QMainWindow):
                 self.movePointButton.blockSignals(False)
                 self.movePointButton.setText("Move Point")
 
-            self.markSniffButton.setText("Mark Sniff (ON)")
+            self.markSniffButton.setText("Mark Sniff (ON) [Shift=Delete]")
             self.plot_host.set_click_callback(self._on_plot_click_mark_sniff)
             self.plot_host.setCursor(Qt.CursorShape.CrossCursor)
 
@@ -2558,11 +2566,16 @@ class MainWindow(QMainWindow):
                 self.plot_host.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _on_plot_click_mark_sniff(self, xdata, ydata, event):
-        """Start marking a sniffing region (click-and-drag) or grab an edge to adjust."""
+        """Start marking a sniffing region (click-and-drag) or grab an edge to adjust.
+        Shift+click on a region to delete it."""
         if not getattr(self, "_mark_sniff_mode", False):
             return
         if event.inaxes is None or xdata is None:
             return
+
+        # Check if Shift key is held
+        from PyQt6.QtCore import Qt
+        shift_held = (QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
 
         # Check if click is near an existing region edge
         st = self.state
@@ -2576,10 +2589,24 @@ class MainWindow(QMainWindow):
         else:
             t0 = 0.0
 
+        # SHIFT+CLICK: Delete region
+        if shift_held and regions:
+            for i, (start_time, end_time) in enumerate(regions):
+                plot_start = start_time - t0
+                plot_end = end_time - t0
+
+                # Check if click is INSIDE this region
+                if plot_start <= xdata <= plot_end:
+                    # Delete this region
+                    del self.state.sniff_regions_by_sweep[s][i]
+                    print(f"[mark-sniff] Deleted region {i}: {start_time:.3f} - {end_time:.3f} s")
+                    self.redraw_main_plot()
+                    return
+
         # Edge detection threshold (in plot time units)
         edge_threshold = 0.3  # seconds
 
-        # Check each region for edge proximity
+        # Check each region for edge proximity (for adjusting edges)
         for i, (start_time, end_time) in enumerate(regions):
             plot_start = start_time - t0
             plot_end = end_time - t0
@@ -5732,7 +5759,14 @@ class MainWindow(QMainWindow):
             exm_obj   = np.array(exm_by_sweep, dtype=object)
             exo_obj   = np.array(exo_by_sweep, dtype=object)
             sigh_obj  = np.array(sigh_by_sweep, dtype=object)
-    
+
+            # Pack sniffing regions (aligned with kept_sweeps)
+            sniff_obj = np.empty(S, dtype=object)
+            for col, s in enumerate(kept_sweeps):
+                regions = st.sniff_regions_by_sweep.get(s, [])
+                # Convert to numpy array of shape (N_regions, 2) for start/end times
+                sniff_obj[col] = np.array(regions, dtype=float).reshape(-1, 2) if regions else np.empty((0, 2), dtype=float)
+
             y2_kwargs_ds = {f"y2_{k}_ds": y2_ds_by_key[k] for k in all_keys}
     
             meta = {
@@ -5750,6 +5784,23 @@ class MainWindow(QMainWindow):
                 "csv_time_zero": float(csv_t0),
                 "csv_includes_traces": bool(INCLUDE_TRACES),
                 "norm_window_s": float(NORM_BASELINE_WINDOW_S),
+                # Filter settings (for future NPZ reopening)
+                "use_low": bool(st.use_low),
+                "use_high": bool(st.use_high),
+                "use_mean_sub": bool(st.use_mean_sub),
+                "use_invert": bool(st.use_invert),
+                "low_hz": float(st.low_hz) if st.low_hz else None,
+                "high_hz": float(st.high_hz) if st.high_hz else None,
+                "mean_val": float(st.mean_val),
+                "filter_order": int(self.filter_order),
+                # Notch filter (if active)
+                "notch_filter_lower": float(self.notch_filter_lower) if self.notch_filter_lower else None,
+                "notch_filter_upper": float(self.notch_filter_upper) if self.notch_filter_upper else None,
+                # Channel info (for reopening)
+                "channel_names": list(st.channel_names) if st.channel_names else [],
+                "stim_chan": str(st.stim_chan) if st.stim_chan else None,
+                # Navigation state
+                "window_dur_s": float(st.window_dur_s),
             }
     
             # Save enhanced NPZ bundle with timeseries data (for fast consolidation)
@@ -5763,6 +5814,7 @@ class MainWindow(QMainWindow):
                 'expmins_by_sweep': exm_obj,
                 'expoffs_by_sweep': exo_obj,
                 'sigh_idx_by_sweep': sigh_obj,
+                'sniff_regions_by_sweep': sniff_obj,
                 'stim_spans_by_sweep': stim_obj,
                 'meta_json': json.dumps(meta),
                 **y2_kwargs_ds,
@@ -5826,8 +5878,9 @@ class MainWindow(QMainWindow):
             y2_ds_by_key_norm_eupnea = {}
             eupnea_baseline_by_key = {}
 
-            # Get eupnea threshold from UI
+            # Get thresholds from UI
             eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+            apnea_thresh = self._parse_float(self.ApneaThresh) or 0.5    # seconds
 
             # Pre-compute eupnea masks once per sweep
             print(f"[CSV-time] Pre-computing eupnea masks for {len(kept_sweeps)} sweeps...")
@@ -6003,18 +6056,22 @@ class MainWindow(QMainWindow):
                 _npz_timeseries_data[f'ts_eupnea_{k}'] = y2_ds_by_key_norm_eupnea[k]
 
             np.savez_compressed(npz_path, **_npz_timeseries_data)
+
+            # Count total sniffing regions across all sweeps
+            total_sniff_regions = sum(len(st.sniff_regions_by_sweep.get(s, [])) for s in kept_sweeps)
             print(f"[NPZ] ✓ Enhanced bundle saved (v2) with timeseries data")
+            print(f"      - {total_sniff_regions} sniffing region(s) saved across {S} sweep(s)")
 
             if progress_dialog:
                 progress_dialog.setLabelText("Writing breath-by-breath CSV...")
                 progress_dialog.setValue(60)
                 QApplication.processEvents()
 
-            # -------------------- (3) Per-breath CSV (WIDE; with is_sigh) --------------------
+            # -------------------- (3) Per-breath CSV (WIDE; with breath classifications) --------------------
             breaths_path = base.with_name(base.name + "_breaths.csv")
-    
+
             BREATH_COLS = [
-                "sweep", "breath", "t", "region", "is_sigh",
+                "sweep", "breath", "t", "region", "is_sigh", "is_sniffing", "is_eupnea", "is_apnea",
                 "if", "amp_insp", "amp_exp", "area_insp", "area_exp",
                 "ti", "te", "vent_proxy",
             ]
@@ -6041,6 +6098,10 @@ class MainWindow(QMainWindow):
             eupnea_b_by_k = {}
             eupnea_masks_by_sweep = {}
 
+            # Get thresholds from UI (for breath classification)
+            eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+            apnea_thresh = self._parse_float(self.ApneaThresh) or 0.5    # seconds
+
             t_start = time.time()
             print(f"[CSV] Pre-computing eupnea masks for {len(kept_sweeps)} sweeps...")
             for s in kept_sweeps:
@@ -6059,10 +6120,15 @@ class MainWindow(QMainWindow):
                 expoffs = np.asarray(br.get("expoffs", []), dtype=int)
 
                 if on.size >= 2:
+                    # Get sniff regions for this sweep
+                    sniff_regions = st.sniff_regions_by_sweep.get(s, [])
+
+                    # Compute eupnea mask (excluding sniffing regions)
                     eupnea_mask = metrics.detect_eupnic_regions(
                         st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
                         freq_threshold_hz=eupnea_thresh,
-                        min_duration_sec=self.eupnea_min_duration
+                        min_duration_sec=self.eupnea_min_duration,
+                        sniff_regions=sniff_regions
                     )
                     eupnea_masks_by_sweep[s] = eupnea_mask
 
@@ -6224,7 +6290,13 @@ class MainWindow(QMainWindow):
                         vals = vals[np.isfinite(vals)]
                     b_by_k[k] = float(np.mean(vals)) if vals.size else np.nan
     
-                # NEW: sigh flag per breath interval [on[j], on[j+1])
+                # Breath classification flags: sigh, sniffing, eupnea, apnea
+                # - is_sigh: Any sigh peak within breath interval [on[j], on[j+1])
+                # - is_sniffing: Breath midpoint falls within marked sniffing region
+                # - is_eupnea: Breath midpoint is part of eupneic (normal) breathing pattern
+                # - is_apnea: Breath is preceded by long gap (recovery breath after apnea)
+
+                # Sigh: Any sigh peak within breath interval [on[j], on[j+1])
                 sigh_idx = np.asarray(st.sigh_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
                 sigh_idx = sigh_idx[(sigh_idx >= 0) & (sigh_idx < len(y_proc))]
                 is_sigh_per_breath = np.zeros(on.size - 1, dtype=int)
@@ -6233,13 +6305,45 @@ class MainWindow(QMainWindow):
                         a = int(on[j]); b = int(on[j+1])
                         if np.any((sigh_idx >= a) & (sigh_idx < b)):
                             is_sigh_per_breath[j] = 1
-    
+
+                # Sniffing: Breath midpoint falls within any sniffing region
+                sniff_regions = st.sniff_regions_by_sweep.get(s, [])
+                is_sniffing_per_breath = np.zeros(on.size - 1, dtype=int)
+                if sniff_regions:
+                    for j, mid_idx in enumerate(mids):
+                        t_mid = st.t[int(mid_idx)]
+                        for sn_start, sn_end in sniff_regions:
+                            if sn_start <= t_mid <= sn_end:
+                                is_sniffing_per_breath[j] = 1
+                                break
+
+                # Eupnea: Breath midpoint marked as eupneic
+                eupnea_mask = eupnea_masks_by_sweep.get(s, None)
+                is_eupnea_per_breath = np.zeros(on.size - 1, dtype=int)
+                if eupnea_mask is not None:
+                    for j, mid_idx in enumerate(mids):
+                        if int(mid_idx) < len(eupnea_mask) and eupnea_mask[int(mid_idx)] > 0:
+                            is_eupnea_per_breath[j] = 1
+
+                # Apnea: Breath preceded by long inter-breath interval (recovery breath after apnea)
+                is_apnea_per_breath = np.zeros(on.size - 1, dtype=int)
+                for j in range(len(mids)):
+                    if j > 0:  # Need a previous onset to check inter-breath interval
+                        ibi = st.t[int(on[j])] - st.t[int(on[j-1])]  # Time since last breath
+                        if ibi > apnea_thresh:
+                            # This breath (starting at on[j]) comes after a long gap
+                            is_apnea_per_breath[j] = 1
+
                 for i, idx in enumerate(mids, start=1):
                     t_rel = float(st.t[int(idx)] - (global_s0 if have_global_stim else 0.0))
-                    sigh_flag = str(int(is_sigh_per_breath[i - 1]))
+                    breath_idx = i - 1  # 0-indexed for accessing arrays
+                    sigh_flag = str(int(is_sigh_per_breath[breath_idx]))
+                    sniff_flag = str(int(is_sniffing_per_breath[breath_idx]))
+                    eupnea_flag = str(int(is_eupnea_per_breath[breath_idx]))
+                    apnea_flag = str(int(is_apnea_per_breath[breath_idx]))
     
                     # ----- RAW: ALL
-                    row_all = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag]
+                    row_all = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag, sniff_flag, eupnea_flag, apnea_flag]
                     for k in need_keys:
                         v = np.nan
                         arr = traces.get(k, None)
@@ -6247,9 +6351,9 @@ class MainWindow(QMainWindow):
                             v = arr[int(idx)]
                         row_all.append(f"{v:.9g}" if np.isfinite(v) else "")
                     rows_all.append(row_all)
-    
+
                     # ----- NORM: ALL (time-based, per-sweep)
-                    row_allN = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag]
+                    row_allN = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag, sniff_flag, eupnea_flag, apnea_flag]
                     for k in need_keys:
                         v = np.nan
                         arr = traces.get(k, None)
@@ -6261,7 +6365,7 @@ class MainWindow(QMainWindow):
                     rows_all_N.append(row_allN)
 
                     # ----- NORM_EUPNEA: ALL (eupnea-based, pooled)
-                    row_allE = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag]
+                    row_allE = [str(s + 1), str(i), f"{t_rel:.9g}", "all", sigh_flag, sniff_flag, eupnea_flag, apnea_flag]
                     for k in need_keys:
                         v = np.nan
                         arr = traces.get(k, None)
@@ -6274,9 +6378,9 @@ class MainWindow(QMainWindow):
 
                     if have_global_stim:
                         region = "Baseline" if t_rel < 0 else ("Stim" if t_rel <= global_dur else "Post")
-    
+
                         # RAW regional row
-                        row_reg = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag]
+                        row_reg = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag, sniff_flag, eupnea_flag, apnea_flag]
                         for k in need_keys:
                             v = np.nan
                             arr = traces.get(k, None)
@@ -6286,9 +6390,9 @@ class MainWindow(QMainWindow):
                         if region == "Baseline": rows_bl.append(row_reg)
                         elif region == "Stim":  rows_st.append(row_reg)
                         else:                   rows_po.append(row_reg)
-    
+
                         # NORM regional row (time-based, per-sweep)
-                        row_regN = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag]
+                        row_regN = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag, sniff_flag, eupnea_flag, apnea_flag]
                         for k in need_keys:
                             v = np.nan
                             arr = traces.get(k, None)
@@ -6302,7 +6406,7 @@ class MainWindow(QMainWindow):
                         else:                   rows_po_N.append(row_regN)
 
                         # NORM_EUPNEA regional row (eupnea-based, pooled)
-                        row_regE = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag]
+                        row_regE = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag, sniff_flag, eupnea_flag, apnea_flag]
                         for k in need_keys:
                             v = np.nan
                             arr = traces.get(k, None)
@@ -6526,6 +6630,29 @@ class MainWindow(QMainWindow):
                             f"{duration:.9g}"
                         ])
 
+                # Add sniffing bout intervals
+                sniff_regions = st.sniff_regions_by_sweep.get(s, [])
+                for start_time, end_time in sniff_regions:
+                    # start_time and end_time are already in seconds
+
+                    # Convert to relative time if global stim available
+                    if have_global_stim:
+                        start_time_rel = start_time - global_s0
+                        end_time_rel = end_time - global_s0
+                    else:
+                        start_time_rel = start_time
+                        end_time_rel = end_time
+
+                    duration = end_time - start_time
+
+                    events_rows.append([
+                        str(s + 1),
+                        "sniffing",
+                        f"{start_time_rel:.9g}",
+                        f"{end_time_rel:.9g}",
+                        f"{duration:.9g}"
+                    ])
+
             # Write events CSV using pandas
             import pandas as pd
             df_events = pd.DataFrame(
@@ -6534,8 +6661,18 @@ class MainWindow(QMainWindow):
             ) if events_rows else pd.DataFrame(columns=["sweep", "event_type", "start_time", "end_time", "duration"])
             df_events.to_csv(events_path, index=False, na_rep='')
 
+            # Count event types
+            if events_rows:
+                event_counts = {}
+                for row in events_rows:
+                    event_type = row[1]
+                    event_counts[event_type] = event_counts.get(event_type, 0) + 1
+                event_summary = ", ".join([f"{count} {etype}" for etype, count in sorted(event_counts.items())])
+            else:
+                event_summary = "no events"
+
             t_elapsed = time.time() - t_start
-            print(f"[CSV] ✓ Events data written in {t_elapsed:.2f}s")
+            print(f"[CSV] ✓ Events data written in {t_elapsed:.2f}s ({event_summary})")
 
         # -------------------- (4) Summary PDF or Preview --------------------
         t_start = time.time()
@@ -10009,7 +10146,6 @@ class MainWindow(QMainWindow):
         else:
             return pd.DataFrame(), warnings
 
-
     # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Consolidate means_by_time CSV files.
@@ -12950,7 +13086,7 @@ class MainWindow(QMainWindow):
 
 
     def _add_events_charts(self, ws, header_row):
-        """Add eupnea and apnea timeline charts to the events sheet."""
+        """Add eupnea, apnea, and sniffing timeline charts to the events sheet."""
         from openpyxl.chart import ScatterChart, Reference, Series
         from openpyxl.chart.marker import Marker
         import matplotlib.pyplot as plt
@@ -13012,12 +13148,13 @@ class MainWindow(QMainWindow):
             print("No events found for chart generation")
             return
 
-        # Separate eupnea and apnea events
+        # Separate eupnea, apnea, and sniffing events
         eupnea_events = [e for e in events if 'eupnea' in e['event_type']]
         apnea_events = [e for e in events if 'apnea' in e['event_type']]
+        sniffing_events = [e for e in events if 'sniff' in e['event_type']]
 
-        if not eupnea_events and not apnea_events:
-            print("No eupnea or apnea events found for charts")
+        if not eupnea_events and not apnea_events and not sniffing_events:
+            print("No eupnea, apnea, or sniffing events found for charts")
             return
 
         # Create colormap for experiments
@@ -13082,6 +13219,34 @@ class MainWindow(QMainWindow):
             # Position to the right of first chart (column K)
             ws.add_image(img2, f"K{chart_start_row}")
             print(f"Added apnea chart at K{chart_start_row}")
+
+        # Create sniffing chart
+        if sniffing_events:
+            fig3, ax3 = plt.subplots(figsize=(10, 6))
+            for event in sniffing_events:
+                color = colors[event['exp_num'] - 1]
+                ax3.plot([event['t_start'], event['t_end']],
+                        [event['global_sweep'], event['global_sweep']],
+                        color=color, linewidth=2, solid_capstyle='butt')
+
+            ax3.set_xlabel('Time (s)')
+            ax3.set_ylabel('Global Sweep Number')
+            ax3.set_title('Sniffing Bouts Across Experiments')
+            ax3.grid(True, alpha=0.3)
+
+            # Save figure to bytes
+            buf3 = io.BytesIO()
+            fig3.savefig(buf3, format='png', dpi=100, bbox_inches='tight')
+            buf3.seek(0)
+            plt.close(fig3)
+
+            # Insert image into Excel
+            img3 = XLImage(buf3)
+            img3.width = 600
+            img3.height = 360
+            # Position to the right of apnea chart (column U)
+            ws.add_image(img3, f"U{chart_start_row}")
+            print(f"Added sniffing chart at U{chart_start_row}")
 
     def _add_sighs_chart(self, ws, header_row):
         """Add sigh timeline scatter plot to the sighs sheet."""
