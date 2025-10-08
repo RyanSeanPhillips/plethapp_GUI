@@ -11,8 +11,8 @@ except Exception as e:
     ) from e
 
 
-# def mean_subtract(y: np.ndarray, mean_val: float | None) -> np.ndarray:
-#     return y - (0.0 if mean_val is None else float(mean_val))
+def mean_subtract(y: np.ndarray, mean_val: float | None) -> np.ndarray:
+    return y - (0.0 if mean_val is None else float(mean_val))
 
 
 try:
@@ -209,16 +209,63 @@ def apply_all_1d(
     - (optional) rolling baseline subtraction (if mean_mode == 'window', mean_param = window_seconds)
     - (optional) invert
 
-    NOTE: This intentionally uses your original filter functions so HP/LP keep working.
+    NOTE: Handles NaN-padded arrays (from multi-file concatenation) by filtering only the valid portion.
     """
     x = np.asarray(y, dtype=float)
 
+    # Check for NaN values (from padded sweeps in multi-file loading)
+    has_nan = np.isnan(x).any()
+
+    if has_nan:
+        # Find the valid (non-NaN) portion
+        valid_mask = ~np.isnan(x)
+        valid_indices = np.where(valid_mask)[0]
+
+        if len(valid_indices) == 0:
+            # All NaN - return as is
+            return x
+
+        # Get the contiguous valid region (assuming NaN padding is at the end)
+        first_valid = valid_indices[0]
+        last_valid = valid_indices[-1]
+
+        # Extract valid portion
+        x_valid = x[first_valid:last_valid + 1]
+
+        # Apply filters to valid portion only
+        x_filtered = _apply_filters_to_valid(
+            x_valid, sr_hz, use_low, low_hz, use_high, high_hz,
+            use_mean, mean_param, use_inv, order, mean_mode
+        )
+
+        # Reconstruct full array with NaN padding
+        result = np.full_like(x, np.nan)
+        result[first_valid:last_valid + 1] = x_filtered
+        return result
+    else:
+        # No NaN values - apply filters normally
+        return _apply_filters_to_valid(
+            x, sr_hz, use_low, low_hz, use_high, high_hz,
+            use_mean, mean_param, use_inv, order, mean_mode
+        )
+
+
+def _apply_filters_to_valid(
+    x: np.ndarray,
+    sr_hz: float,
+    use_low: bool, low_hz: float | None,
+    use_high: bool, high_hz: float | None,
+    use_mean: bool, mean_param: float | None,
+    use_inv: bool,
+    order: int,
+    mean_mode: str
+) -> np.ndarray:
+    """Helper function to apply filters to valid (non-NaN) data."""
     # 1) optional constant mean subtraction
     if use_mean and mean_param is not None and mean_mode == "const":
-        # expects a numeric DC value to subtract
         x = mean_subtract(x, float(mean_param))
 
-    # 2) HP/LP/BP (unchanged logic)
+    # 2) HP/LP/BP
     has_lp = use_low  and (low_hz  is not None)
     has_hp = use_high and (high_hz is not None)
 
@@ -227,8 +274,7 @@ def apply_all_1d(
         if float(high_hz) < float(low_hz):
             x = band_pass_1d(x, sr_hz, low_cut_hz=float(high_hz), high_cut_hz=float(low_hz), order=order)
         else:
-            # Graceful fallback if user enters overlapping/invalid cutoffs:
-            # apply sequential HP then LP (still yields a BP effect)
+            # Graceful fallback if user enters overlapping/invalid cutoffs
             x = high_pass_1d(x, sr_hz, cutoff_hz=float(high_hz), order=order)
             x = low_pass_1d(x,  sr_hz, cutoff_hz=float(low_hz),  order=order)
     elif has_hp:

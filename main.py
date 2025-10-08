@@ -14,6 +14,7 @@ import csv, json
 
 
 from pathlib import Path
+from typing import List
 import sys
 import os
 import numpy as np
@@ -394,14 +395,29 @@ class MainWindow(QMainWindow):
         if not Path(str(last_dir)).exists():
             last_dir = str(Path.home())
 
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select File", last_dir, "Data Files (*.abf *.smrx);;ABF Files (*.abf);;SMRX Files (*.smrx);;All Files (*.*)"
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select File(s)", last_dir, "Data Files (*.abf *.smrx);;ABF Files (*.abf);;SMRX Files (*.smrx);;All Files (*.*)"
         )
-        if not path:
+        if not paths:
             return
-        self.settings.setValue("last_dir", str(Path(path).parent))
-        self.BrowseFilePath.setText(path)
-        self.load_file(Path(path))
+
+        # Convert to Path objects
+        file_paths = [Path(p) for p in paths]
+
+        # Store the directory of the first file
+        self.settings.setValue("last_dir", str(file_paths[0].parent))
+
+        # Update UI with file info
+        if len(file_paths) == 1:
+            self.BrowseFilePath.setText(str(file_paths[0]))
+        else:
+            self.BrowseFilePath.setText(f"{len(file_paths)} files selected: {file_paths[0].name}, ...")
+
+        # Load single file or concatenate multiple files
+        if len(file_paths) == 1:
+            self.load_file(file_paths[0])
+        else:
+            self.load_multiple_files(file_paths)
 
     def load_file(self, path: Path):
         from PyQt6.QtWidgets import QProgressDialog, QApplication
@@ -439,6 +455,13 @@ class MainWindow(QMainWindow):
 
         st = self.state
         st.in_path = path
+        # Set file_info for single file (for consistency with multi-file loading)
+        n_sweeps = next(iter(sweeps_by_ch.values())).shape[1]
+        st.file_info = [{
+            'path': path,
+            'sweep_start': 0,
+            'sweep_end': n_sweeps - 1
+        }]
         st.sr_hz = sr
         st.sweeps = sweeps_by_ch
         st.channel_names = ch_names
@@ -515,6 +538,155 @@ class MainWindow(QMainWindow):
         self.plot_host.clear_saved_view("grid")  # fresh autoscale for grid
         self.plot_all_channels()
 
+    def load_multiple_files(self, file_paths: List[Path]):
+        """Load and concatenate multiple ABF files."""
+        from PyQt6.QtWidgets import QProgressDialog, QApplication, QMessageBox
+        from PyQt6.QtCore import Qt
+
+        # Validate files first
+        valid, messages = abf_io.validate_files_for_concatenation(file_paths)
+
+        if not valid:
+            # Show error dialog
+            QMessageBox.critical(self, "File Validation Failed", "\n".join(messages))
+            return
+        elif messages:  # Warnings
+            # Show warning dialog with option to proceed
+            reply = QMessageBox.question(
+                self,
+                "File Validation Warnings",
+                "The following warnings were detected:\n\n" + "\n".join(messages) + "\n\nDo you want to proceed anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+
+        # Create progress dialog
+        progress = QProgressDialog(f"Loading {len(file_paths)} files...", None, 0, 100, self)
+        progress.setWindowTitle("Loading Multiple Files")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)  # Show immediately
+        progress.setCancelButton(None)  # No cancel button
+        progress.setValue(0)
+        progress.show()
+        QApplication.processEvents()
+
+        def update_progress(current, total, message):
+            """Callback to update progress dialog."""
+            progress.setValue(current)
+            progress.setLabelText(message)
+            QApplication.processEvents()
+
+        try:
+            # Load and concatenate files
+            sr, sweeps_by_ch, ch_names, t, file_info = abf_io.load_and_concatenate_abf_files(
+                file_paths, progress_callback=update_progress
+            )
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "Load error", str(e))
+            return
+        finally:
+            progress.close()
+
+        # Update state (similar to load_file, but with file_info)
+        st = self.state
+        st.in_path = file_paths[0]  # Store first file path for display
+        st.file_info = file_info  # Store multi-file metadata
+        st.sr_hz = sr
+        st.sweeps = sweeps_by_ch
+        st.channel_names = ch_names
+        st.t = t
+        st.sweep_idx = 0
+        self._win_left = None
+
+        # Reset peak results and trace cache
+        if not hasattr(st, "peaks_by_sweep"):
+            st.peaks_by_sweep = {}
+            st.breath_by_sweep = {}
+        else:
+            st.peaks_by_sweep.clear()
+            self.state.sigh_by_sweep.clear()
+            st.breath_by_sweep.clear()
+            self.state.omitted_sweeps.clear()
+            self._refresh_omit_button_label()
+
+        # Clear global trace cache when loading new file
+        self._global_trace_cache = {}
+
+        # Reset Apply button and its enable logic
+        self.ApplyPeakFindPushButton.setEnabled(False)
+        self._maybe_enable_peak_apply()
+
+        # Fill combos safely (no signal during population)
+        self.AnalyzeChanSelect.blockSignals(True)
+        self.AnalyzeChanSelect.clear()
+        self.AnalyzeChanSelect.addItem("All Channels")  # First option for grid view
+        self.AnalyzeChanSelect.addItems(ch_names)
+        self.AnalyzeChanSelect.setCurrentIndex(0)  # default = "All Channels" (grid mode)
+        self.AnalyzeChanSelect.blockSignals(False)
+
+        self.StimChanSelect.blockSignals(True)
+        self.StimChanSelect.clear()
+        self.StimChanSelect.addItem("None")        # default
+        self.StimChanSelect.addItems(ch_names)
+        self.StimChanSelect.setCurrentIndex(0)     # select "None"
+        self.StimChanSelect.blockSignals(False)
+
+        #Clear peaks
+        self.state.peaks_by_sweep.clear()
+        self.state.sigh_by_sweep.clear()
+        self.state.breath_by_sweep.clear()
+
+        #Clear omitted sweeps
+        self.state.omitted_sweeps.clear()
+        self._refresh_omit_button_label()
+
+        # Start in grid mode (All Channels view)
+        st.analyze_chan = None  # None = grid mode showing all channels
+        self.single_panel_mode = False  # Start in grid mode
+
+        # No stim selected by default
+        st.stim_chan = None
+        st.stim_onsets_by_sweep.clear()
+        st.stim_offsets_by_sweep.clear()
+        st.stim_spans_by_sweep.clear()
+        st.stim_metrics_by_sweep.clear()
+
+        # Start in multi-panel (all channels) view
+        self.single_panel_mode = False
+        self.plot_host.clear_saved_view("grid")  # fresh autoscale for grid
+        self.plot_all_channels()
+
+        # Show success message with file info
+        total_sweeps = next(iter(sweeps_by_ch.values())).shape[1]
+
+        # Build file summary with padding information
+        file_lines = []
+        for i, info in enumerate(file_info):
+            line = f"  {i+1}. {info['path'].name}: sweeps {info['sweep_start']}-{info['sweep_end']}"
+            if info.get('padded', False):
+                orig_dur = info['original_samples'] / sr
+                padded_dur = info['padded_samples'] / sr
+                line += f" (padded: {orig_dur:.2f}s → {padded_dur:.2f}s)"
+            file_lines.append(line)
+
+        file_summary = "\n".join(file_lines)
+
+        # Check if any files were padded
+        padded_count = sum(1 for info in file_info if info.get('padded', False))
+
+        message = f"Loaded {len(file_paths)} files with {total_sweeps} total sweeps:\n\n{file_summary}"
+        if padded_count > 0:
+            message += f"\n\nNote: {padded_count} file(s) had different sweep lengths and were padded with NaN values."
+
+        QMessageBox.information(
+            self,
+            "Files Loaded Successfully",
+            message
+        )
+
     def _proc_key(self, chan: str, sweep: int):
         st = self.state
         return (
@@ -541,6 +713,22 @@ class MainWindow(QMainWindow):
             # No filtering in preview - show raw data to avoid distorting stimulus channels
             traces.append((st.t, y, ch_name))
 
+        # Build title with sweep and file info
+        title_parts = ["All channels"]
+        title_parts.append(f"sweep {s+1}")
+
+        # Add file info if multiple files loaded
+        if len(st.file_info) > 1:
+            # Find which file this sweep belongs to
+            for i, info in enumerate(st.file_info):
+                if info['sweep_start'] <= s <= info['sweep_end']:
+                    file_num = i + 1
+                    total_files = len(st.file_info)
+                    title_parts.append(f"file {file_num}/{total_files} ({info['path'].name})")
+                    break
+
+        title = " | ".join(title_parts)
+
         # Adaptive downsampling: only for very long traces
         # No downsampling for recordings < 100k samples (~100 seconds at 1kHz)
         # Use 50k points for longer recordings to maintain good visual quality
@@ -548,7 +736,7 @@ class MainWindow(QMainWindow):
 
         self.plot_host.show_multi_grid(
             traces,
-            title=f"All channels | sweep {s+1}",
+            title=title,
             max_points_per_trace=max_pts
         )
 
@@ -785,10 +973,28 @@ class MainWindow(QMainWindow):
                 t_plot = t
                 spans_plot = spans
 
+            # Build title with file info for multi-file loading
+            title_parts = [st.analyze_chan or '']
+
+            # Add sweep number
+            title_parts.append(f"sweep {s+1}")
+
+            # Add file info if multiple files loaded
+            if len(st.file_info) > 1:
+                # Find which file this sweep belongs to
+                for i, info in enumerate(st.file_info):
+                    if info['sweep_start'] <= s <= info['sweep_end']:
+                        file_num = i + 1
+                        total_files = len(st.file_info)
+                        title_parts.append(f"file {file_num}/{total_files} ({info['path'].name})")
+                        break
+
+            title = " | ".join(title_parts)
+
             # base trace
             self.plot_host.show_trace_with_spans(
                 t_plot, y, spans_plot,
-                title=f"{st.analyze_chan or ''} | sweep {s+1}",
+                title=title,
                 max_points=None,
                 ylabel=st.analyze_chan or "Signal"
             )
@@ -979,6 +1185,10 @@ class MainWindow(QMainWindow):
                     self._dim_axes_for_omitted(ax, label=True)
                     self.plot_host.fig.tight_layout()
                     self.plot_host.canvas.draw_idle()
+
+        else:
+            # Multi-channel grid mode - show all channels for current sweep
+            self.plot_all_channels()
 
 
     def _maybe_enable_peak_apply(self):

@@ -8,6 +8,7 @@ from typing import Optional, List, Dict, Tuple
 class AppState:
     # File & channels
     in_path: Optional[Path] = None
+    file_info: List[Dict] = field(default_factory=list)  # For multi-file concatenation: [{'path', 'sweep_start', 'sweep_end'}]
     channel_names: List[str] = field(default_factory=list)
     analyze_chan: Optional[str] = None
     stim_chan: Optional[str] = None
