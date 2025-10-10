@@ -40,9 +40,19 @@ class AppState:
 
     # Peaks & edits
     peaks_by_sweep: Dict[int, np.ndarray] = field(default_factory=dict)
+    breath_by_sweep: Dict[int, Dict] = field(default_factory=dict)  # sweep -> {'onsets', 'offsets', 'expmins', 'expoffs'}
+    sigh_by_sweep: Dict[int, np.ndarray] = field(default_factory=dict)  # sweep -> peak indices marked as sighs
     omitted_points: Dict[int, List[int]] = field(default_factory=dict)       # sweep -> sample idxs
     omitted_ranges: Dict[int, List[Tuple[int,int]]] = field(default_factory=dict)  # sweep -> [(i0,i1), ...]
+    omitted_sweeps: set = field(default_factory=set)  # set of sweep indices to exclude
+    sniff_regions_by_sweep: Dict[int, List[Tuple[float, float]]] = field(default_factory=dict)  # sweep -> [(start_time, end_time), ...]
 
+    # Y2 axis metrics
+    y2_metric_key: Optional[str] = None  # e.g., "if", "ti", "te", etc.
+    y2_values_by_sweep: Dict[int, np.ndarray] = field(default_factory=dict)  # sweep -> y2 metric values
+
+    # GMM clustering
+    gmm_sniff_probabilities: Dict[int, np.ndarray] = field(default_factory=dict)  # sweep -> probability of being sniff
 
     # Cached processed data (per sweep)
     proc_cache: Dict[Tuple[str,int], np.ndarray] = field(default_factory=dict)  # (chan, sweep) -> y
