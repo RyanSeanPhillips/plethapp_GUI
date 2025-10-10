@@ -1,0 +1,1046 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1073</width>
+    <height>858</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>PlethAnalysisApp V0.1</string>
+  </property>
+  <property name="windowIcon">
+   <iconset theme="applications-science"/>
+  </property>
+  <property name="autoFillBackground">
+   <bool>true</bool>
+  </property>
+  <property name="styleSheet">
+   <string notr="true"/>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <property name="styleSheet">
+    <string notr="true">QWidget {
+    background-color: #2b2b2b;
+    color: #f0f0f0;
+}
+
+QLineEdit, QTextEdit, QPlainTextEdit {
+    background-color: #3c3c3c;
+    color: #ffffff;
+    border: 1px solid #5a5a5a;
+}
+
+/* Buttons */
+QPushButton {
+    background-color: #444444;
+    color: #ffffff;
+    border: 1px solid #5a5a5a;
+    padding: 5px;
+}
+QPushButton:hover { background-color: #555555; }
+QPushButton:pressed { background-color: #333333; }
+
+/* Checkboxes */
+#centralwidget QCheckBox { color: #ffffff; }
+#centralwidget QCheckBox:disabled { color: #7f8899; }
+
+/* Combo boxes — match text boxes */
+#centralwidget QComboBox {
+    background-color: #3c3c3c;
+    color: #ffffff;
+    border: 1px solid #5a5a5a;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+#centralwidget QComboBox:hover {
+    background-color: #454545;   /* subtle hover */
+}
+#centralwidget QComboBox:disabled {
+    background-color: #2f2f2f;
+    color: #9a9a9a;
+    border-color: #4a4a4a;
+}
+
+/* Drop-down button area (kept slightly lighter so the default arrow is visible) */
+#centralwidget QComboBox::drop-down {
+    background: #4a4a4a;
+    border-left: 1px solid #5a5a5a;
+    width: 18px;
+}
+
+/* Popup list */
+#centralwidget QComboBox QAbstractItemView {
+    background: #3c3c3c;
+    color: #ffffff;
+    border: 1px solid #5a5a5a;
+    selection-background-color: #555555;
+    selection-color: #ffffff;
+    outline: 0;
+}
+
+/* If any combo is editable, make its inner editor match too */
+#centralwidget QComboBox QLineEdit {
+    background-color: #3c3c3c;
+    color: #ffffff;
+    border: none;
+}
+
+
+/* White outline for checkbox indicator (the little box) */
+#centralwidget QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #ffffff;    /* &lt;- white outline */
+    border-radius: 3px;           /* optional */
+    background: transparent;      /* keep your dark bg showing through */
+    margin-right: 6px;            /* space between box and label */
+}
+
+#centralwidget QCheckBox::indicator:hover {
+    border-color: #b6bfda;        /* softer hover hint */
+}
+
+#centralwidget QCheckBox::indicator:checked {
+    background: #0d6efd;          /* blue fill when checked (optional) */
+    border-color: #ffffff;        /* keep white outline when checked */
+}
+
+#centralwidget QCheckBox::indicator:disabled {
+    border-color: #7f8899;        /* muted outline when disabled */
+    background: transparent;
+}
+</string>
+   </property>
+   <layout class="QGridLayout" name="gridLayout">
+    <item row="10" column="8" rowspan="2" colspan="5">
+     <widget class="QPushButton" name="SnaptoWindowButton">
+      <property name="text">
+       <string>Go to Window View</string>
+      </property>
+     </widget>
+    </item>
+    <item row="9" column="20">
+     <widget class="QPushButton" name="deletePeaksButton">
+      <property name="styleSheet">
+       <string notr="true">QPushButton {
+    background-color: #d9534f;   /* normal red */
+    color: white;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+
+/* Hover state */
+QPushButton:hover {
+    background-color: #c9302c;   /* darker red */
+}
+
+/* Pressed/clicked state */
+QPushButton:pressed {
+    background-color: #a71d2a;   /* even darker red */
+}
+</string>
+      </property>
+      <property name="text">
+       <string>DELETE Peaks</string>
+      </property>
+     </widget>
+    </item>
+    <item row="5" column="4" colspan="2">
+     <widget class="QLineEdit" name="LowPassVal"/>
+    </item>
+    <item row="3" column="0">
+     <widget class="QLabel" name="AnalyzeLabel">
+      <property name="font">
+       <font>
+        <pointsize>11</pointsize>
+        <bold>false</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>Analyze:</string>
+      </property>
+     </widget>
+    </item>
+    <item row="4" column="0" colspan="11">
+     <widget class="QLabel" name="FilterLabel">
+      <property name="font">
+       <font>
+        <pointsize>12</pointsize>
+        <bold>true</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>Filer &amp; Data Channel Prepararation</string>
+      </property>
+     </widget>
+    </item>
+    <item row="9" column="12" colspan="5">
+     <widget class="QPushButton" name="NextWindowButton">
+      <property name="text">
+       <string>Next Window ▶</string>
+      </property>
+     </widget>
+    </item>
+    <item row="5" column="0" colspan="4">
+     <widget class="QCheckBox" name="LowPass_checkBox">
+      <property name="text">
+       <string>Low Pass (Hz):</string>
+      </property>
+     </widget>
+    </item>
+    <item row="7" column="5" colspan="4">
+     <widget class="QLabel" name="PeakProminenceLabel">
+      <property name="font">
+       <font>
+        <pointsize>11</pointsize>
+        <bold>false</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>Peak Prominence:</string>
+      </property>
+     </widget>
+    </item>
+    <item row="3" column="11" colspan="3">
+     <widget class="QLabel" name="StimChanSelectLabel">
+      <property name="font">
+       <font>
+        <pointsize>11</pointsize>
+        <bold>false</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>Stimulus Channel:</string>
+      </property>
+     </widget>
+    </item>
+    <item row="3" column="1" colspan="10">
+     <widget class="QComboBox" name="AnalyzeChanSelect">
+      <property name="styleSheet">
+       <string notr="true">/* Combo boxes — match text boxes */
+#centralwidget QComboBox {
+    background-color: #3c3c3c;
+    color: #ffffff;
+    border: 1px solid #5a5a5a;
+    padding: 2px 6px;
+    border-radius: 3px;
+    padding-right: 24px;              /* make room for the arrow */
+}
+
+#centralwidget QComboBox:hover {
+    background-color: #454545;        /* subtle hover */
+}
+
+#centralwidget QComboBox:disabled {
+    background-color: #2f2f2f;
+    color: #9a9a9a;
+    border-color: #4a4a4a;
+}
+
+/* Drop-down button area */
+#centralwidget QComboBox::drop-down {
+    background: #4a4a4a;
+    border-left: 1px solid #5a5a5a;
+    width: 24px;                      /* matches the padding-right above */
+}
+
+/* Visible light arrow (uses Qt’s built-in pixmap) */
+#centralwidget QComboBox::down-arrow {
+    image: url(:/qt-project.org/styles/commonstyle/images/arrowdown-16.png);
+    width: 12px;
+    height: 12px;
+    subcontrol-origin: padding;
+    subcontrol-position: center;
+}
+
+/* Pressed / open state nudges the arrow for feedback */
+#centralwidget QComboBox::down-arrow:on {
+    position: relative;
+    top: 1px;
+    left: 0px;
+}
+
+/* Optional: dim the arrow when disabled */
+#centralwidget QComboBox::down-arrow:disabled {
+    image: url(:/qt-project.org/styles/commonstyle/images/arrowdown-16.png);
+    /* Qt doesn't support opacity in QSS; rely on darker bg + disabled text color */
+}
+</string>
+      </property>
+      <item>
+       <property name="text">
+        <string>None</string>
+       </property>
+      </item>
+     </widget>
+    </item>
+    <item row="12" column="1" colspan="16">
+     <widget class="QComboBox" name="y2plot_dropdown"/>
+    </item>
+    <item row="6" column="0" colspan="11">
+     <widget class="QLabel" name="PeakDetectionLabel">
+      <property name="font">
+       <font>
+        <pointsize>12</pointsize>
+        <bold>true</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>Peak Detection</string>
+      </property>
+     </widget>
+    </item>
+    <item row="5" column="10">
+     <widget class="QLineEdit" name="HighPassVal"/>
+    </item>
+    <item row="0" column="0" colspan="4">
+     <widget class="QLabel" name="FileSelectionLabel">
+      <property name="font">
+       <font>
+        <pointsize>12</pointsize>
+        <bold>true</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>File Selection</string>
+      </property>
+     </widget>
+    </item>
+    <item row="5" column="11" colspan="4">
+     <widget class="QCheckBox" name="MeanSubtract_checkBox">
+      <property name="text">
+       <string>Mean Subtraction (s):</string>
+      </property>
+     </widget>
+    </item>
+    <item row="3" column="21">
+     <widget class="QPushButton" name="ApplyChanPushButton">
+      <property name="styleSheet">
+       <string notr="true">QPushButton#ApplyChanPushButton {
+    background-color: #0d6efd;   /* primary blue */
+    color: white;
+    border: 1px solid #0b5ed7;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+
+/* Hover */
+QPushButton#ApplyChanPushButton:hover {
+    background-color: #0b5ed7;
+}
+
+/* Pressed */
+QPushButton#ApplyChanPushButton:pressed {
+    background-color: #0a58ca;
+}
+
+/* Keyboard focus ring */
+QPushButton#ApplyChanPushButton:focus {
+    outline: none;
+    border: 2px solid #b6d4fe;   /* subtle focus ring */
+}
+
+/* Disabled */
+QPushButton#ApplyChanPushButton:disabled {
+    background-color: #9ec5fe;
+    border-color: #9ec5fe;
+    color: #eef4ff;
+}
+</string>
+      </property>
+      <property name="text">
+       <string>Apply</string>
+      </property>
+     </widget>
+    </item>
+    <item row="9" column="8" colspan="4">
+     <widget class="QPushButton" name="PrevWindowButton">
+      <property name="text">
+       <string>◀ Prev Window </string>
+      </property>
+     </widget>
+    </item>
+    <item row="12" column="22" colspan="2">
+     <widget class="QPushButton" name="SaveAnalyzedDataButton">
+      <property name="font">
+       <font>
+        <pointsize>12</pointsize>
+        <bold>true</bold>
+       </font>
+      </property>
+      <property name="autoFillBackground">
+       <bool>false</bool>
+      </property>
+      <property name="styleSheet">
+       <string notr="true">QPushButton#SaveAnalyzedDataButton {
+    background-color: #0d6efd;   /* primary blue */
+    color: white;
+    border: 1px solid #0b5ed7;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+
+/* Hover */
+QPushButton#SaveAnalyzedDataButton:hover {
+    background-color: #0b5ed7;
+}
+
+/* Pressed */
+QPushButton#SaveAnalyzedDataButton:pressed {
+    background-color: #0a58ca;
+}
+
+/* Keyboard focus ring */
+QPushButton#SaveAnalyzedDataButton:focus {
+    outline: none;
+    border: 2px solid #b6d4fe;   /* subtle focus ring */
+}
+
+/* Disabled */
+QPushButton#SaveAnalyzedDataButton:disabled {
+    background-color: #9ec5fe;
+    border-color: #9ec5fe;
+    color: #eef4ff;
+}
+</string>
+      </property>
+      <property name="text">
+       <string>Save Analyzed Data</string>
+      </property>
+     </widget>
+    </item>
+    <item row="9" column="4" colspan="3">
+     <widget class="QPushButton" name="NextSweepButton">
+      <property name="text">
+       <string>Next Sweep ▶</string>
+      </property>
+     </widget>
+    </item>
+    <item row="5" column="15" colspan="3">
+     <widget class="QLineEdit" name="MeanSubractVal"/>
+    </item>
+    <item row="10" column="16" colspan="2">
+     <widget class="QLabel" name="WindowRangeLabel">
+      <property name="font">
+       <font>
+        <pointsize>11</pointsize>
+        <bold>false</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>(s)</string>
+      </property>
+     </widget>
+    </item>
+    <item row="2" column="0" colspan="6">
+     <widget class="QLabel" name="ChannelSelectionLabel">
+      <property name="font">
+       <font>
+        <pointsize>12</pointsize>
+        <bold>true</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>Channel Selection</string>
+      </property>
+     </widget>
+    </item>
+    <item row="1" column="3" colspan="16">
+     <widget class="QLineEdit" name="BrowseFilePath"/>
+    </item>
+    <item row="7" column="18">
+     <widget class="QLabel" name="ThreshDirect">
+      <property name="font">
+       <font>
+        <pointsize>11</pointsize>
+        <bold>false</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>Direction:</string>
+      </property>
+     </widget>
+    </item>
+    <item row="9" column="17">
+     <widget class="Line" name="line_2">
+      <property name="lineWidth">
+       <number>2</number>
+      </property>
+      <property name="orientation">
+       <enum>Qt::Vertical</enum>
+      </property>
+     </widget>
+    </item>
+    <item row="7" column="0" colspan="2">
+     <widget class="QLabel" name="ThresholdLabel">
+      <property name="font">
+       <font>
+        <pointsize>11</pointsize>
+        <bold>false</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>Threshold:</string>
+      </property>
+     </widget>
+    </item>
+    <item row="10" column="0" rowspan="2" colspan="7">
+     <widget class="QPushButton" name="SnaptoSweepButton">
+      <property name="text">
+       <string>Go to Sweep View</string>
+      </property>
+     </widget>
+    </item>
+    <item row="8" column="0" colspan="24">
+     <widget class="QFrame" name="MainPlot">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <property name="frameShape">
+       <enum>QFrame::StyledPanel</enum>
+      </property>
+      <property name="frameShadow">
+       <enum>QFrame::Raised</enum>
+      </property>
+      <property name="lineWidth">
+       <number>3</number>
+      </property>
+     </widget>
+    </item>
+    <item row="3" column="14" colspan="7">
+     <widget class="QComboBox" name="StimChanSelect">
+      <item>
+       <property name="text">
+        <string>None</string>
+       </property>
+      </item>
+     </widget>
+    </item>
+    <item row="1" column="0" colspan="3">
+     <widget class="QPushButton" name="BrowseButton">
+      <property name="palette">
+       <palette>
+        <active>
+         <colorrole role="WindowText">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>255</red>
+            <green>255</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Button">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>13</red>
+            <green>110</green>
+            <blue>253</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Text">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>255</red>
+            <green>255</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="ButtonText">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>255</red>
+            <green>255</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Base">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>13</red>
+            <green>110</green>
+            <blue>253</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Window">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>13</red>
+            <green>110</green>
+            <blue>253</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="PlaceholderText">
+          <brush brushstyle="SolidPattern">
+           <color alpha="128">
+            <red>255</red>
+            <green>255</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+        </active>
+        <inactive>
+         <colorrole role="WindowText">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>255</red>
+            <green>255</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Button">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>13</red>
+            <green>110</green>
+            <blue>253</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Text">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>255</red>
+            <green>255</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="ButtonText">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>255</red>
+            <green>255</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Base">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>13</red>
+            <green>110</green>
+            <blue>253</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Window">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>13</red>
+            <green>110</green>
+            <blue>253</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="PlaceholderText">
+          <brush brushstyle="SolidPattern">
+           <color alpha="128">
+            <red>255</red>
+            <green>255</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+        </inactive>
+        <disabled>
+         <colorrole role="WindowText">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>238</red>
+            <green>244</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Button">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>158</red>
+            <green>197</green>
+            <blue>254</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Text">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>238</red>
+            <green>244</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="ButtonText">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>238</red>
+            <green>244</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Base">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>158</red>
+            <green>197</green>
+            <blue>254</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="Window">
+          <brush brushstyle="SolidPattern">
+           <color alpha="255">
+            <red>158</red>
+            <green>197</green>
+            <blue>254</blue>
+           </color>
+          </brush>
+         </colorrole>
+         <colorrole role="PlaceholderText">
+          <brush brushstyle="SolidPattern">
+           <color alpha="128">
+            <red>238</red>
+            <green>244</green>
+            <blue>255</blue>
+           </color>
+          </brush>
+         </colorrole>
+        </disabled>
+       </palette>
+      </property>
+      <property name="styleSheet">
+       <string notr="true">/* Only this button */
+QPushButton#BrowseButton {
+    background-color: #0d6efd;   /* primary blue */
+    color: white;
+    border: 1px solid #0b5ed7;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+
+/* Hover */
+QPushButton#BrowseButton:hover {
+    background-color: #0b5ed7;
+}
+
+/* Pressed */
+QPushButton#BrowseButton:pressed {
+    background-color: #0a58ca;
+}
+
+/* Keyboard focus ring */
+QPushButton#BrowseButton:focus {
+    outline: none;
+    border: 2px solid #b6d4fe;   /* subtle focus ring */
+}
+
+/* Disabled */
+QPushButton#BrowseButton:disabled {
+    background-color: #9ec5fe;
+    border-color: #9ec5fe;
+    color: #eef4ff;
+}
+</string>
+      </property>
+      <property name="text">
+       <string>Browse</string>
+      </property>
+     </widget>
+    </item>
+    <item row="7" column="11" colspan="5">
+     <widget class="QLabel" name="PeakDistanceLabel">
+      <property name="font">
+       <font>
+        <pointsize>11</pointsize>
+        <bold>false</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>Min Peak Distance (s):</string>
+      </property>
+     </widget>
+    </item>
+    <item row="5" column="18" colspan="2">
+     <widget class="QCheckBox" name="InvertSignal_checkBox">
+      <property name="styleSheet">
+       <string notr="true">/* Make all checkbox labels white */
+QCheckBox {
+    color: #ffffff;
+}
+
+/* Dim when disabled */
+QCheckBox:disabled {
+    color: #7f8899;
+}
+</string>
+      </property>
+      <property name="text">
+       <string>Invert Signal</string>
+      </property>
+     </widget>
+    </item>
+    <item row="9" column="18" colspan="2">
+     <widget class="QPushButton" name="addPeaksButton">
+      <property name="styleSheet">
+       <string notr="true">QPushButton {
+    background-color: #4CAF50;   /* normal (medium green) */
+    color: white;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+
+/* Hover state */
+QPushButton:hover {
+    background-color: #45a049;   /* darker green */
+}
+
+/* Pressed/clicked state */
+QPushButton:pressed {
+    background-color: #3e8e41;   /* even darker green */
+}
+</string>
+      </property>
+      <property name="text">
+       <string>ADD Peaks</string>
+      </property>
+     </widget>
+    </item>
+    <item row="7" column="19" colspan="2">
+     <widget class="QComboBox" name="PeakDetectionDirection">
+      <item>
+       <property name="text">
+        <string>Above</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Below</string>
+       </property>
+      </item>
+     </widget>
+    </item>
+    <item row="12" column="0">
+     <widget class="QLabel" name="y2plotlabel">
+      <property name="font">
+       <font>
+        <pointsize>12</pointsize>
+        <bold>true</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>y2 Plot:</string>
+      </property>
+     </widget>
+    </item>
+    <item row="9" column="7" rowspan="3">
+     <widget class="Line" name="line">
+      <property name="lineWidth">
+       <number>2</number>
+      </property>
+      <property name="orientation">
+       <enum>Qt::Vertical</enum>
+      </property>
+     </widget>
+    </item>
+    <item row="7" column="21">
+     <widget class="QPushButton" name="ApplyPeakFindPushButton">
+      <property name="styleSheet">
+       <string notr="true">QPushButton#ApplyPeakFindPushButton {
+    background-color: #0d6efd;   /* primary blue */
+    color: white;
+    border: 1px solid #0b5ed7;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+
+/* Hover */
+QPushButton#ApplyPeakFindPushButton:hover {
+    background-color: #0b5ed7;
+}
+
+/* Pressed */
+QPushButton#ApplyPeakFindPushButton:pressed {
+    background-color: #0a58ca;
+}
+
+/* Keyboard focus ring */
+QPushButton#ApplyPeakFindPushButton:focus {
+    outline: none;
+    border: 2px solid #b6d4fe;   /* subtle focus ring */
+}
+
+/* Disabled */
+QPushButton#ApplyPeakFindPushButton:disabled {
+    background-color: #9ec5fe;
+    border-color: #9ec5fe;
+    color: #eef4ff;
+}
+</string>
+      </property>
+      <property name="text">
+       <string>Apply</string>
+      </property>
+     </widget>
+    </item>
+    <item row="7" column="9" colspan="2">
+     <widget class="QLineEdit" name="PeakPromValue"/>
+    </item>
+    <item row="7" column="16" colspan="2">
+     <widget class="QLineEdit" name="MinPeakDistValue"/>
+    </item>
+    <item row="9" column="0" colspan="4">
+     <widget class="QPushButton" name="PrevSweepButton">
+      <property name="text">
+       <string>◀ Prev Sweep</string>
+      </property>
+     </widget>
+    </item>
+    <item row="5" column="6" colspan="4">
+     <widget class="QCheckBox" name="HighPass_checkBox">
+      <property name="text">
+       <string>High Pass (Hz):</string>
+      </property>
+     </widget>
+    </item>
+    <item row="10" column="13" rowspan="2" colspan="3">
+     <widget class="QLineEdit" name="WindowRangeValue"/>
+    </item>
+    <item row="7" column="2" colspan="3">
+     <widget class="QLineEdit" name="ThreshVal"/>
+    </item>
+    <item row="9" column="21">
+     <widget class="QPushButton" name="addSighButton">
+      <property name="styleSheet">
+       <string notr="true">QPushButton {
+    background-color: #ECEFF4;   /* light gray */
+    color: #1F2937;              /* dark text */
+    border: 1px solid #C7D0DD;   /* subtle border */
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+
+/* Hover state */
+QPushButton:hover {
+    background-color: #E2E8F0;   /* slightly darker gray */
+}
+
+/* Pressed/clicked state */
+QPushButton:pressed {
+    background-color: #CBD5E1;   /* darker gray */
+}
+</string>
+      </property>
+      <property name="text">
+       <string>ADD Sigh</string>
+      </property>
+      <property name="startHidden" stdset="0">
+       <bool>false</bool>
+      </property>
+     </widget>
+    </item>
+    <item row="10" column="22" colspan="2">
+     <widget class="QPushButton" name="ViewSummary_pushButton">
+      <property name="font">
+       <font>
+        <pointsize>12</pointsize>
+        <bold>true</bold>
+       </font>
+      </property>
+      <property name="text">
+       <string>View Summary</string>
+      </property>
+      <property name="startHidden" stdset="0">
+       <bool>false</bool>
+      </property>
+     </widget>
+    </item>
+   </layout>
+   <zorder>BrowseButton</zorder>
+   <zorder>MainPlot</zorder>
+   <zorder>PrevSweepButton</zorder>
+   <zorder>NextSweepButton</zorder>
+   <zorder>PrevWindowButton</zorder>
+   <zorder>NextWindowButton</zorder>
+   <zorder>addPeaksButton</zorder>
+   <zorder>deletePeaksButton</zorder>
+   <zorder>line</zorder>
+   <zorder>line_2</zorder>
+   <zorder>y2plot_dropdown</zorder>
+   <zorder>SaveAnalyzedDataButton</zorder>
+   <zorder>BrowseFilePath</zorder>
+   <zorder>y2plotlabel</zorder>
+   <zorder>FileSelectionLabel</zorder>
+   <zorder>ChannelSelectionLabel</zorder>
+   <zorder>AnalyzeLabel</zorder>
+   <zorder>AnalyzeChanSelect</zorder>
+   <zorder>StimChanSelect</zorder>
+   <zorder>StimChanSelectLabel</zorder>
+   <zorder>WindowRangeLabel</zorder>
+   <zorder>WindowRangeValue</zorder>
+   <zorder>SnaptoSweepButton</zorder>
+   <zorder>SnaptoWindowButton</zorder>
+   <zorder>FilterLabel</zorder>
+   <zorder>LowPassVal</zorder>
+   <zorder>LowPass_checkBox</zorder>
+   <zorder>HighPass_checkBox</zorder>
+   <zorder>HighPassVal</zorder>
+   <zorder>MeanSubtract_checkBox</zorder>
+   <zorder>InvertSignal_checkBox</zorder>
+   <zorder>PeakDetectionLabel</zorder>
+   <zorder>ThresholdLabel</zorder>
+   <zorder>ThreshVal</zorder>
+   <zorder>PeakPromValue</zorder>
+   <zorder>PeakProminenceLabel</zorder>
+   <zorder>MinPeakDistValue</zorder>
+   <zorder>PeakDistanceLabel</zorder>
+   <zorder>ThreshDirect</zorder>
+   <zorder>PeakDetectionDirection</zorder>
+   <zorder>MeanSubractVal</zorder>
+   <zorder>ApplyChanPushButton</zorder>
+   <zorder>ApplyPeakFindPushButton</zorder>
+   <zorder>addSighButton</zorder>
+   <zorder>ViewSummary_pushButton</zorder>
+  </widget>
+  <widget class="QMenuBar" name="menuBar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1073</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menuAnalyze">
+    <property name="title">
+     <string>Analyze</string>
+    </property>
+   </widget>
+   <widget class="QMenu" name="menuCurate_Data">
+    <property name="title">
+     <string>Curate Data</string>
+    </property>
+   </widget>
+   <addaction name="menuAnalyze"/>
+   <addaction name="menuCurate_Data"/>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

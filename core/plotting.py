@@ -229,12 +229,7 @@ class PlotHost(QWidget):
     #     self.ax_main = self.fig.add_subplot(111)
 
     #     # new Axes => any old scatter is invalid
-    #     self.clear_peaks()
     #     # Reset old overlay references (figure was cleared)
-    #     self.scatter_peaks = None
-    #     self.scatter_onsets = None
-    #     self.scatter_offsets = None
-    #     self.scatter_expmins = None
 
 
     #     tds, yds = self._downsample_even(t, y, max_points=max_points if max_points else len(t))
@@ -251,8 +246,8 @@ class PlotHost(QWidget):
     #     self.ax_main.grid(True, alpha=0.2)
 
     #     if prev_xlim is not None:
-    #         self.ax_main.set_xlim(prev_xlim)
     #     if prev_ylim is not None:
+    #         self.ax_main.set_xlim(prev_xlim)
     #         self.ax_main.set_ylim(prev_ylim)
 
     #     self._attach_limit_listeners([self.ax_main], mode="single")
@@ -326,11 +321,11 @@ class PlotHost(QWidget):
                 self._span_patches.append(p)
         self.canvas.draw_idle()
 
-    #     if self.scatter_peaks is not None:
     #         try:
-    #             self.scatter_peaks.remove()
     #         except Exception:
     #             pass
+    #     if self.scatter_peaks is not None:
+    #             self.scatter_peaks.remove()
     #         self.scatter_peaks = None
     #         self.canvas.draw_idle()
 
@@ -410,7 +405,6 @@ class PlotHost(QWidget):
             self.scatter_peaks = None
             self.canvas.draw_idle()
 
-    # def update_breath_markers(self,
     #                         t_on=None, y_on=None,
     #                         t_off=None, y_off=None,
     #                         t_exp=None, y_exp=None,
@@ -420,16 +414,12 @@ class PlotHost(QWidget):
     #     Offsets: orange triangles down
     #     Exp. min: blue squares
     #     """
-    #     if not self.fig.axes:
     #         return
+    # def update_breath_markers(self,
+    #     if not self.fig.axes:
     #     ax = self.fig.axes[0]
 
-    #     def _upd(scatter_attr, tx, ty, color, marker):
-    #         import numpy as np
-    #         pts = None
     #         if tx is not None and ty is not None and len(tx) > 0:
-    #             pts = np.column_stack([tx, ty])
-    #         sc = getattr(self, scatter_attr)
     #         if pts is None:
     #             if sc is not None:
     #                 try:
@@ -513,10 +503,10 @@ class PlotHost(QWidget):
         self.canvas.draw_idle()
 
 
-    # def add_or_update_y2(self, t, y2, label: str = "Y2", max_points: int | None = None):
     #     """Create/update a right-axis (Y2) line over the main trace."""
-    #     if not self.fig.axes:
     #         return
+    # def add_or_update_y2(self, t, y2, label: str = "Y2", max_points: int | None = None):
+    #     if not self.fig.axes:
     #     ax = self.fig.axes[0]
 
     #     # ensure twin axis exists
@@ -525,20 +515,8 @@ class PlotHost(QWidget):
     #         self.line_y2 = None
 
     #     # optional downsample
-    #     import numpy as np
-    #     from math import ceil
-    #     def _down(t_, y_, m):
-    #         if m is None or m <= 0 or len(t_) <= m:
-    #             return t_, y_
-    #         step = max(1, ceil(len(t_) / m))
-    #         return t_[::step], y_[::step]
 
-    #     tds, yds = _down(np.asarray(t), np.asarray(y2), max_points if max_points else len(t))
-    #     if self.line_y2 is None or self.line_y2.axes is not self.ax_y2:
-    #         (self.line_y2,) = self.ax_y2.plot(tds, yds, linewidth=1.0)
-    #         self.ax_y2.set_ylabel(label)
     #     else:
-    #         self.line_y2.set_data(tds, yds)
 
     #     self.canvas.draw_idle()
 
@@ -614,20 +592,20 @@ class PlotHost(QWidget):
         self._external_click_cb = None
 
 
-    # def _on_button(self, event):
     #     if event.inaxes is None:
     #         return
+    # def _on_button(self, event):
 
     #     # Forward single left-clicks to external callback if present
-    #     if (self._external_click_cb is not None) and (event.button == 1) and (not event.dblclick):
     #         # event.xdata / event.ydata are in data coords for the clicked Axes
-    #         self._external_click_cb(event.xdata, event.ydata, event)
     #         return
+    #     if (self._external_click_cb is not None) and (event.button == 1) and (not event.dblclick):
+    #         self._external_click_cb(event.xdata, event.ydata, event)
 
     #     # Keep your existing double-click autoscale behavior
     #     if event.dblclick:
-    #         ax = event.inaxes
     #         ax.autoscale()
+    #         ax = event.inaxes
     #         self.canvas.draw_idle()
     #         self._store_from_axes(mode=("single" if len(self.fig.axes) == 1 else "grid"))
 
@@ -650,10 +628,10 @@ class PlotHost(QWidget):
 
 
 
-    # def update_sighs(self, t, y, size=140, offset_frac=0.03):
     #     """Draw yellow stars slightly above given (t,y) points."""
-    #     if not self.fig.axes:
     #         return
+    # def update_sighs(self, t, y, size=140, offset_frac=0.03):
+    #     if not self.fig.axes:
     #     ax = self.fig.axes[0]
 
     #     # compute small vertical offset relative to current y-span
@@ -661,8 +639,6 @@ class PlotHost(QWidget):
     #     dy = (ymax - ymin) * float(offset_frac if offset_frac is not None else 0.03)
     #     y_plot = (np.asarray(y, dtype=float) + dy)
 
-    #     if self.scatter_sighs is None or self.scatter_sighs.axes is not ax:
-    #         self.scatter_sighs = ax.scatter(
     #             np.asarray(t, dtype=float),
     #             y_plot,
     #             s=size,
@@ -674,41 +650,36 @@ class PlotHost(QWidget):
     #             clip_on=False,
     #         )
     #     else:
+    #     if self.scatter_sighs is None or self.scatter_sighs.axes is not ax:
+    #         self.scatter_sighs = ax.scatter(
     #         self.scatter_sighs.set_offsets(np.c_[np.asarray(t, dtype=float), y_plot])
 
     #     # keep stars “above” even if limits change later
     #     ax.figure.canvas.draw_idle()
 
-    # def clear_sighs(self):
-    #     if self.scatter_sighs is not None:
     #         try:
-    #             self.scatter_sighs.remove()
     #         except Exception:
     #             pass
-    #         self.scatter_sighs = None
-    #         if self.fig:
-    #             self.fig.canvas.draw_idle()
 
 
 
-    # def update_sighs(self, t, y, size=90, color="#f7c948"):
     #     """
     #     Draw star markers at given points on the main axis.
     #     """
-    #     if not hasattr(self, "fig") or not self.fig.axes:
     #         return
+    # def update_sighs(self, t, y, size=90, color="#f7c948"):
+    #     if not hasattr(self, "fig") or not self.fig.axes:
     #     ax = self.fig.axes[0]
 
     #     # remove previous
     #     try:
-    #         if self._sigh_artist is not None:
-    #             self._sigh_artist.remove()
     #     except Exception:
     #         pass
+    #         if self._sigh_artist is not None:
+    #             self._sigh_artist.remove()
     #     self._sigh_artist = None
 
     #     # draw hollow star for visibility over traces
-    #     self._sigh_artist = ax.scatter(
     #         t, y,
     #         marker="*",
     #         s=size,
@@ -717,6 +688,7 @@ class PlotHost(QWidget):
     #         linewidths=1.8,
     #         zorder=7,
     #     )
+    #     self._sigh_artist = ax.scatter(
     #     self.canvas.draw_idle()
 
 

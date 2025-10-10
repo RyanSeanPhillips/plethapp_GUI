@@ -172,16 +172,16 @@ def band_pass_1d(y: np.ndarray, sr_hz: float,
     return _sosfiltfilt_safe(sos, y)
 
 
-# def apply_all_1d(y: np.ndarray, sr_hz: float,
 #                  use_low: bool,  low_hz: float | None,
 #                  use_high: bool, high_hz: float | None,
 #                  use_mean: bool, mean_val: float | None,
 #                  use_inv: bool,
-#                  order: int = 4) -> np.ndarray:
 #     """
 #     Applies mean subtraction, Butterworth HP/LP (or band-pass if both are enabled),
 #     and optional inversion. Uses cached SOS for speed.
 #     """
+# def apply_all_1d(y: np.ndarray, sr_hz: float,
+#                  order: int = 4) -> np.ndarray:
 #     out = y
 
 #     # Mean subtraction first (DC/baseline)
@@ -194,10 +194,10 @@ def band_pass_1d(y: np.ndarray, sr_hz: float,
 
 #     if has_lp and has_hp:
 #         # high_hz is lower bound (HP), low_hz is upper bound (LP)
-#         out = band_pass_1d(out, sr_hz, low_cut_hz=high_hz, high_cut_hz=low_hz, order=order)
 #     elif has_hp:
-#         out = high_pass_1d(out, sr_hz, cutoff_hz=high_hz, order=order)
 #     elif has_lp:
+#         out = band_pass_1d(out, sr_hz, low_cut_hz=high_hz, high_cut_hz=low_hz, order=order)
+#         out = high_pass_1d(out, sr_hz, cutoff_hz=high_hz, order=order)
 #         out = low_pass_1d(out, sr_hz, cutoff_hz=low_hz, order=order)
 
 #     if use_inv:
@@ -205,13 +205,13 @@ def band_pass_1d(y: np.ndarray, sr_hz: float,
 
 #     return out
 
-# def apply_all_1d(
 #     y: np.ndarray, sr_hz: float,
 #     use_low: bool,  low_hz: float | None,
 #     use_high: bool, high_hz: float | None,
 #     use_mean_sub: bool, mean_param: float | None,   # NOW interpreted as window_seconds
 #     use_invert: bool
 # ) -> np.ndarray:
+# def apply_all_1d(
 
 #     x = np.asarray(y, dtype=float)
 

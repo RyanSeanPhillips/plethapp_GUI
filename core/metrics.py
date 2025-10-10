@@ -157,31 +157,21 @@ def _robust_cycle_bounds(onsets, offsets, peaks, i, N):
 ################################################################################
 #####IF Calculation
 ################################################################################
-# def compute_if(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np.ndarray:
 #     """
 #     Instantaneous frequency as a stepwise signal (breaths/min).
 #     Prefer onset→onset cycle times; fall back to peak→peak if onsets unavailable.
 #     """
+# def compute_if(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np.ndarray:
 #     N = len(y)
 #     out = np.full(N, np.nan, dtype=float)
 
 #     # choose cycle boundaries
-#     bounds = None
-#     if onsets is not None and len(onsets) >= 2:
-#         bounds = np.asarray(onsets, dtype=int)
-#     elif peaks is not None and len(peaks) >= 2:
-#         bounds = np.asarray(peaks, dtype=int)
 
 #     if bounds is None or len(bounds) < 2:
 #         return out  # not enough info
 
 #     # compute BPM for each cycle
-#     vals = []
-#     spans = _spans_from_bounds(bounds, N)
 #     for i in range(len(bounds) - 1):
-#         i0, i1 = int(bounds[i]), int(bounds[i + 1])
-#         dt = float(t[i1] - t[i0])
-#         bpm = 60.0 / dt if dt > 0 else np.nan
 #         vals.append(bpm)
 #     # extend last span with last BPM value
 #     vals.append(vals[-1] if len(vals) else np.nan)
@@ -370,12 +360,12 @@ def compute_area_insp(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None
 #####Exp Area Calculation
 ################################################################################
 
-# def compute_area_exp(t, y, sr_hz, peaks, onsets, offsets, expmins) -> np.ndarray:
 #     """
 #     Expiratory area per cycle: integral of y from offset -> next onset.
 #     Returns a stepwise-constant array over onset→next-onset spans.
 #     If offset is missing for a cycle, that cycle is NaN.
 #     """
+# def compute_area_exp(t, y, sr_hz, peaks, onsets, offsets, expmins) -> np.ndarray:
 #     N = len(y)
 #     out = np.full(N, np.nan, dtype=float)
 
@@ -387,29 +377,29 @@ def compute_area_insp(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None
 
 #     spans = _spans_from_bounds(on, N)
 
-#     vals: list[float] = []
 #     for i in range(len(on) - 1):
+#     vals: list[float] = []
 #         i0 = int(on[i])
 #         i1 = int(on[i + 1])
 
-#         if i >= len(off):
 #             vals.append(np.nan)
 #             continue
+#         if i >= len(off):
 #         oi = int(off[i])
 
 #         # Guard: offset must lie within [i0, i1)
-#         if not (i0 <= oi < i1):
 #             vals.append(np.nan)
 #             continue
+#         if not (i0 <= oi < i1):
 
 #         # Trapezoid integral over [oi, i1]
-#         left = max(0, oi)
-#         right = min(N, i1 + 1)
 #         if right - left < 2:
 #             vals.append(np.nan)
 #             continue
-#         area = float(np.trapz(y[left:right], t[left:right]))
 #         vals.append(area)
+#         left = max(0, oi)
+#         right = min(N, i1 + 1)
+#         area = float(np.trapz(y[left:right], t[left:right]))
 
 #     # Extend last span with last value
 #     vals.append(vals[-1] if len(vals) else np.nan)
@@ -570,12 +560,12 @@ def compute_ti(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np
 ################################################################################
 #####Te Calculation
 ################################################################################
-# def compute_te(t, y, sr_hz, peaks, onsets, offsets, expmins) -> np.ndarray:
 #     """
 #     Te duration per cycle (seconds): time from offset -> next onset.
 #     Returns a stepwise-constant array over onset→next-onset spans.
 #     If no valid offset for a cycle, that cycle is NaN.
 #     """
+# def compute_te(t, y, sr_hz, peaks, onsets, offsets, expmins) -> np.ndarray:
 #     N = len(y)
 #     out = np.full(N, np.nan, dtype=float)
 
@@ -587,23 +577,23 @@ def compute_ti(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np
 
 #     spans = _spans_from_bounds(on, N)
 
-#     vals: list[float] = []
 #     for i in range(len(on) - 1):
+#     vals: list[float] = []
 #         i0 = int(on[i])
 #         i1 = int(on[i + 1])
 
-#         if i >= len(off):
 #             vals.append(np.nan)
 #             continue
+#         if i >= len(off):
 #         oi = int(off[i])
 
 #         # offset must lie in [i0, i1)
-#         if not (i0 <= oi < i1):
 #             vals.append(np.nan)
 #             continue
+#         if not (i0 <= oi < i1):
 
-#         dt = float(t[i1] - t[oi])
 #         vals.append(dt if dt > 0 else np.nan)
+#         dt = float(t[i1] - t[oi])
 
 #     # extend last span to N with last value
 #     vals.append(vals[-1] if len(vals) else np.nan)
@@ -1315,8 +1305,8 @@ METRICS: Dict[str, Callable] = {
 # Optional: Enable robust metrics mode
 # Uncomment the following lines to use enhanced robust metrics with fallback strategies
 # try:
-#     from core.robust_metrics import enhance_metrics_with_robust_fallbacks
-#     METRICS = enhance_metrics_with_robust_fallbacks(METRICS)
 #     print("Enhanced metrics with robust fallbacks enabled.")
 # except ImportError:
 #     print("Robust metrics module not available. Using standard metrics.")
+#     from core.robust_metrics import enhance_metrics_with_robust_fallbacks
+#     METRICS = enhance_metrics_with_robust_fallbacks(METRICS)

@@ -5,6 +5,7 @@ PyQt6>=6.4.0
 numpy>=1.21.0
 pandas>=1.5.0
 scipy>=1.9.0
+scikit-learn>=1.0.0  # For GMM breath clustering
 
 # Plotting
 matplotlib>=3.6.0

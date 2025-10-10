@@ -1475,13 +1475,13 @@ class MainWindow(QMainWindow):
         axes = fig.axes[:1] if getattr(self, "single_panel_mode", False) else fig.axes[:1]
 
         for ax in axes:
-            # line = ax.axhline(
             #     y,
             #     linestyle=(0, (5, 5)),  # dashed
             #     linewidth=1.2,
             #     alpha=0.9,
             #     zorder=5,
             # )
+            # line = ax.axhline(
             line = ax.axhline(
                 y,
                 color="red",              # make it red
@@ -2477,28 +2477,17 @@ class MainWindow(QMainWindow):
     ##################################################
     ##ADD Peaks Button##
     ##################################################
-    # def on_add_peaks_toggled(self, checked: bool):
     #     """Enter/exit Add Peaks mode, mutually exclusive with Delete mode."""
+    # def on_add_peaks_toggled(self, checked: bool):
     #     self._add_peaks_mode = checked
 
     #     if checked:
     #         # Turn OFF delete mode visually and internally, without triggering its slot.
     #         if getattr(self, "_delete_peaks_mode", False):
-    #             self._delete_peaks_mode = False
-    #             self.deletePeaksButton.blockSignals(True)
-    #             self.deletePeaksButton.setChecked(False)
-    #             self.deletePeaksButton.blockSignals(False)
-    #             self.deletePeaksButton.setText("Delete Peaks")
 
-    #         self.addPeaksButton.setText("Add Peaks (ON)")
-    #         self.plot_host.set_click_callback(self._on_plot_click_add_peak)
-    #         self.plot_host.setCursor(Qt.CursorShape.CrossCursor)
     #     else:
-    #         self.addPeaksButton.setText("Add Peaks")
     #         # Only clear callbacks/cursor if no other edit mode is active
     #         if not getattr(self, "_delete_peaks_mode", False):
-    #             self.plot_host.clear_click_callback()
-    #             self.plot_host.setCursor(Qt.CursorShape.ArrowCursor)
 
     def on_add_peaks_toggled(self, checked: bool):
         self._add_peaks_mode = checked
@@ -2723,28 +2712,17 @@ class MainWindow(QMainWindow):
             self.redraw_main_plot()
 
     
-    # def on_delete_peaks_toggled(self, checked: bool):
     #     """Enter/exit Delete Peaks mode, mutually exclusive with Add mode."""
+    # def on_delete_peaks_toggled(self, checked: bool):
     #     self._delete_peaks_mode = checked
 
     #     if checked:
     #         # Turn OFF add mode visually and internally, without triggering its slot.
     #         if getattr(self, "_add_peaks_mode", False):
-    #             self._add_peaks_mode = False
-    #             self.addPeaksButton.blockSignals(True)
-    #             self.addPeaksButton.setChecked(False)
-    #             self.addPeaksButton.blockSignals(False)
-    #             self.addPeaksButton.setText("Add Peaks")
 
-    #         self.deletePeaksButton.setText("Delete Peaks (ON)")
-    #         self.plot_host.set_click_callback(self._on_plot_click_delete_peak)
-    #         self.plot_host.setCursor(Qt.CursorShape.CrossCursor)
     #     else:
-    #         self.deletePeaksButton.setText("Delete Peaks")
     #         # Only clear callbacks/cursor if no other edit mode is active
     #         if not getattr(self, "_add_peaks_mode", False):
-    #             self.plot_host.clear_click_callback()
-    #             self.plot_host.setCursor(Qt.CursorShape.ArrowCursor)
 
     def on_delete_peaks_toggled(self, checked: bool):
         self._delete_peaks_mode = checked
@@ -2892,78 +2870,55 @@ class MainWindow(QMainWindow):
             self.redraw_main_plot()
 
 
-    # def on_add_sigh_toggled(self, checked: bool):
     #     """Enter/exit Add Sigh mode; mutually exclusive with Add/Delete Peaks modes."""
+    # def on_add_sigh_toggled(self, checked: bool):
     #     self._add_sigh_mode = checked
 
     #     if checked:
     #         # Turn OFF other edit modes visually and internally (no signal storms)
     #         if getattr(self, "_add_peaks_mode", False):
-    #             self._add_peaks_mode = False
-    #             self.addPeaksButton.blockSignals(True)
-    #             self.addPeaksButton.setChecked(False)
-    #             self.addPeaksButton.blockSignals(False)
-    #             self.addPeaksButton.setText("Add Peaks")
 
     #         if getattr(self, "_delete_peaks_mode", False):
-    #             self._delete_peaks_mode = False
-    #             self.deletePeaksButton.blockSignals(True)
-    #             self.deletePeaksButton.setChecked(False)
-    #             self.deletePeaksButton.blockSignals(False)
-    #             self.deletePeaksButton.setText("Delete Peaks")
 
-    #         self.addSighButton.setText("Add Sigh (ON)")
-    #         self.plot_host.set_click_callback(self._on_plot_click_add_sigh)
-    #         self.plot_host.setCursor(Qt.CursorShape.CrossCursor)
     #     else:
-    #         self.addSighButton.setText("Add Sigh")
     #         # Only clear callbacks/cursor if no other edit mode is active
     #         if not getattr(self, "_add_peaks_mode", False) and not getattr(self, "_delete_peaks_mode", False):
-    #             self.plot_host.clear_click_callback()
-    #             self.plot_host.setCursor(Qt.CursorShape.ArrowCursor)
 
 
-    # def _on_plot_click_add_sigh(self, xdata, ydata, event):
     #     """Add a sigh marker at the nearest breath-midpoint/peak/sample on the current sweep."""
     #     if not getattr(self, "_add_sigh_mode", False):
     #         return
     #     if event.inaxes is None or xdata is None:
     #         return
+    # def _on_plot_click_add_sigh(self, xdata, ydata, event):
 
-    #     import numpy as np
-    #     st = self.state
     #     if st.t is None or st.analyze_chan not in st.sweeps:
     #         return
+    #     import numpy as np
+    #     st = self.state
 
     #     # Current sweep + processed trace (what's displayed)
-    #     s = max(0, min(st.sweep_idx, self._sweep_count() - 1))
-    #     t, y = self._current_trace()
     #     if t is None or y is None:
     #         return
+    #     s = max(0, min(st.sweep_idx, self._sweep_count() - 1))
+    #     t, y = self._current_trace()
 
     #     # Match the plotted time basis (stim-normalized if present)
-    #     spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
     #     if st.stim_chan and spans:
+    #     else:
+    #     spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
     #         t0 = spans[0][0]
     #         t_plot = t - t0
-    #     else:
     #         t_plot = t
 
     #     # Start at nearest time index to the click
     #     i_click = int(np.clip(np.searchsorted(t_plot, float(xdata)), 0, len(t_plot) - 1))
 
     #     # Prefer snapping to breath "midpoints" if we have breaths
-    #     target_idx = i_click
-    #     br = st.breath_by_sweep.get(s, None)
-    #     if br is not None and "onsets" in br and len(br["onsets"]) >= 2:
-    #         on = np.asarray(br["onsets"], dtype=int)
-    #         mids = (on[:-1] + on[1:]) // 2
-    #         j = int(np.argmin(np.abs(mids - i_click)))
-    #         target_idx = int(mids[j])
     #     else:
     #         # Else snap to nearest detected peak if available
-    #         pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
     #         if pks.size:
+    #         pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
     #             j = int(np.argmin(np.abs(pks - i_click)))
     #             target_idx = int(pks[j])
 
@@ -2977,11 +2932,8 @@ class MainWindow(QMainWindow):
     #         self.redraw_main_plot()
 
 
-    # def _update_sigh_artists(self, t_plot, y, sweep_idx: int):
     #     """(Re)draw star markers for currently stored sighs (current sweep only)."""
     #     # Clear existing artists
-    #     fig = getattr(self.plot_host, "fig", None)
-    #     canvas = getattr(self.plot_host, "canvas", None)
     #     if fig is None or canvas is None or not fig.axes:
     #         return
     #     for art in getattr(self, "_sigh_artists", []):
@@ -2989,28 +2941,30 @@ class MainWindow(QMainWindow):
     #             art.remove()
     #         except Exception:
     #             pass
+    # def _update_sigh_artists(self, t_plot, y, sweep_idx: int):
+    #     fig = getattr(self.plot_host, "fig", None)
+    #     canvas = getattr(self.plot_host, "canvas", None)
     #     self._sigh_artists = []
 
     #     # Nothing to draw?
+    #         canvas.draw_idle()
+    #         return
     #     s = int(sweep_idx)
     #     sighs = self.state.sigh_by_sweep.get(s, None)
     #     if sighs is None or len(sighs) == 0:
+
     #         canvas.draw_idle()
     #         return
-
     #     import numpy as np
     #     sighs = np.asarray(sighs, dtype=int)
     #     sighs = sighs[(sighs >= 0) & (sighs < len(y))]
     #     if sighs.size == 0:
-    #         canvas.draw_idle()
-    #         return
 
     #     ax = fig.axes[0]
     #     t_s = t_plot[sighs]
     #     y_s = y[sighs]
 
     #     # Star markers (low-profile but visible)
-    #     sc = ax.scatter(
     #         t_s, y_s,
     #         marker="*",
     #         s=90,               # marker size (points^2)
@@ -3019,8 +2973,9 @@ class MainWindow(QMainWindow):
     #         facecolors="#ffcc66",
     #         zorder=7,
     #     )
-    #     self._sigh_artists.append(sc)
     #     canvas.draw_idle()
+    #     sc = ax.scatter(
+    #     self._sigh_artists.append(sc)
 
     # def on_add_sigh_toggled(self, checked: bool):
     #     self._add_sigh_mode = checked
@@ -3028,28 +2983,12 @@ class MainWindow(QMainWindow):
     #     # make it mutually exclusive with add/delete peaks modes
     #     if checked:
     #         if getattr(self, "_add_peaks_mode", False):
-    #             self._add_peaks_mode = False
-    #             self.addPeaksButton.blockSignals(True)
-    #             self.addPeaksButton.setChecked(False)
-    #             self.addPeaksButton.blockSignals(False)
-    #             self.addPeaksButton.setText("Add Peaks")
 
     #         if getattr(self, "_delete_peaks_mode", False):
-    #             self._delete_peaks_mode = False
-    #             self.deletePeaksButton.blockSignals(True)
-    #             self.deletePeaksButton.setChecked(False)
-    #             self.deletePeaksButton.blockSignals(False)
-    #             self.deletePeaksButton.setText("Delete Peaks")
 
-    #         self.addSighButton.setText("Add Sigh (ON)")
-    #         self.plot_host.set_click_callback(self._on_plot_click_add_sigh)
-    #         self.plot_host.setCursor(Qt.CursorShape.CrossCursor)
     #     else:
-    #         self.addSighButton.setText("Add Sigh")
     #         # release the click handler only if no other edit mode active
     #         if not getattr(self, "_add_peaks_mode", False) and not getattr(self, "_delete_peaks_mode", False):
-    #             self.plot_host.clear_click_callback()
-    #             self.plot_host.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _on_plot_click_add_sigh(self, xdata, ydata, event, _force_mode=None):
         # Only in sigh mode or force mode is 'sigh'
@@ -6487,15 +6426,9 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         post_mask     = t > t1
         return baseline_mask, stim_mask, post_mask
 
-    # def _nanmean_sem(self, X: np.ndarray, axis: int = 0):
     #     """Return (nanmean, nansem) along axis; SEM uses ddof=1 where n>=2 else NaN."""
     #     with np.errstate(invalid="ignore"):
-    #         mean = np.nanmean(X, axis=axis)
-    #         n    = np.sum(np.isfinite(X), axis=axis)
     #         # std with ddof=1; guard n<2
-    #         std  = np.nanstd(X, axis=axis, ddof=1)
-    #         sem  = np.where(n >= 2, std / np.sqrt(n), np.nan)
-    #     return mean, sem
 
     def _nanmean_sem(self, X, axis=0):
         """
@@ -6549,7 +6482,6 @@ GMM is an unsupervised machine learning technique that automatically identifies 
 
 
 
-    # def _export_all_analyzed_data(self):
     #     """
     #     Save:
     #     1) <base>_bundle.npz  (downsampled Y_proc + y2 traces, peaks/breaths, stim spans, meta)
@@ -6559,35 +6491,22 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         + appended duplicate blocks with normalized values (all headers suffixed *_norm)
     #     4) <base>_summary.pdf  (figure; unchanged here)
     #     """
-    #     st = self.state
     #     if not getattr(self, "_save_dir", None) or not getattr(self, "_save_base", None):
     #         QMessageBox.warning(self, "Save analyzed data", "Choose a save location/name first.")
     #         return
     #     if st.t is None or not st.analyze_chan or st.analyze_chan not in st.sweeps:
     #         QMessageBox.warning(self, "Save analyzed data", "No analyzed data available.")
     #         return
+    # def _export_all_analyzed_data(self):
+    #     st = self.state
 
     #     import numpy as np, csv, json
     #     from PyQt6.QtCore import Qt
     #     from PyQt6.QtWidgets import QApplication
 
     #     # ---------- knobs ----------
-    #     DS_TARGET_HZ    = 50.0
-    #     CSV_FLUSH_EVERY = 2000
-    #     INCLUDE_TRACES  = bool(getattr(self, "_csv_include_traces", True))
-    #     # normalization window (seconds before t=0); override via self._norm_window_s if you like
-    #     NORM_BASELINE_WINDOW_S = float(getattr(self, "_norm_window_s", 10.0))
-    #     EPS_BASE = 1e-12  # avoid divide-by-zero
 
     #     # ---------- basics ----------
-    #     # any_ch   = next(iter(st.sweeps.values()))
-    #     # n_sweeps = any_ch.shape[1]
-    #     # N        = len(st.t)
-    #     any_ch   = next(iter(st.sweeps.values()))
-    #     n_sweeps = any_ch.shape[1]
-    #     kept_sweeps = [s for s in range(n_sweeps) if s not in st.omitted_sweeps]
-    #     S = len(kept_sweeps)
-    #     if S == 0:
     #         QMessageBox.warning(self, "Save analyzed data", "All sweeps are omitted. Nothing to save.")
     #         return
 
@@ -6598,19 +6517,9 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     M       = len(ds_idx)
 
     #     # Global stim zero and duration (union across ALL sweeps)
-    #     global_s0, global_s1 = None, None
     #     if st.stim_chan:
     #         for s in range(n_sweeps):
-    #             spans = st.stim_spans_by_sweep.get(s, [])
     #             if spans:
-    #                 starts = [a for (a, _) in spans]
-    #                 ends   = [b for (_, b) in spans]
-    #                 m0 = float(min(starts))
-    #                 m1 = float(max(ends))
-    #                 global_s0 = m0 if global_s0 is None else min(global_s0, m0)
-    #                 global_s1 = m1 if global_s1 is None else max(global_s1, m1)
-    #     have_global_stim = (global_s0 is not None and global_s1 is not None)
-    #     global_dur = (global_s1 - global_s0) if have_global_stim else None
 
     #     # Time for NPZ (raw) and for CSV (normalized to global_s0 if present)
     #     t_ds_raw = st.t[ds_idx]
@@ -6629,17 +6538,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
 
     #     # ---------- fill per-sweep ----------
     #     # for s in range(n_sweeps):
-    #     #     y_proc = self._get_processed_for(st.analyze_chan, s)
     #     #     Y_full_by_sweep.append(y_proc)
+    #     #     y_proc = self._get_processed_for(st.analyze_chan, s)
     #     #     Y_proc_ds[:, s] = y_proc[ds_idx]
 
-    #     #     pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-    #     #     br  = st.breath_by_sweep.get(s, None)
     #     #     if br is None and pks.size:
-    #     #         br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
-    #     #         st.breath_by_sweep[s] = br
     #     #     if br is None:
-    #     #         br = {
     #     #             "onsets":  np.array([], dtype=int),
     #     #             "offsets": np.array([], dtype=int),
     #     #             "expmins": np.array([], dtype=int),
@@ -6653,20 +6557,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     #     exo_by_sweep.append(np.asarray(br.get("expoffs", []), dtype=int))
 
     #     #     for k in all_keys:
-    #     #         y2 = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
-    #     #         if y2 is not None and len(y2) == N:
-    #     #             y2_ds_by_key[k][:, s] = y2[ds_idx]
     #     for col, s in enumerate(kept_sweeps):
-    #         y_proc = self._get_processed_for(st.analyze_chan, s)
-    #         Y_proc_ds[:, col] = y_proc[ds_idx]
-    #         pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-    #         br  = st.breath_by_sweep.get(s, None)
     #         if br is None and pks.size:
+    #         if br is None:
+    #                 "expmins": np.array([], dtype=int), "expoffs": np.array([], dtype=int)}
     #             br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
     #             st.breath_by_sweep[s] = br
-    #         if br is None:
     #             br = {"onsets": np.array([], dtype=int), "offsets": np.array([], dtype=int),
-    #                 "expmins": np.array([], dtype=int), "expoffs": np.array([], dtype=int)}
 
     #         peaks_by_sweep.append(pks)
     #         on_by_sweep.append(np.asarray(br.get("onsets",  []), dtype=int))
@@ -6685,33 +6582,28 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     base     = self._save_dir / self._save_base
     #     npz_path = base.with_name(base.name + "_bundle.npz")
 
-    #     stim_obj = np.empty(n_sweeps, dtype=object)
     #     # for s in range(n_sweeps):
     #     for s in kept_sweeps:
+    #     stim_obj = np.empty(n_sweeps, dtype=object)
     #         spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
     #         stim_obj[s] = np.array(spans, dtype=float) if spans else np.array([], dtype=float).reshape(0, 2)
 
-    #     peaks_obj = np.array(peaks_by_sweep, dtype=object)
-    #     on_obj    = np.array(on_by_sweep,  dtype=object)
-    #     off_obj   = np.array(off_by_sweep, dtype=object)
-    #     exm_obj   = np.array(exm_by_sweep, dtype=object)
-    #     exo_obj   = np.array(exo_by_sweep, dtype=object)
 
     #     y2_kwargs_ds = {f"y2_{k}_ds": y2_ds_by_key[k] for k in all_keys}
 
-    #     meta = {
     #         "analyze_channel": st.analyze_chan,
     #         "sr_hz": float(st.sr_hz),
     #         "n_sweeps": int(n_sweeps),
     #         "abf_path": str(getattr(st, "in_path", "")),
     #         "ui_meta": getattr(self, "_save_meta", {}),
-    #         "excluded_for_csv": sorted(list(self._EXCLUDE_FOR_CSV)),
     #         "ds_target_hz": float(DS_TARGET_HZ),
     #         "ds_step": int(ds_step),
     #         "csv_time_zero": float(csv_t0),
     #         "csv_includes_traces": bool(INCLUDE_TRACES),
     #         "norm_window_s": float(NORM_BASELINE_WINDOW_S),
     #     }
+    #     meta = {
+    #         "excluded_for_csv": sorted(list(self._EXCLUDE_FOR_CSV)),
 
     #     np.savez_compressed(
     #         npz_path,
@@ -6728,49 +6620,29 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     )
 
     #     # ---------- helpers for normalization ----------
-    #     def _per_sweep_baseline_for_time(A_ds: np.ndarray) -> np.ndarray:
     #         """
     #         A_ds: (M,S) downsampled metric matrix.
     #         Returns b[S]: mean over last NORM_BASELINE_WINDOW_S before 0; fallback to first W after 0.
     #         """
-    #         b = np.full((A_ds.shape[1],), np.nan, dtype=float)
-    #         mask_pre  = (t_ds_csv >= -NORM_BASELINE_WINDOW_S) & (t_ds_csv < 0.0)
-    #         mask_post = (t_ds_csv >= 0.0) & (t_ds_csv <=  NORM_BASELINE_WINDOW_S)
     #         for s in range(A_ds.shape[1]):
-    #             col = A_ds[:, s]
-    #             vals = col[mask_pre]
-    #             vals = vals[np.isfinite(vals)]
-    #             if vals.size == 0:
-    #                 vals = col[mask_post]
-    #                 vals = vals[np.isfinite(vals)]
     #             if vals.size:
     #                 b[s] = float(np.mean(vals))
     #         return b
 
-    #     def _normalize_matrix_by_baseline(A_ds: np.ndarray, b: np.ndarray) -> np.ndarray:
-    #         out = np.full_like(A_ds, np.nan)
     #         for s in range(A_ds.shape[1]):
-    #             bs = b[s]
     #             if np.isfinite(bs) and abs(bs) > EPS_BASE:
-    #                 out[:, s] = A_ds[:, s] / bs
-    #         return out
 
     #     # ---------- (2) Per-time CSV (raw + normalized appended) ----------
     #     csv_time_path = base.with_name(base.name + "_means_by_time.csv")
     #     keys_for_csv  = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
 
     #     # Build normalized stacks per metric
-    #     y2_ds_by_key_norm = {}
-    #     baseline_by_key   = {}
     #     for k in keys_for_csv:
-    #         b = _per_sweep_baseline_for_time(y2_ds_by_key[k])
-    #         baseline_by_key[k] = b
-    #         y2_ds_by_key_norm[k] = _normalize_matrix_by_baseline(y2_ds_by_key[k], b)
 
     #     # headers: raw first (unchanged), then the same pattern with *_norm suffix
-    #     header = ["t"]
     #     for k in keys_for_csv:
     #         if INCLUDE_TRACES:
+    #     header = ["t"]
     #             header += [f"{k}_s{j+1}" for j in range(n_sweeps)]
     #         header += [f"{k}_mean", f"{k}_sem"]
 
@@ -6780,51 +6652,51 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             header += [f"{k}_norm_s{j+1}" for j in range(n_sweeps)]
     #         header += [f"{k}_norm_mean", f"{k}_norm_sem"]
 
-    #     self.setCursor(Qt.CursorShape.WaitCursor)
     #     try:
     #         with open(csv_time_path, "w", newline="") as f:
-    #             w = csv.writer(f)
     #             w.writerow(header)
+    #     self.setCursor(Qt.CursorShape.WaitCursor)
+    #             w = csv.writer(f)
 
     #             for i in range(M):
     #                 row = [f"{t_ds_csv[i]:.9f}"]
 
     #                 # RAW block
     #                 for k in keys_for_csv:
-    #                     col = y2_ds_by_key[k][i, :]
     #                     if INCLUDE_TRACES:
+    #                     col = y2_ds_by_key[k][i, :]
     #                         row += [f"{v:.9g}" if np.isfinite(v) else "" for v in col]
     #                     m, sem = self._mean_sem_1d(col)
     #                     row += [f"{m:.9g}", f"{sem:.9g}"]
 
     #                 # NORMALIZED block
     #                 for k in keys_for_csv:
-    #                     colN = y2_ds_by_key_norm[k][i, :]
     #                     if INCLUDE_TRACES:
+    #                     colN = y2_ds_by_key_norm[k][i, :]
     #                         row += [f"{v:.9g}" if np.isfinite(v) else "" for v in colN]
     #                     mN, semN = self._mean_sem_1d(colN)
     #                     row += [f"{mN:.9g}", f"{semN:.9g}"]
 
     #                 w.writerow(row)
-    #                 if (i % CSV_FLUSH_EVERY) == 0:
     #                     QApplication.processEvents()
     #     finally:
+    #                 if (i % CSV_FLUSH_EVERY) == 0:
     #         self.unsetCursor()
 
     #     # ---------- (3) Per-breath CSV (WIDE) ----------
     #     breaths_path = base.with_name(base.name + "_breaths.csv")
 
-    #     BREATH_COLS = [
     #         "sweep", "breath", "t", "region",
     #         "if", "amp_insp", "amp_exp", "area_insp", "area_exp",
     #         "ti", "te", "vent_proxy",
     #     ]
+    #     BREATH_COLS = [
     #     def _headers_for_block(suffix: str | None) -> list[str]:
     #         if not suffix: return BREATH_COLS[:]
     #         return [f"{c}_{suffix}" for c in BREATH_COLS]
 
-    #     def _headers_for_block_norm(suffix: str | None) -> list[str]:
     #         # duplicate the same block but suffix *all* column names with _norm
+    #     def _headers_for_block_norm(suffix: str | None) -> list[str]:
     #         base = _headers_for_block(suffix)
     #         return [h + "_norm" for h in base]
 
@@ -6834,26 +6706,21 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     need_keys = ["if", "amp_insp", "amp_exp", "area_insp", "area_exp", "ti", "te", "vent_proxy"]
 
     #     for s in range(n_sweeps):
-    #         y_proc = self._get_processed_for(st.analyze_chan, s)
-    #         pks    = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-    #         br     = st.breath_by_sweep.get(s, None)
     #         if br is None and pks.size:
-    #             br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
-    #             st.breath_by_sweep[s] = br
     #         if br is None:
     #             br = {"onsets": np.array([], dtype=int)}
 
-    #         on = np.asarray(br.get("onsets", []), dtype=int)
     #         if on.size < 2:
     #             continue
+    #         on = np.asarray(br.get("onsets", []), dtype=int)
 
     #         mids = (on[:-1] + on[1:]) // 2
 
-    #         traces = {}
     #         for k in need_keys:
     #             if k in metrics.METRICS:
-    #                 traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
     #             else:
+    #         traces = {}
+    #                 traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
     #                 traces[k] = None
 
     #         # Per-sweep breath-based baselines for normalization (use breath midpoints)
@@ -6863,71 +6730,37 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         mask_pre_b  = (t_rel_all >= -NORM_BASELINE_WINDOW_S) & (t_rel_all < 0.0)
     #         mask_post_b = (t_rel_all >=  0.0) & (t_rel_all <= NORM_BASELINE_WINDOW_S)
 
-    #         b_by_k = {}
     #         for k in need_keys:
-    #             arr = traces.get(k, None)
-    #             if arr is None or len(arr) != N:
-    #                 b_by_k[k] = np.nan
     #                 continue
-    #             vals = arr[mids[mask_pre_b]]
-    #             vals = vals[np.isfinite(vals)]
-    #             if vals.size == 0:
-    #                 vals = arr[mids[mask_post_b]]
-    #                 vals = vals[np.isfinite(vals)]
-    #             b_by_k[k] = float(np.mean(vals)) if vals.size else np.nan
 
     #         for i, idx in enumerate(mids, start=1):
     #             t_rel = float(st.t[int(idx)] - (global_s0 if have_global_stim else 0.0))
 
     #             # ----- RAW: ALL
-    #             row_all = [str(s + 1), str(i), f"{t_rel:.9g}", "all"]
     #             for k in need_keys:
-    #                 v = np.nan
-    #                 arr = traces.get(k, None)
-    #                 if arr is not None and len(arr) == N:
-    #                     v = arr[int(idx)]
     #                 row_all.append(f"{v:.9g}" if np.isfinite(v) else "")
     #             rows_all.append(row_all)
 
     #             # ----- NORM: ALL (duplicate id columns + normalized metrics)
-    #             row_allN = [str(s + 1), str(i), f"{t_rel:.9g}", "all"]
     #             for k in need_keys:
-    #                 v = np.nan
-    #                 arr = traces.get(k, None)
-    #                 if arr is not None and len(arr) == N:
-    #                     v = arr[int(idx)]
-    #                 b = b_by_k.get(k, np.nan)
-    #                 vn = (v / b) if (np.isfinite(v) and np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
     #                 row_allN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
     #             rows_all_N.append(row_allN)
 
     #             if have_global_stim:
     #                 if t_rel < 0:
+    #                 else:
     #                     tgt_list = rows_bl; tgt_listN = rows_bl_N; region = "Baseline"
     #                 elif 0.0 <= t_rel <= global_dur:
     #                     tgt_list = rows_st; tgt_listN = rows_st_N; region = "Stim"
-    #                 else:
     #                     tgt_list = rows_po; tgt_listN = rows_po_N; region = "Post"
 
     #                 # RAW regional row
-    #                 row_reg = [str(s + 1), str(i), f"{t_rel:.9g}", region]
     #                 for k in need_keys:
-    #                     v = np.nan
-    #                     arr = traces.get(k, None)
-    #                     if arr is not None and len(arr) == N:
-    #                         v = arr[int(idx)]
     #                     row_reg.append(f"{v:.9g}" if np.isfinite(v) else "")
     #                 tgt_list.append(row_reg)
 
     #                 # NORM regional row
-    #                 row_regN = [str(s + 1), str(i), f"{t_rel:.9g}", region]
     #                 for k in need_keys:
-    #                     v = np.nan
-    #                     arr = traces.get(k, None)
-    #                     if arr is not None and len(arr) == N:
-    #                         v = arr[int(idx)]
-    #                     b = b_by_k.get(k, np.nan)
-    #                     vn = (v / b) if (np.isfinite(v) and np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
     #                     row_regN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
     #                 tgt_listN.append(row_regN)
 
@@ -6949,44 +6782,28 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     have_stim_blocks = have_global_stim and (len(rows_bl) + len(rows_st) + len(rows_po) > 0)
 
     #     with open(breaths_path, "w", newline="") as f:
-    #         w = csv.writer(f)
     #         if not have_stim_blocks:
     #             # RAW + NORM (ALL only)
-    #             full_header = headers_all + [""] + headers_allN
     #             w.writerow(full_header)
-    #             L = max(len(rows_all), len(rows_all_N))
-    #             LA = len(headers_all); LAN = len(headers_allN)
     #             for i in range(L):
-    #                 ra  = rows_all[i]   if i < len(rows_all)   else None
-    #                 raN = rows_all_N[i] if i < len(rows_all_N) else None
-    #                 row = _pad_row(ra, LA) + [""] + _pad_row(raN, LAN)
     #                 w.writerow(row)
     #         else:
     #             # RAW blocks, then NORM blocks
-    #             full_header = (
     #                 headers_all + [""] + headers_bl + [""] + headers_st + [""] + headers_po + [""] +
     #                 headers_allN + [""] + headers_blN + [""] + headers_stN + [""] + headers_poN
     #             )
     #             w.writerow(full_header)
+    #             full_header = (
 
-    #             L = max(
     #                 len(rows_all), len(rows_bl), len(rows_st), len(rows_po),
     #                 len(rows_all_N), len(rows_bl_N), len(rows_st_N), len(rows_po_N),
     #             )
+    #             L = max(
     #             LA = len(headers_all); LB = len(headers_bl); LS = len(headers_st); LP = len(headers_po)
     #             LAN = len(headers_allN); LBN = len(headers_blN); LSN = len(headers_stN); LPN = len(headers_poN)
 
     #             for i in range(L):
-    #                 ra  = rows_all[i]   if i < len(rows_all)   else None
-    #                 rb  = rows_bl[i]    if i < len(rows_bl)    else None
-    #                 rs  = rows_st[i]    if i < len(rows_st)    else None
-    #                 rp  = rows_po[i]    if i < len(rows_po)    else None
-    #                 raN = rows_all_N[i] if i < len(rows_all_N) else None
-    #                 rbN = rows_bl_N[i]  if i < len(rows_bl_N)  else None
-    #                 rsN = rows_st_N[i]  if i < len(rows_st_N)  else None
-    #                 rpN = rows_po_N[i]  if i < len(rows_po_N)  else None
 
-    #                 row = (
     #                     _pad_row(ra, LA) + [""] +
     #                     _pad_row(rb, LB) + [""] +
     #                     _pad_row(rs, LS) + [""] +
@@ -6997,13 +6814,10 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     _pad_row(rpN, LPN)
     #                 )
     #                 w.writerow(row)
+    #                 row = (
 
     #     # ---------- (4) Summary PDF ----------
-    #     keys_for_timeplots = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
-    #     label_by_key = {key: label for (label, key) in metrics.METRIC_SPECS if key in keys_for_timeplots}
-    #     pdf_path = base.with_name(base.name + "_summary.pdf")
     #     try:
-    #         self._save_metrics_summary_pdf(
     #             out_path=pdf_path,
     #             t_ds_csv=t_ds_csv,
     #             y2_ds_by_key=y2_ds_by_key,
@@ -7014,16 +6828,19 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         )
     #     except Exception as e:
     #         print(f"[save][summary-pdf] skipped: {e}")
+    #     keys_for_timeplots = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
+    #     label_by_key = {key: label for (label, key) in metrics.METRIC_SPECS if key in keys_for_timeplots}
+    #     pdf_path = base.with_name(base.name + "_summary.pdf")
+    #         self._save_metrics_summary_pdf(
 
     #     # ---------- done ----------
-    #     msg = f"Saved:\n- {npz_path.name}\n- {csv_time_path.name}\n- {breaths_path.name}\n- {pdf_path.name}"
     #     print("[save]", msg)
     #     try:
-    #         self.statusbar.showMessage(msg, 6000)
     #     except Exception:
     #         pass
+    #     msg = f"Saved:\n- {npz_path.name}\n- {csv_time_path.name}\n- {breaths_path.name}\n- {pdf_path.name}"
+    #         self.statusbar.showMessage(msg, 6000)
 
-    # def _export_all_analyzed_data(self):
     #     """
     #     Save:
     #     1) <base>_bundle.npz  (downsampled Y_proc + y2 traces, peaks/breaths, stim spans, meta)
@@ -7033,32 +6850,22 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         + appended duplicate blocks with normalized values (all headers suffixed *_norm)
     #     4) <base>_summary.pdf  (figure)
     #     """
-    #     st = self.state
     #     if not getattr(self, "_save_dir", None) or not getattr(self, "_save_base", None):
     #         QMessageBox.warning(self, "Save analyzed data", "Choose a save location/name first.")
     #         return
     #     if st.t is None or not st.analyze_chan or st.analyze_chan not in st.sweeps:
     #         QMessageBox.warning(self, "Save analyzed data", "No analyzed data available.")
     #         return
+    # def _export_all_analyzed_data(self):
+    #     st = self.state
 
     #     import numpy as np, csv, json
     #     from PyQt6.QtCore import Qt
     #     from PyQt6.QtWidgets import QApplication
 
     #     # ---------- knobs ----------
-    #     DS_TARGET_HZ    = 50.0
-    #     CSV_FLUSH_EVERY = 2000
-    #     INCLUDE_TRACES  = bool(getattr(self, "_csv_include_traces", True))
-    #     NORM_BASELINE_WINDOW_S = float(getattr(self, "_norm_window_s", 10.0))
-    #     EPS_BASE = 1e-12
 
     #     # ---------- basics ----------
-    #     any_ch    = next(iter(st.sweeps.values()))
-    #     n_sweeps  = int(any_ch.shape[1])
-    #     N         = int(len(st.t))
-    #     kept_sweeps = [s for s in range(n_sweeps) if s not in getattr(st, "omitted_sweeps", set())]
-    #     S = len(kept_sweeps)
-    #     if S == 0:
     #         QMessageBox.warning(self, "Save analyzed data", "All sweeps are omitted. Nothing to save.")
     #         return
 
@@ -7068,18 +6875,9 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     M       = int(len(ds_idx))
 
     #     # Global stim zero and duration (union across KEPT sweeps)
-    #     global_s0, global_s1 = None, None
     #     if st.stim_chan:
     #         for s in kept_sweeps:
-    #             spans = st.stim_spans_by_sweep.get(s, [])
     #             if spans:
-    #                 starts = [a for (a, _) in spans]
-    #                 ends   = [b for (_, b) in spans]
-    #                 m0 = float(min(starts)); m1 = float(max(ends))
-    #                 global_s0 = m0 if global_s0 is None else min(global_s0, m0)
-    #                 global_s1 = m1 if global_s1 is None else max(global_s1, m1)
-    #     have_global_stim = (global_s0 is not None and global_s1 is not None)
-    #     global_dur = (global_s1 - global_s0) if have_global_stim else None
 
     #     # Time for NPZ (raw) and for CSV (normalized to global_s0 if present)
     #     t_ds_raw = st.t[ds_idx]
@@ -7098,14 +6896,9 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         y_proc = self._get_processed_for(st.analyze_chan, s)
     #         Y_proc_ds[:, col] = y_proc[ds_idx]
 
-    #         pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-    #         br  = st.breath_by_sweep.get(s, None)
     #         if br is None and pks.size:
     #             # backfill breaths for this sweep so exports are consistent
-    #             br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
-    #             st.breath_by_sweep[s] = br
     #         if br is None:
-    #             br = {
     #                 "onsets":  np.array([], dtype=int),
     #                 "offsets": np.array([], dtype=int),
     #                 "expmins": np.array([], dtype=int),
@@ -7128,20 +6921,14 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     npz_path = base.with_name(base.name + "_bundle.npz")
 
     #     # Pack stim spans in KEPT order (align with columns)
-    #     stim_obj = np.empty(S, dtype=object)
     #     for col, s in enumerate(kept_sweeps):
+    #     stim_obj = np.empty(S, dtype=object)
     #         spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
     #         stim_obj[col] = np.array(spans, dtype=float).reshape(-1, 2) if spans else np.empty((0, 2), dtype=float)
 
-    #     peaks_obj = np.array(peaks_by_sweep, dtype=object)
-    #     on_obj    = np.array(on_by_sweep,  dtype=object)
-    #     off_obj   = np.array(off_by_sweep, dtype=object)
-    #     exm_obj   = np.array(exm_by_sweep, dtype=object)
-    #     exo_obj   = np.array(exo_by_sweep, dtype=object)
 
     #     y2_kwargs_ds = {f"y2_{k}_ds": y2_ds_by_key[k] for k in all_keys}
 
-    #     meta = {
     #         "analyze_channel": st.analyze_chan,
     #         "sr_hz": float(st.sr_hz),
     #         "n_sweeps_total": int(n_sweeps),
@@ -7150,13 +6937,14 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         "omitted_sweeps": sorted(int(x) for x in getattr(st, "omitted_sweeps", set())),
     #         "abf_path": str(getattr(st, "in_path", "")),
     #         "ui_meta": getattr(self, "_save_meta", {}),
-    #         "excluded_for_csv": sorted(list(self._EXCLUDE_FOR_CSV)),
     #         "ds_target_hz": float(DS_TARGET_HZ),
     #         "ds_step": int(ds_step),
     #         "csv_time_zero": float(csv_t0),
     #         "csv_includes_traces": bool(INCLUDE_TRACES),
     #         "norm_window_s": float(NORM_BASELINE_WINDOW_S),
     #     }
+    #     meta = {
+    #         "excluded_for_csv": sorted(list(self._EXCLUDE_FOR_CSV)),
 
     #     np.savez_compressed(
     #         npz_path,
@@ -7173,49 +6961,29 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     )
 
     #     # ---------- helpers for normalization ----------
-    #     def _per_sweep_baseline_for_time(A_ds: np.ndarray) -> np.ndarray:
     #         """
     #         A_ds: (M,S) downsampled metric matrix.
     #         Returns b[S]: mean over last NORM_BASELINE_WINDOW_S before 0; fallback to first W after 0.
     #         """
-    #         b = np.full((A_ds.shape[1],), np.nan, dtype=float)
-    #         mask_pre  = (t_ds_csv >= -NORM_BASELINE_WINDOW_S) & (t_ds_csv < 0.0)
-    #         mask_post = (t_ds_csv >=  0.0) & (t_ds_csv <= NORM_BASELINE_WINDOW_S)
     #         for sidx in range(A_ds.shape[1]):
-    #             col = A_ds[:, sidx]
-    #             vals = col[mask_pre]
-    #             vals = vals[np.isfinite(vals)]
-    #             if vals.size == 0:
-    #                 vals = col[mask_post]
-    #                 vals = vals[np.isfinite(vals)]
     #             if vals.size:
     #                 b[sidx] = float(np.mean(vals))
     #         return b
 
-    #     def _normalize_matrix_by_baseline(A_ds: np.ndarray, b: np.ndarray) -> np.ndarray:
-    #         out = np.full_like(A_ds, np.nan)
     #         for sidx in range(A_ds.shape[1]):
-    #             bs = b[sidx]
     #             if np.isfinite(bs) and abs(bs) > EPS_BASE:
-    #                 out[:, sidx] = A_ds[:, sidx] / bs
-    #         return out
 
     #     # ---------- (2) Per-time CSV (raw + normalized appended) ----------
     #     csv_time_path = base.with_name(base.name + "_means_by_time.csv")
     #     keys_for_csv  = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
 
     #     # Build normalized stacks per metric
-    #     y2_ds_by_key_norm = {}
-    #     baseline_by_key   = {}
     #     for k in keys_for_csv:
-    #         b = _per_sweep_baseline_for_time(y2_ds_by_key[k])
-    #         baseline_by_key[k] = b
-    #         y2_ds_by_key_norm[k] = _normalize_matrix_by_baseline(y2_ds_by_key[k], b)
 
     #     # headers: raw first, then the same pattern with *_norm suffix
-    #     header = ["t"]
     #     for k in keys_for_csv:
     #         if INCLUDE_TRACES:
+    #     header = ["t"]
     #             header += [f"{k}_s{j+1}" for j in range(S)]
     #         header += [f"{k}_mean", f"{k}_sem"]
 
@@ -7224,45 +6992,45 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             header += [f"{k}_norm_s{j+1}" for j in range(S)]
     #         header += [f"{k}_norm_mean", f"{k}_norm_sem"]
 
-    #     self.setCursor(Qt.CursorShape.WaitCursor)
     #     try:
     #         with open(csv_time_path, "w", newline="") as f:
-    #             w = csv.writer(f)
     #             w.writerow(header)
+    #     self.setCursor(Qt.CursorShape.WaitCursor)
+    #             w = csv.writer(f)
 
     #             for i in range(M):
     #                 row = [f"{t_ds_csv[i]:.9f}"]
 
     #                 # RAW block
     #                 for k in keys_for_csv:
-    #                     col = y2_ds_by_key[k][i, :]
     #                     if INCLUDE_TRACES:
+    #                     col = y2_ds_by_key[k][i, :]
     #                         row += [f"{v:.9g}" if np.isfinite(v) else "" for v in col]
     #                     m, sem = self._mean_sem_1d(col)
     #                     row += [f"{m:.9g}", f"{sem:.9g}"]
 
     #                 # NORMALIZED block
     #                 for k in keys_for_csv:
-    #                     colN = y2_ds_by_key_norm[k][i, :]
     #                     if INCLUDE_TRACES:
+    #                     colN = y2_ds_by_key_norm[k][i, :]
     #                         row += [f"{v:.9g}" if np.isfinite(v) else "" for v in colN]
     #                     mN, semN = self._mean_sem_1d(colN)
     #                     row += [f"{mN:.9g}", f"{semN:.9g}"]
 
     #                 w.writerow(row)
-    #                 if (i % CSV_FLUSH_EVERY) == 0:
     #                     QApplication.processEvents()
     #     finally:
+    #                 if (i % CSV_FLUSH_EVERY) == 0:
     #         self.unsetCursor()
 
     #     # ---------- (3) Per-breath CSV (WIDE) ----------
     #     breaths_path = base.with_name(base.name + "_breaths.csv")
 
-    #     BREATH_COLS = [
     #         "sweep", "breath", "t", "region",
     #         "if", "amp_insp", "amp_exp", "area_insp", "area_exp",
     #         "ti", "te", "vent_proxy",
     #     ]
+    #     BREATH_COLS = [
     #     def _headers_for_block(suffix: str | None) -> list[str]:
     #         if not suffix: return BREATH_COLS[:]
     #         return [f"{c}_{suffix}" for c in BREATH_COLS]
@@ -7277,26 +7045,21 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     need_keys = ["if", "amp_insp", "amp_exp", "area_insp", "area_exp", "ti", "te", "vent_proxy"]
 
     #     for s in kept_sweeps:
-    #         y_proc = self._get_processed_for(st.analyze_chan, s)
-    #         pks    = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-    #         br     = st.breath_by_sweep.get(s, None)
     #         if br is None and pks.size:
-    #             br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
-    #             st.breath_by_sweep[s] = br
     #         if br is None:
     #             br = {"onsets": np.array([], dtype=int)}
 
-    #         on = np.asarray(br.get("onsets", []), dtype=int)
     #         if on.size < 2:
     #             continue
+    #         on = np.asarray(br.get("onsets", []), dtype=int)
 
     #         mids = (on[:-1] + on[1:]) // 2
 
-    #         traces = {}
     #         for k in need_keys:
     #             if k in metrics.METRICS:
-    #                 traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
     #             else:
+    #         traces = {}
+    #                 traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
     #                 traces[k] = None
 
     #         # Per-sweep breath-based baselines (use breath midpoints)
@@ -7304,71 +7067,37 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         mask_pre_b  = (t_rel_all >= -NORM_BASELINE_WINDOW_S) & (t_rel_all < 0.0)
     #         mask_post_b = (t_rel_all >=  0.0) & (t_rel_all <= NORM_BASELINE_WINDOW_S)
 
-    #         b_by_k = {}
     #         for k in need_keys:
-    #             arr = traces.get(k, None)
-    #             if arr is None or len(arr) != N:
-    #                 b_by_k[k] = np.nan
     #                 continue
-    #             vals = arr[mids[mask_pre_b]]
-    #             vals = vals[np.isfinite(vals)]
-    #             if vals.size == 0:
-    #                 vals = arr[mids[mask_post_b]]
-    #                 vals = vals[np.isfinite(vals)]
-    #             b_by_k[k] = float(np.mean(vals)) if vals.size else np.nan
 
     #         for i, idx in enumerate(mids, start=1):
     #             t_rel = float(st.t[int(idx)] - (global_s0 if have_global_stim else 0.0))
 
     #             # ----- RAW: ALL
-    #             row_all = [str(s + 1), str(i), f"{t_rel:.9g}", "all"]
     #             for k in need_keys:
-    #                 v = np.nan
-    #                 arr = traces.get(k, None)
-    #                 if arr is not None and len(arr) == N:
-    #                     v = arr[int(idx)]
     #                 row_all.append(f"{v:.9g}" if np.isfinite(v) else "")
     #             rows_all.append(row_all)
 
     #             # ----- NORM: ALL
-    #             row_allN = [str(s + 1), str(i), f"{t_rel:.9g}", "all"]
     #             for k in need_keys:
-    #                 v = np.nan
-    #                 arr = traces.get(k, None)
-    #                 if arr is not None and len(arr) == N:
-    #                     v = arr[int(idx)]
-    #                 b = b_by_k.get(k, np.nan)
-    #                 vn = (v / b) if (np.isfinite(v) and np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
     #                 row_allN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
     #             rows_all_N.append(row_allN)
 
     #             if have_global_stim:
     #                 if t_rel < 0:
+    #                 else:
     #                     tgt_list = rows_bl; tgt_listN = rows_bl_N; region = "Baseline"
     #                 elif 0.0 <= t_rel <= global_dur:
     #                     tgt_list = rows_st; tgt_listN = rows_st_N; region = "Stim"
-    #                 else:
     #                     tgt_list = rows_po; tgt_listN = rows_po_N; region = "Post"
 
     #                 # RAW regional row
-    #                 row_reg = [str(s + 1), str(i), f"{t_rel:.9g}", region]
     #                 for k in need_keys:
-    #                     v = np.nan
-    #                     arr = traces.get(k, None)
-    #                     if arr is not None and len(arr) == N:
-    #                         v = arr[int(idx)]
     #                     row_reg.append(f"{v:.9g}" if np.isfinite(v) else "")
     #                 tgt_list.append(row_reg)
 
     #                 # NORM regional row
-    #                 row_regN = [str(s + 1), str(i), f"{t_rel:.9g}", region]
     #                 for k in need_keys:
-    #                     v = np.nan
-    #                     arr = traces.get(k, None)
-    #                     if arr is not None and len(arr) == N:
-    #                         v = arr[int(idx)]
-    #                     b = b_by_k.get(k, np.nan)
-    #                     vn = (v / b) if (np.isfinite(v) and np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
     #                     row_regN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
     #                 tgt_listN.append(row_regN)
 
@@ -7390,44 +7119,28 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     have_stim_blocks = have_global_stim and (len(rows_bl) + len(rows_st) + len(rows_po) > 0)
 
     #     with open(breaths_path, "w", newline="") as f:
-    #         w = csv.writer(f)
     #         if not have_stim_blocks:
     #             # RAW + NORM (ALL only)
-    #             full_header = headers_all + [""] + headers_allN
     #             w.writerow(full_header)
-    #             L = max(len(rows_all), len(rows_all_N))
-    #             LA = len(headers_all); LAN = len(headers_allN)
     #             for i in range(L):
-    #                 ra  = rows_all[i]   if i < len(rows_all)   else None
-    #                 raN = rows_all_N[i] if i < len(rows_all_N) else None
-    #                 row = _pad_row(ra, LA) + [""] + _pad_row(raN, LAN)
     #                 w.writerow(row)
     #         else:
     #             # RAW blocks, then NORM blocks
-    #             full_header = (
     #                 headers_all + [""] + headers_bl + [""] + headers_st + [""] + headers_po + [""] +
     #                 headers_allN + [""] + headers_blN + [""] + headers_stN + [""] + headers_poN
     #             )
     #             w.writerow(full_header)
+    #             full_header = (
 
-    #             L = max(
     #                 len(rows_all), len(rows_bl), len(rows_st), len(rows_po),
     #                 len(rows_all_N), len(rows_bl_N), len(rows_st_N), len(rows_po_N),
     #             )
+    #             L = max(
     #             LA = len(headers_all); LB = len(headers_bl); LS = len(headers_st); LP = len(headers_po)
     #             LAN = len(headers_allN); LBN = len(headers_blN); LSN = len(headers_stN); LPN = len(headers_poN)
 
     #             for i in range(L):
-    #                 ra  = rows_all[i]   if i < len(rows_all)   else None
-    #                 rb  = rows_bl[i]    if i < len(rows_bl)    else None
-    #                 rs  = rows_st[i]    if i < len(rows_st)    else None
-    #                 rp  = rows_po[i]    if i < len(rows_po)    else None
-    #                 raN = rows_all_N[i] if i < len(rows_all_N) else None
-    #                 rbN = rows_bl_N[i]  if i < len(rows_bl_N)  else None
-    #                 rsN = rows_st_N[i]  if i < len(rows_st_N)  else None
-    #                 rpN = rows_po_N[i]  if i < len(rows_po_N)  else None
 
-    #                 row = (
     #                     _pad_row(ra, LA) + [""] +
     #                     _pad_row(rb, LB) + [""] +
     #                     _pad_row(rs, LS) + [""] +
@@ -7438,13 +7151,10 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     _pad_row(rpN, LPN)
     #                 )
     #                 w.writerow(row)
+    #                 row = (
 
     #     # ---------- (4) Summary PDF ----------
-    #     keys_for_timeplots = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
-    #     label_by_key = {key: label for (label, key) in metrics.METRIC_SPECS if key in keys_for_timeplots}
-    #     pdf_path = base.with_name(base.name + "_summary.pdf")
     #     try:
-    #         self._save_metrics_summary_pdf(
     #             out_path=pdf_path,
     #             t_ds_csv=t_ds_csv,
     #             y2_ds_by_key=y2_ds_by_key,
@@ -7455,16 +7165,19 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         )
     #     except Exception as e:
     #         print(f"[save][summary-pdf] skipped: {e}")
+    #     keys_for_timeplots = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
+    #     label_by_key = {key: label for (label, key) in metrics.METRIC_SPECS if key in keys_for_timeplots}
+    #     pdf_path = base.with_name(base.name + "_summary.pdf")
+    #         self._save_metrics_summary_pdf(
 
     #     # ---------- done ----------
-    #     msg = f"Saved:\n- {npz_path.name}\n- {csv_time_path.name}\n- {breaths_path.name}\n- {pdf_path.name}"
     #     print("[save]", msg)
     #     try:
-    #         self.statusbar.showMessage(msg, 6000)
     #     except Exception:
     #         pass
+    #     msg = f"Saved:\n- {npz_path.name}\n- {csv_time_path.name}\n- {breaths_path.name}\n- {pdf_path.name}"
+    #         self.statusbar.showMessage(msg, 6000)
 
-    # def _export_all_analyzed_data(self):
     #     """
     #     Save:
     #     1) <base>_bundle.npz  (downsampled Y_proc + y2 traces, peaks/breaths, stim spans, meta)
@@ -7475,32 +7188,22 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         + NEW column 'is_sigh' indicating breath contains a sigh-marked peak (1/0)
     #     4) <base>_summary.pdf  (figure)
     #     """
-    #     st = self.state
     #     if not getattr(self, "_save_dir", None) or not getattr(self, "_save_base", None):
     #         QMessageBox.warning(self, "Save analyzed data", "Choose a save location/name first.")
     #         return
     #     if st.t is None or not st.analyze_chan or st.analyze_chan not in st.sweeps:
     #         QMessageBox.warning(self, "Save analyzed data", "No analyzed data available.")
     #         return
+    # def _export_all_analyzed_data(self):
+    #     st = self.state
 
     #     import numpy as np, csv, json
     #     from PyQt6.QtCore import Qt
     #     from PyQt6.QtWidgets import QApplication
 
     #     # ---------- knobs ----------
-    #     DS_TARGET_HZ    = 50.0
-    #     CSV_FLUSH_EVERY = 2000
-    #     INCLUDE_TRACES  = bool(getattr(self, "_csv_include_traces", True))
-    #     NORM_BASELINE_WINDOW_S = float(getattr(self, "_norm_window_s", 10.0))
-    #     EPS_BASE = 1e-12
 
     #     # ---------- basics ----------
-    #     any_ch    = next(iter(st.sweeps.values()))
-    #     n_sweeps  = int(any_ch.shape[1])
-    #     N         = int(len(st.t))
-    #     kept_sweeps = [s for s in range(n_sweeps) if s not in getattr(st, "omitted_sweeps", set())]
-    #     S = len(kept_sweeps)
-    #     if S == 0:
     #         QMessageBox.warning(self, "Save analyzed data", "All sweeps are omitted. Nothing to save.")
     #         return
 
@@ -7510,18 +7213,9 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     M       = int(len(ds_idx))
 
     #     # Global stim zero and duration (union across KEPT sweeps)
-    #     global_s0, global_s1 = None, None
     #     if st.stim_chan:
     #         for s in kept_sweeps:
-    #             spans = st.stim_spans_by_sweep.get(s, [])
     #             if spans:
-    #                 starts = [a for (a, _) in spans]
-    #                 ends   = [b for (_, b) in spans]
-    #                 m0 = float(min(starts)); m1 = float(max(ends))
-    #                 global_s0 = m0 if global_s0 is None else min(global_s0, m0)
-    #                 global_s1 = m1 if global_s1 is None else max(global_s1, m1)
-    #     have_global_stim = (global_s0 is not None and global_s1 is not None)
-    #     global_dur = (global_s1 - global_s0) if have_global_stim else None
 
     #     # Time for NPZ (raw) and for CSV (normalized to global_s0 if present)
     #     t_ds_raw = st.t[ds_idx]
@@ -7540,13 +7234,8 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         y_proc = self._get_processed_for(st.analyze_chan, s)
     #         Y_proc_ds[:, col] = y_proc[ds_idx]
 
-    #         pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-    #         br  = st.breath_by_sweep.get(s, None)
     #         if br is None and pks.size:
-    #             br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
-    #             st.breath_by_sweep[s] = br
     #         if br is None:
-    #             br = {
     #                 "onsets":  np.array([], dtype=int),
     #                 "offsets": np.array([], dtype=int),
     #                 "expmins": np.array([], dtype=int),
@@ -7568,20 +7257,14 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     base     = self._save_dir / self._save_base
     #     npz_path = base.with_name(base.name + "_bundle.npz")
 
-    #     stim_obj = np.empty(S, dtype=object)
     #     for col, s in enumerate(kept_sweeps):
+    #     stim_obj = np.empty(S, dtype=object)
     #         spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
     #         stim_obj[col] = np.array(spans, dtype=float).reshape(-1, 2) if spans else np.empty((0, 2), dtype=float)
 
-    #     peaks_obj = np.array(peaks_by_sweep, dtype=object)
-    #     on_obj    = np.array(on_by_sweep,  dtype=object)
-    #     off_obj   = np.array(off_by_sweep, dtype=object)
-    #     exm_obj   = np.array(exm_by_sweep, dtype=object)
-    #     exo_obj   = np.array(exo_by_sweep, dtype=object)
 
     #     y2_kwargs_ds = {f"y2_{k}_ds": y2_ds_by_key[k] for k in all_keys}
 
-    #     meta = {
     #         "analyze_channel": st.analyze_chan,
     #         "sr_hz": float(st.sr_hz),
     #         "n_sweeps_total": int(n_sweeps),
@@ -7590,13 +7273,14 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         "omitted_sweeps": sorted(int(x) for x in getattr(st, "omitted_sweeps", set())),
     #         "abf_path": str(getattr(st, "in_path", "")),
     #         "ui_meta": getattr(self, "_save_meta", {}),
-    #         "excluded_for_csv": sorted(list(self._EXCLUDE_FOR_CSV)),
     #         "ds_target_hz": float(DS_TARGET_HZ),
     #         "ds_step": int(ds_step),
     #         "csv_time_zero": float(csv_t0),
     #         "csv_includes_traces": bool(INCLUDE_TRACES),
     #         "norm_window_s": float(NORM_BASELINE_WINDOW_S),
     #     }
+    #     meta = {
+    #         "excluded_for_csv": sorted(list(self._EXCLUDE_FOR_CSV)),
 
     #     np.savez_compressed(
     #         npz_path,
@@ -7613,71 +7297,34 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     )
 
     #     # ---------- helpers for normalization ----------
-    #     def _per_sweep_baseline_for_time(A_ds: np.ndarray) -> np.ndarray:
-    #         b = np.full((A_ds.shape[1],), np.nan, dtype=float)
-    #         mask_pre  = (t_ds_csv >= -NORM_BASELINE_WINDOW_S) & (t_ds_csv < 0.0)
-    #         mask_post = (t_ds_csv >=  0.0) & (t_ds_csv <= NORM_BASELINE_WINDOW_S)
     #         for sidx in range(A_ds.shape[1]):
-    #             col = A_ds[:, sidx]
-    #             vals = col[mask_pre]
-    #             vals = vals[np.isfinite(vals)]
-    #             if vals.size == 0:
-    #                 vals = col[mask_post]
-    #                 vals = vals[np.isfinite(vals)]
     #             if vals.size:
     #                 b[sidx] = float(np.mean(vals))
     #         return b
 
-    #     def _normalize_matrix_by_baseline(A_ds: np.ndarray, b: np.ndarray) -> np.ndarray:
-    #         out = np.full_like(A_ds, np.nan)
     #         for sidx in range(A_ds.shape[1]):
-    #             bs = b[sidx]
     #             if np.isfinite(bs) and abs(bs) > EPS_BASE:
-    #                 out[:, sidx] = A_ds[:, sidx] / bs
-    #         return out
 
     #     # ---------- (2) Per-time CSV (raw + normalized appended) ----------
     #     csv_time_path = base.with_name(base.name + "_means_by_time.csv")
     #     keys_for_csv  = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
 
-    #     y2_ds_by_key_norm = {}
-    #     baseline_by_key   = {}
     #     for k in keys_for_csv:
-    #         b = _per_sweep_baseline_for_time(y2_ds_by_key[k])
-    #         baseline_by_key[k] = b
-    #         y2_ds_by_key_norm[k] = _normalize_matrix_by_baseline(y2_ds_by_key[k], b)
 
-    #     header = ["t"]
     #     for k in keys_for_csv:
     #         if INCLUDE_TRACES:
-    #             header += [f"{k}_s{j+1}" for j in range(S)]
-    #         header += [f"{k}_mean", f"{k}_sem"]
     #     for k in keys_for_csv:
     #         if INCLUDE_TRACES:
-    #             header += [f"{k}_norm_s{j+1}" for j in range(S)]
-    #         header += [f"{k}_norm_mean", f"{k}_norm_sem"]
 
-    #     self.setCursor(Qt.CursorShape.WaitCursor)
     #     try:
     #         with open(csv_time_path, "w", newline="") as f:
-    #             w = csv.writer(f)
     #             w.writerow(header)
     #             for i in range(M):
-    #                 row = [f"{t_ds_csv[i]:.9f}"]
     #                 for k in keys_for_csv:
-    #                     col = y2_ds_by_key[k][i, :]
     #                     if INCLUDE_TRACES:
-    #                         row += [f"{v:.9g}" if np.isfinite(v) else "" for v in col]
-    #                     m, sem = self._mean_sem_1d(col)
-    #                     row += [f"{m:.9g}", f"{sem:.9g}"]
     #                 for k in keys_for_csv:
-    #                     colN = y2_ds_by_key_norm[k][i, :]
     #                     if INCLUDE_TRACES:
-    #                         row += [f"{v:.9g}" if np.isfinite(v) else "" for v in colN]
-    #                     mN, semN = self._mean_sem_1d(colN)
-    #                     row += [f"{mN:.9g}", f"{semN:.9g}"]
     #                 w.writerow(row)
-    #                 if (i % CSV_FLUSH_EVERY) == 0:
     #                     QApplication.processEvents()
     #     finally:
     #         self.unsetCursor()
@@ -7686,12 +7333,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     breaths_path = base.with_name(base.name + "_breaths.csv")
 
     #     # NOTE: We add 'is_sigh' as the last column in each block.
-    #     BREATH_COLS = [
     #         "sweep", "breath", "t", "region",
     #         "if", "amp_insp", "amp_exp", "area_insp", "area_exp",
     #         "ti", "te", "vent_proxy",
     #         "is_sigh",                       # NEW
     #     ]
+    #     BREATH_COLS = [
     #     def _headers_for_block(suffix: str | None) -> list[str]:
     #         if not suffix: return BREATH_COLS[:]
     #         return [f"{c}_{suffix}" for c in BREATH_COLS]
@@ -7706,27 +7353,22 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     need_keys = ["if", "amp_insp", "amp_exp", "area_insp", "area_exp", "ti", "te", "vent_proxy"]
 
     #     for s in kept_sweeps:
-    #         y_proc = self._get_processed_for(st.analyze_chan, s)
-    #         pks    = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-    #         br     = st.breath_by_sweep.get(s, None)
     #         if br is None and pks.size:
-    #             br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
-    #             st.breath_by_sweep[s] = br
     #         if br is None:
     #             br = {"onsets": np.array([], dtype=int)}
 
-    #         on = np.asarray(br.get("onsets", []), dtype=int)
     #         if on.size < 2:
     #             continue
+    #         on = np.asarray(br.get("onsets", []), dtype=int)
 
-    #         mids = (on[:-1] + on[1:]) // 2
     #         # Sighs for this sweep (peak indices)
+    #         mids = (on[:-1] + on[1:]) // 2
     #         sigh_idx = np.asarray(self.state.sigh_by_sweep.get(s, []), dtype=int)
 
     #         # For each breath interval, mark 1 if any sigh peak falls inside [on[j], on[j+1])
-    #         is_sigh_per_breath = np.zeros(len(on) - 1, dtype=int)
     #         if sigh_idx.size:
     #             for j in range(len(on) - 1):
+    #         is_sigh_per_breath = np.zeros(len(on) - 1, dtype=int)
     #                 a, b = int(on[j]), int(on[j+1])
     #                 if np.any((sigh_idx >= a) & (sigh_idx < b)):
     #                     is_sigh_per_breath[j] = 1
@@ -7735,97 +7377,63 @@ GMM is an unsupervised machine learning technique that automatically identifies 
 
 
     #         # Precompute metric traces for this sweep
-    #         traces = {}
     #         for k in need_keys:
     #             if k in metrics.METRICS:
-    #                 traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
     #             else:
+    #         traces = {}
+    #                 traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
     #                 traces[k] = None
 
     #         # Per-breath sigh flags: 1 if any sigh-marked peak lies in [on[i], on[i+1])
     #         # sigh_set = set(int(x) for x in getattr(st, "sighs_by_sweep", {}).get(s, set()))
     #         sigh_set = self._sigh_sample_indices(s, pks)
 
-    #         is_sigh_flags = []
     #         for i in range(len(on) - 1):
+    #             is_sigh_flags.append(1 if sigh_here else 0)
+    #         is_sigh_flags = []
     #             a = int(on[i]); b = int(on[i + 1])
     #             sigh_here = any((a <= p < b) for p in sigh_set)
-    #             is_sigh_flags.append(1 if sigh_here else 0)
 
     #         # Baselines for normalization (use breath midpoints)
     #         t_rel_all = (st.t[mids] - (global_s0 if have_global_stim else 0.0)).astype(float)
     #         mask_pre_b  = (t_rel_all >= -NORM_BASELINE_WINDOW_S) & (t_rel_all < 0.0)
     #         mask_post_b = (t_rel_all >=  0.0) & (t_rel_all <= NORM_BASELINE_WINDOW_S)
 
-    #         b_by_k = {}
     #         for k in need_keys:
-    #             arr = traces.get(k, None)
-    #             if arr is None or len(arr) != N:
-    #                 b_by_k[k] = np.nan
     #                 continue
-    #             vals = arr[mids[mask_pre_b]]
-    #             vals = vals[np.isfinite(vals)]
-    #             if vals.size == 0:
-    #                 vals = arr[mids[mask_post_b]]
-    #                 vals = vals[np.isfinite(vals)]
-    #             b_by_k[k] = float(np.mean(vals)) if vals.size else np.nan
 
     #         for i, idx in enumerate(mids, start=1):
     #             t_rel = float(st.t[int(idx)] - (global_s0 if have_global_stim else 0.0))
     #             sigh_flag = is_sigh_flags[i - 1] if (i - 1) < len(is_sigh_flags) else 0
 
     #             # ----- RAW: ALL
-    #             row_all = [str(s + 1), str(i), f"{t_rel:.9g}", "all"]
     #             for k in need_keys:
-    #                 v = np.nan
-    #                 arr = traces.get(k, None)
-    #                 if arr is not None and len(arr) == N:
-    #                     v = arr[int(idx)]
     #                 row_all.append(f"{v:.9g}" if np.isfinite(v) else "")
     #             row_all.append(str(int(sigh_flag)))  # is_sigh
     #             rows_all.append(row_all)
 
     #             # ----- NORM: ALL (same is_sigh value)
-    #             row_allN = [str(s + 1), str(i), f"{t_rel:.9g}", "all"]
     #             for k in need_keys:
-    #                 v = np.nan
-    #                 arr = traces.get(k, None)
-    #                 if arr is not None and len(arr) == N:
-    #                     v = arr[int(idx)]
-    #                 b = b_by_k.get(k, np.nan)
-    #                 vn = (v / b) if (np.isfinite(v) and np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
     #                 row_allN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
     #             row_allN.append(str(int(sigh_flag)))  # is_sigh_norm (kept identical)
     #             rows_all_N.append(row_allN)
 
     #             if have_global_stim:
     #                 if t_rel < 0:
+    #                 else:
     #                     tgt_list = rows_bl; tgt_listN = rows_bl_N; region = "Baseline"
     #                 elif 0.0 <= t_rel <= global_dur:
     #                     tgt_list = rows_st; tgt_listN = rows_st_N; region = "Stim"
-    #                 else:
     #                     tgt_list = rows_po; tgt_listN = rows_po_N; region = "Post"
 
     #                 # RAW regional row
-    #                 row_reg = [str(s + 1), str(i), f"{t_rel:.9g}", region]
     #                 for k in need_keys:
-    #                     v = np.nan
-    #                     arr = traces.get(k, None)
-    #                     if arr is not None and len(arr) == N:
-    #                         v = arr[int(idx)]
     #                     row_reg.append(f"{v:.9g}" if np.isfinite(v) else "")
     #                 row_reg.append(str(int(sigh_flag)))
     #                 tgt_list.append(row_reg)
 
     #                 # NORM regional row
-    #                 row_regN = [str(s + 1), str(i), f"{t_rel:.9g}", region]
     #                 for k in need_keys:
-    #                     v = np.nan
-    #                     arr = traces.get(k, None)
-    #                     if arr is not None and len(arr) == N:
-    #                         v = arr[int(idx)]
-    #                     b = b_by_k.get(k, np.nan)
-    #                     vn = (v / b) if (np.isfinite(v) and np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
     #                     row_regN.append(f"{vn:.9g}" if np.isfinite(vn) else "")
     #                 row_regN.append(str(int(sigh_flag)))
     #                 tgt_listN.append(row_regN)
@@ -7848,42 +7456,26 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     have_stim_blocks = have_global_stim and (len(rows_bl) + len(rows_st) + len(rows_po) > 0)
 
     #     with open(breaths_path, "w", newline="") as f:
-    #         w = csv.writer(f)
     #         if not have_stim_blocks:
-    #             full_header = headers_all + [""] + headers_allN
     #             w.writerow(full_header)
-    #             L = max(len(rows_all), len(rows_all_N))
-    #             LA = len(headers_all); LAN = len(headers_allN)
     #             for i in range(L):
-    #                 ra  = rows_all[i]   if i < len(rows_all)   else None
-    #                 raN = rows_all_N[i] if i < len(rows_all_N) else None
-    #                 row = _pad_row(ra, LA) + [""] + _pad_row(raN, LAN)
     #                 w.writerow(row)
     #         else:
-    #             full_header = (
     #                 headers_all + [""] + headers_bl + [""] + headers_st + [""] + headers_po + [""] +
     #                 headers_allN + [""] + headers_blN + [""] + headers_stN + [""] + headers_poN
     #             )
     #             w.writerow(full_header)
+    #             full_header = (
 
-    #             L = max(
     #                 len(rows_all), len(rows_bl), len(rows_st), len(rows_po),
     #                 len(rows_all_N), len(rows_bl_N), len(rows_st_N), len(rows_po_N),
     #             )
+    #             L = max(
     #             LA = len(headers_all); LB = len(headers_bl); LS = len(headers_st); LP = len(headers_po)
     #             LAN = len(headers_allN); LBN = len(headers_blN); LSN = len(headers_stN); LPN = len(headers_poN)
 
     #             for i in range(L):
-    #                 ra  = rows_all[i]   if i < len(rows_all)   else None
-    #                 rb  = rows_bl[i]    if i < len(rows_bl)    else None
-    #                 rs  = rows_st[i]    if i < len(rows_st)    else None
-    #                 rp  = rows_po[i]    if i < len(rows_po)    else None
-    #                 raN = rows_all_N[i] if i < len(rows_all_N) else None
-    #                 rbN = rows_bl_N[i]  if i < len(rows_bl_N)  else None
-    #                 rsN = rows_st_N[i]  if i < len(rows_st_N)  else None
-    #                 rpN = rows_po_N[i]  if i < len(rows_po_N)  else None
 
-    #                 row = (
     #                     _pad_row(ra, LA) + [""] +
     #                     _pad_row(rb, LB) + [""] +
     #                     _pad_row(rs, LS) + [""] +
@@ -7894,13 +7486,10 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     _pad_row(rpN, LPN)
     #                 )
     #                 w.writerow(row)
+    #                 row = (
 
     #     # ---------- (4) Summary PDF ----------
-    #     keys_for_timeplots = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
-    #     label_by_key = {key: label for (label, key) in metrics.METRIC_SPECS if key in keys_for_timeplots}
-    #     pdf_path = base.with_name(base.name + "_summary.pdf")
     #     try:
-    #         self._save_metrics_summary_pdf(
     #             out_path=pdf_path,
     #             t_ds_csv=t_ds_csv,
     #             y2_ds_by_key=y2_ds_by_key,
@@ -7911,13 +7500,17 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         )
     #     except Exception as e:
     #         print(f"[save][summary-pdf] skipped: {e}")
+    #     keys_for_timeplots = [k for k in all_keys if k not in self._EXCLUDE_FOR_CSV]
+    #     label_by_key = {key: label for (label, key) in metrics.METRIC_SPECS if key in keys_for_timeplots}
+    #     pdf_path = base.with_name(base.name + "_summary.pdf")
+    #         self._save_metrics_summary_pdf(
 
-    #     msg = f"Saved:\n- {npz_path.name}\n- {csv_time_path.name}\n- {breaths_path.name}\n- {pdf_path.name}"
     #     print("[save]", msg)
     #     try:
-    #         self.statusbar.showMessage(msg, 6000)
     #     except Exception:
     #         pass
+    #     msg = f"Saved:\n- {npz_path.name}\n- {csv_time_path.name}\n- {breaths_path.name}\n- {pdf_path.name}"
+    #         self.statusbar.showMessage(msg, 6000)
 
     def _export_all_analyzed_data(self, preview_only=False, progress_dialog=None):
         """
@@ -9213,7 +8806,6 @@ GMM is an unsupervised machine learning technique that automatically identifies 
             sem = np.nan
         return (m, sem)
 
-    # def _save_metrics_summary_pdf(
     #     self,
     #     out_path,
     #     t_ds_csv: np.ndarray,
@@ -9225,17 +8817,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     ):
     #     """
     #     Build a two-page PDF:
-    #     • Page 1: rows = metrics, cols = [all sweeps | mean±SEM | histograms] using RAW data
     #     • Page 2: same layout, using NORMALIZED data (per sweep, per metric baseline)
+    # def _save_metrics_summary_pdf(
+    #     • Page 1: rows = metrics, cols = [all sweeps | mean±SEM | histograms] using RAW data
 
     #     Normalization baseline per sweep:
-    #     - mean over the last W seconds before t=0 (W = self._norm_window_s, default 10.0)
     #     - fallback to first W seconds after 0 if no pre-stim samples exist
-    #     - value_norm = value / baseline; unstable divisions → NaN
     #     """
-    #     import numpy as np
-    #     import matplotlib.pyplot as plt
-    #     from matplotlib.backends.backend_pdf import PdfPages
 
     #     st = self.state
     #     n_sweeps = next(iter(y2_ds_by_key.values())).shape[1] if y2_ds_by_key else 0
@@ -9247,57 +8835,37 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     EPS_BASE = 1e-12
 
     #     # ---------- Helpers ----------
-    #     def _per_sweep_baseline_time(A_ds: np.ndarray) -> np.ndarray:
     #         """Baseline per sweep (time-series): mean over last W sec before 0; fallback to first W sec after 0."""
-    #         b = np.full((A_ds.shape[1],), np.nan, dtype=float)
-    #         mask_pre  = (t_ds_csv >= -NORM_BASELINE_WINDOW_S) & (t_ds_csv < 0.0)
-    #         mask_post = (t_ds_csv >=  0.0) & (t_ds_csv <= NORM_BASELINE_WINDOW_S)
     #         for s in range(A_ds.shape[1]):
-    #             col = A_ds[:, s]
-    #             vals = col[mask_pre]
-    #             vals = vals[np.isfinite(vals)]
-    #             if vals.size == 0:
-    #                 vals = col[mask_post]
-    #                 vals = vals[np.isfinite(vals)]
     #             if vals.size:
     #                 b[s] = float(np.mean(vals))
     #         return b
 
-    #     def _normalize_matrix(A_ds: np.ndarray, b: np.ndarray) -> np.ndarray:
-    #         out = np.full_like(A_ds, np.nan)
     #         for s in range(A_ds.shape[1]):
-    #             bs = b[s]
     #             if np.isfinite(bs) and abs(bs) > EPS_BASE:
-    #                 out[:, s] = A_ds[:, s] / bs
-    #         return out
 
-    #     def _build_hist_vals_raw_and_norm():
     #         """Collect per-breath RAW and NORM values for histograms by metric/region."""
+    #     def _build_hist_vals_raw_and_norm():
     #         hist_raw = {k: {"all": [], "baseline": [], "stim": [], "post": []} for k in keys_for_csv}
     #         hist_nrm = {k: {"all": [], "baseline": [], "stim": [], "post": []} for k in keys_for_csv}
     #         need_keys = set(keys_for_csv)
 
     #         for s in range(n_sweeps):
-    #             y_proc = self._get_processed_for(st.analyze_chan, s)
-    #             pks    = np.asarray(self.state.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-    #             br     = self.state.breath_by_sweep.get(s, None)
     #             if br is None and pks.size:
-    #                 br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
-    #                 self.state.breath_by_sweep[s] = br
     #             if br is None:
     #                 br = {"onsets": np.array([], dtype=int)}
 
-    #             on = np.asarray(br.get("onsets", []), dtype=int)
     #             if on.size < 2:
     #                 continue
+    #             on = np.asarray(br.get("onsets", []), dtype=int)
     #             mids = (on[:-1] + on[1:]) // 2
 
     #             # Precompute metric traces for this sweep
-    #             traces = {}
     #             for k in need_keys:
     #                 try:
-    #                     traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
     #                 except TypeError:
+    #             traces = {}
+    #                     traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
     #                     traces[k] = None
 
     #             # Per-sweep breath-based baselines (use breath midpoints; match exporter)
@@ -9305,33 +8873,18 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             mask_pre_b  = (t_rel_all >= -NORM_BASELINE_WINDOW_S) & (t_rel_all < 0.0)
     #             mask_post_b = (t_rel_all >=  0.0) & (t_rel_all <= NORM_BASELINE_WINDOW_S)
 
-    #             b_by_k = {}
     #             for k in need_keys:
-    #                 arr = traces.get(k, None)
-    #                 if arr is None or len(arr) != len(st.t):
-    #                     b_by_k[k] = np.nan
     #                     continue
-    #                 vals = arr[mids[mask_pre_b]]
-    #                 vals = vals[np.isfinite(vals)]
-    #                 if vals.size == 0:
-    #                     vals = arr[mids[mask_post_b]]
-    #                     vals = vals[np.isfinite(vals)]
-    #                 b_by_k[k] = float(np.mean(vals)) if vals.size else np.nan
 
     #             # Fill raw + normalized buckets
     #             for idx, t_rel in zip(mids, t_rel_all):
     #                 for k in need_keys:
-    #                     arr = traces.get(k, None)
-    #                     if arr is None or len(arr) != len(st.t):
     #                         continue
-    #                     v = float(arr[int(idx)])
     #                     if not np.isfinite(v):
     #                         continue
     #                     # raw
     #                     hist_raw[k]["all"].append(v)
     #                     # norm
-    #                     b = b_by_k.get(k, np.nan)
-    #                     vn = (v / b) if (np.isfinite(b) and abs(b) > EPS_BASE) else np.nan
     #                     if np.isfinite(vn):
     #                         hist_nrm[k]["all"].append(vn)
 
@@ -9339,25 +8892,22 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                         if t_rel < 0:
     #                             hist_raw[k]["baseline"].append(v)
     #                             if np.isfinite(vn): hist_nrm[k]["baseline"].append(vn)
-    #                         elif 0.0 <= t_rel <= stim_dur:
     #                             hist_raw[k]["stim"].append(v)
     #                             if np.isfinite(vn): hist_nrm[k]["stim"].append(vn)
     #                         else:
     #                             hist_raw[k]["post"].append(v)
     #                             if np.isfinite(vn): hist_nrm[k]["post"].append(vn)
+    #                         elif 0.0 <= t_rel <= stim_dur:
 
     #         return hist_raw, hist_nrm
 
-    #     def _plot_grid(fig, axes, Y_by_key, hist_vals, title_suffix):
     #         """Render one page (grid) given series & histogram data dicts."""
-    #         nrows = max(1, len(keys_for_csv))
     #         for r, k in enumerate(keys_for_csv):
+    #     def _plot_grid(fig, axes, Y_by_key, hist_vals, title_suffix):
+    #         nrows = max(1, len(keys_for_csv))
     #             label = label_by_key.get(k, k)
 
     #             # --- col 1: all sweeps overlaid ---
-    #             ax1 = axes[r, 0]
-    #             Y = Y_by_key.get(k, None)
-    #             if Y is not None and Y.shape[0] == M:
     #                 for s in range(n_sweeps):
     #                     ax1.plot(t_ds_csv, Y[:, s], lw=0.8, alpha=0.45)
     #             if have_stim:
@@ -9365,17 +8915,14 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 ax1.axvline(0.0, color="#4c78a8", lw=1.0, alpha=0.6)
     #                 ax1.axvline(stim_dur, color="#4c78a8", lw=1.0, alpha=0.6, ls="--")
     #             ax1.set_title(f"{label} — all sweeps{title_suffix}")
-    #             if r == nrows - 1:
     #                 ax1.set_xlabel("Time (s, rel. stim onset)")
+    #             ax1 = axes[r, 0]
+    #             Y = Y_by_key.get(k, None)
+    #             if Y is not None and Y.shape[0] == M:
+    #             if r == nrows - 1:
 
     #             # --- col 2: mean ± SEM ---
-    #             ax2 = axes[r, 1]
-    #             if Y is not None and Y.shape[0] == M:
     #                 with np.errstate(invalid="ignore"):
-    #                     mean = np.nanmean(Y, axis=1)
-    #                     n    = np.sum(np.isfinite(Y), axis=1)
-    #                     std  = np.nanstd(Y, axis=1, ddof=1)
-    #                     sem  = np.where(n >= 2, std / np.sqrt(n), np.nan)
     #                 ax2.plot(t_ds_csv, mean, lw=1.8)
     #                 ax2.fill_between(t_ds_csv, mean - sem, mean + sem, alpha=0.25, linewidth=0)
     #             if have_stim:
@@ -9383,28 +8930,22 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 ax2.axvline(0.0, color="#4c78a8", lw=1.0, alpha=0.6)
     #                 ax2.axvline(stim_dur, color="#4c78a8", lw=1.0, alpha=0.6, ls="--")
     #             ax2.set_title(f"{label} — mean ± SEM{title_suffix}")
-    #             if r == nrows - 1:
     #                 ax2.set_xlabel("Time (s, rel. stim onset)")
+    #             if r == nrows - 1:
 
     #             # --- col 3: line histograms (density) ---
-    #             ax3 = axes[r, 2]
     #             # Build common bin edges across groups for this metric
-    #             groups = []
     #             for nm in ("all", "baseline", "stim", "post"):
-    #                 vals = np.asarray(hist_vals[k][nm], dtype=float)
     #                 if vals.size:
     #                     groups.append(vals)
     #             if len(groups):
-    #                 combined = np.concatenate(groups)
-    #                 edges = np.histogram_bin_edges(combined, bins="auto")
-    #                 centers = 0.5 * (edges[:-1] + edges[1:])
 
+    #                         return
+    #                     ax3.plot(centers, dens, **style_kw, label=lbl)
     #                 def _plot_line(vals, lbl, style_kw):
     #                     vals = np.asarray(vals, dtype=float)
     #                     if vals.size == 0:
-    #                         return
     #                     dens, _ = np.histogram(vals, bins=edges, density=True)
-    #                     ax3.plot(centers, dens, **style_kw, label=lbl)
 
     #                 _plot_line(hist_vals[k]["all"], "All", dict(lw=1.8))
     #                 if have_stim:
@@ -9423,14 +8964,9 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     # RAW time-series already provided: y2_ds_by_key
 
     #     # NORMALIZED time-series per metric
-    #     y2_ds_by_key_norm = {}
     #     for k in keys_for_csv:
-    #         Y = y2_ds_by_key.get(k, None)
     #         if Y is None or not Y.size:
-    #             y2_ds_by_key_norm[k] = None
     #             continue
-    #         b = _per_sweep_baseline_time(Y)
-    #         y2_ds_by_key_norm[k] = _normalize_matrix(Y, b)
 
     #     # RAW + NORMALIZED histogram values
     #     hist_vals_raw, hist_vals_norm = _build_hist_vals_raw_and_norm()
@@ -9442,22 +8978,21 @@ GMM is an unsupervised machine learning technique that automatically identifies 
 
     #     with PdfPages(out_path) as pdf:
     #         # Page 1 — RAW
-    #         fig1, axes1 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
     #         plt.subplots_adjust(hspace=0.6, wspace=0.25)
     #         _plot_grid(fig1, axes1, y2_ds_by_key, hist_vals_raw, title_suffix="")
     #         fig1.suptitle("PlethApp summary — raw", y=0.995, fontsize=12)
     #         pdf.savefig(fig1, dpi=150)
     #         plt.close(fig1)
+    #         fig1, axes1 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
 
     #         # Page 2 — NORMALIZED
-    #         fig2, axes2 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
     #         plt.subplots_adjust(hspace=0.6, wspace=0.25)
     #         _plot_grid(fig2, axes2, y2_ds_by_key_norm, hist_vals_norm, title_suffix=" (norm)")
     #         fig2.suptitle("PlethApp summary — normalized", y=0.995, fontsize=12)
     #         pdf.savefig(fig2, dpi=150)
     #         plt.close(fig2)
+    #         fig2, axes2 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
 
-    # def _save_metrics_summary_pdf(
     #     self,
     #     out_path,
     #     t_ds_csv: np.ndarray,
@@ -9469,13 +9004,9 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     ):
     #     """
     #     Build a two-page PDF:
-    #     • Page 1: rows = metrics, cols = [all sweeps | mean±SEM | histograms] using RAW data
     #     • Page 2: same layout, using NORMALIZED data (per sweep, per metric baseline)
     #     • NEW: overlay orange star markers at times where sighs occurred (first two columns)
     #     """
-    #     import numpy as np
-    #     import matplotlib.pyplot as plt
-    #     from matplotlib.backends.backend_pdf import PdfPages
 
     #     st = self.state
     #     n_sweeps = next(iter(y2_ds_by_key.values())).shape[1] if y2_ds_by_key else 0
@@ -9487,35 +9018,16 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     EPS_BASE = 1e-12
 
     #     # ---------- Helpers ----------
-    #     def _per_sweep_baseline_time(A_ds: np.ndarray) -> np.ndarray:
-    #         b = np.full((A_ds.shape[1],), np.nan, dtype=float)
-    #         mask_pre  = (t_ds_csv >= -NORM_BASELINE_WINDOW_S) & (t_ds_csv < 0.0)
-    #         mask_post = (t_ds_csv >=  0.0) & (t_ds_csv <= NORM_BASELINE_WINDOW_S)
     #         for s in range(A_ds.shape[1]):
-    #             col = A_ds[:, s]
-    #             vals = col[mask_pre]
-    #             vals = vals[np.isfinite(vals)]
-    #             if vals.size == 0:
-    #                 vals = col[mask_post]
-    #                 vals = vals[np.isfinite(vals)]
     #             if vals.size:
     #                 b[s] = float(np.mean(vals))
     #         return b
 
-    #     def _normalize_matrix(A_ds: np.ndarray, b: np.ndarray) -> np.ndarray:
-    #         out = np.full_like(A_ds, np.nan)
     #         for s in range(A_ds.shape[1]):
-    #             bs = b[s]
     #             if np.isfinite(bs) and abs(bs) > EPS_BASE:
-    #                 out[:, s] = A_ds[:, s] / bs
-    #         return out
 
     #     # Collect sigh times (relative to stim_zero if present) across kept sweeps
-    #     # def _collect_sigh_times_rel() -> list[float]:
-    #     #     kept = [s for s in range(next(iter(st.sweeps.values())).shape[1])
     #     #             if s not in getattr(st, "omitted_sweeps", set())]
-    #     #     t0 = float(stim_zero) if stim_zero is not None else 0.0
-    #     #     ts = []
     #     #     for s in kept:
     #     #         for idx in getattr(st, "sighs_by_sweep", {}).get(s, set()):
     #     #             try:
@@ -9523,35 +9035,22 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     #             except Exception:
     #     #                 pass
     #     #     if not ts:
-    #     #         return []
-    #     #     ts = sorted(ts)
     #     #     # de-duplicate very near events (within ~1 sample)
-    #     #     dt = float(np.median(np.diff(st.t))) if len(st.t) > 1 else (1.0 / float(st.sr_hz) if st.sr_hz else 0.01)
-    #     #     eps = max(1e-9, 2.0 * dt)
-    #     #     out = []
     #     #     for t in ts:
     #     #         if not out or abs(t - out[-1]) > eps:
     #     #             out.append(t)
+    #     #     dt = float(np.median(np.diff(st.t))) if len(st.t) > 1 else (1.0 / float(st.sr_hz) if st.sr_hz else 0.01)
+    #     #     eps = max(1e-9, 2.0 * dt)
+    #     #     out = []
     #     #     return out
 
-    #     def _collect_sigh_times_rel() -> list[float]:
-    #         kept = [s for s in range(next(iter(st.sweeps.values())).shape[1])
     #                 if s not in getattr(st, "omitted_sweeps", set())]
-    #         t0 = float(stim_zero) if stim_zero is not None else 0.0
-    #         ts = []
     #         for s in kept:
     #             # Get peaks for this sweep for mapping if needed
-    #             pks = np.asarray(self.state.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-    #             sigh_idxs = self._sigh_sample_indices(s, pks)
     #             for i in sigh_idxs:
     #                 ts.append(float(st.t[int(i)] - t0))
     #         if not ts:
-    #             return []
-    #         ts = sorted(ts)
     #         # Deduplicate very-close events
-    #         dt = float(np.median(np.diff(st.t))) if len(st.t) > 1 else (1.0 / float(st.sr_hz) if st.sr_hz else 0.01)
-    #         eps = max(1e-9, 2.0 * dt)
-    #         out = []
     #         for t in ts:
     #             if not out or abs(t - out[-1]) > eps:
     #                 out.append(t)
@@ -9568,55 +9067,35 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         for s in range(next(iter(st.sweeps.values())).shape[1]):
     #             if s in getattr(st, "omitted_sweeps", set()):
     #                 continue
-    #             y_proc = self._get_processed_for(st.analyze_chan, s)
-    #             pks    = np.asarray(self.state.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-    #             br     = self.state.breath_by_sweep.get(s, None)
     #             if br is None and pks.size:
-    #                 br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
-    #                 self.state.breath_by_sweep[s] = br
     #             if br is None:
     #                 br = {"onsets": np.array([], dtype=int)}
 
-    #             on = np.asarray(br.get("onsets", []), dtype=int)
     #             if on.size < 2:
     #                 continue
+    #             on = np.asarray(br.get("onsets", []), dtype=int)
     #             mids = (on[:-1] + on[1:]) // 2
 
-    #             traces = {}
     #             for k in need_keys:
     #                 try:
-    #                     traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
     #                 except TypeError:
+    #             traces = {}
+    #                     traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
     #                     traces[k] = None
 
     #             t_rel_all = (st.t[mids] - (stim_zero or 0.0)).astype(float)
     #             mask_pre_b  = (t_rel_all >= -NORM_BASELINE_WINDOW_S) & (t_rel_all < 0.0)
     #             mask_post_b = (t_rel_all >=  0.0) & (t_rel_all <= NORM_BASELINE_WINDOW_S)
 
-    #             b_by_k = {}
     #             for k in need_keys:
-    #                 arr = traces.get(k, None)
-    #                 if arr is None or len(arr) != len(st.t):
-    #                     b_by_k[k] = np.nan
     #                     continue
-    #                 vals = arr[mids[mask_pre_b]]
-    #                 vals = vals[np.isfinite(vals)]
-    #                 if vals.size == 0:
-    #                     vals = arr[mids[mask_post_b]]
-    #                     vals = vals[np.isfinite(vals)]
-    #                 b_by_k[k] = float(np.mean(vals)) if vals.size else np.nan
 
     #             for idx, t_rel in zip(mids, t_rel_all):
     #                 for k in need_keys:
-    #                     arr = traces.get(k, None)
-    #                     if arr is None or len(arr) != len(st.t):
     #                         continue
-    #                     v = float(arr[int(idx)])
     #                     if not np.isfinite(v):
     #                         continue
     #                     hist_raw[k]["all"].append(v)
-    #                     b = b_by_k.get(k, np.nan)
-    #                     vn = (v / b) if (np.isfinite(b) and abs(b) > 0) else np.nan
     #                     if np.isfinite(vn):
     #                         hist_nrm[k]["all"].append(vn)
 
@@ -9624,21 +9103,18 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                         if t_rel < 0:
     #                             hist_raw[k]["baseline"].append(v)
     #                             if np.isfinite(vn): hist_nrm[k]["baseline"].append(vn)
-    #                         elif 0.0 <= t_rel <= stim_dur:
     #                             hist_raw[k]["stim"].append(v)
     #                             if np.isfinite(vn): hist_nrm[k]["stim"].append(vn)
     #                         else:
     #                             hist_raw[k]["post"].append(v)
     #                             if np.isfinite(vn): hist_nrm[k]["post"].append(vn)
+    #                         elif 0.0 <= t_rel <= stim_dur:
 
     #         return hist_raw, hist_nrm
 
-    #     def _plot_sigh_stars(ax):
     #         """Overlay stars at sigh times near the top of axis without changing limits."""
     #         if not sigh_times_rel:
     #             return
-    #         ylim = ax.get_ylim()
-    #         y_star = ylim[1] - 0.06 * (ylim[1] - ylim[0])
     #         ax.plot(
     #             sigh_times_rel,
     #             [y_star] * len(sigh_times_rel),
@@ -9650,17 +9126,17 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             zorder=6,
     #         )
     #         ax.set_ylim(*ylim)
+    #     def _plot_sigh_stars(ax):
+    #         ylim = ax.get_ylim()
+    #         y_star = ylim[1] - 0.06 * (ylim[1] - ylim[0])
 
-    #     def _plot_grid(fig, axes, Y_by_key, hist_vals, title_suffix):
     #         """Render one page (grid) given series & histogram data dicts."""
-    #         nrows = max(1, len(keys_for_csv))
     #         for r, k in enumerate(keys_for_csv):
+    #     def _plot_grid(fig, axes, Y_by_key, hist_vals, title_suffix):
+    #         nrows = max(1, len(keys_for_csv))
     #             label = label_by_key.get(k, k)
 
     #             # --- col 1: all sweeps overlaid ---
-    #             ax1 = axes[r, 0]
-    #             Y = Y_by_key.get(k, None)
-    #             if Y is not None and Y.shape[0] == M:
     #                 for s in range(Y.shape[1]):
     #                     ax1.plot(t_ds_csv, Y[:, s], lw=0.8, alpha=0.45)
     #             if have_stim:
@@ -9669,17 +9145,14 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 ax1.axvline(stim_dur, color="#4c78a8", lw=1.0, alpha=0.6, ls="--")
     #             _plot_sigh_stars(ax1)  # NEW
     #             ax1.set_title(f"{label} — all sweeps{title_suffix}")
-    #             if r == nrows - 1:
     #                 ax1.set_xlabel("Time (s, rel. stim onset)")
+    #             ax1 = axes[r, 0]
+    #             Y = Y_by_key.get(k, None)
+    #             if Y is not None and Y.shape[0] == M:
+    #             if r == nrows - 1:
 
     #             # --- col 2: mean ± SEM ---
-    #             ax2 = axes[r, 1]
-    #             if Y is not None and Y.shape[0] == M:
     #                 with np.errstate(invalid="ignore"):
-    #                     mean = np.nanmean(Y, axis=1)
-    #                     n    = np.sum(np.isfinite(Y), axis=1)
-    #                     std  = np.nanstd(Y, axis=1, ddof=1)
-    #                     sem  = np.where(n >= 2, std / np.sqrt(n), np.nan)
     #                 ax2.plot(t_ds_csv, mean, lw=1.8)
     #                 ax2.fill_between(t_ds_csv, mean - sem, mean + sem, alpha=0.25, linewidth=0)
     #             if have_stim:
@@ -9688,27 +9161,21 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 ax2.axvline(stim_dur, color="#4c78a8", lw=1.0, alpha=0.6, ls="--")
     #             _plot_sigh_stars(ax2)  # NEW
     #             ax2.set_title(f"{label} — mean ± SEM{title_suffix}")
-    #             if r == nrows - 1:
     #                 ax2.set_xlabel("Time (s, rel. stim onset)")
+    #             if r == nrows - 1:
 
     #             # --- col 3: line histograms (density) ---
-    #             ax3 = axes[r, 2]
-    #             groups = []
     #             for nm in ("all", "baseline", "stim", "post"):
-    #                 vals = np.asarray(hist_vals[k][nm], dtype=float)
     #                 if vals.size:
     #                     groups.append(vals)
     #             if len(groups):
-    #                 combined = np.concatenate(groups)
-    #                 edges = np.histogram_bin_edges(combined, bins="auto")
-    #                 centers = 0.5 * (edges[:-1] + edges[1:])
 
+    #                         return
+    #                     ax3.plot(centers, dens, **style_kw, label=lbl)
     #                 def _plot_line(vals, lbl, style_kw):
     #                     vals = np.asarray(vals, dtype=float)
     #                     if vals.size == 0:
-    #                         return
     #                     dens, _ = np.histogram(vals, bins=edges, density=True)
-    #                     ax3.plot(centers, dens, **style_kw, label=lbl)
 
     #                 _plot_line(hist_vals[k]["all"], "All", dict(lw=1.8))
     #                 if have_stim:
@@ -9724,14 +9191,9 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         fig.tight_layout()
 
     #     # ---------- Prepare both RAW and NORMALIZED datasets ----------
-    #     y2_ds_by_key_norm = {}
     #     for k in keys_for_csv:
-    #         Y = y2_ds_by_key.get(k, None)
     #         if Y is None or not Y.size:
-    #             y2_ds_by_key_norm[k] = None
     #             continue
-    #         b = _per_sweep_baseline_time(Y)
-    #         y2_ds_by_key_norm[k] = _normalize_matrix(Y, b)
 
     #     hist_vals_raw, hist_vals_norm = _build_hist_vals_raw_and_norm()
 
@@ -9742,20 +9204,20 @@ GMM is an unsupervised machine learning technique that automatically identifies 
 
     #     with PdfPages(out_path) as pdf:
     #         # Page 1 — RAW
-    #         fig1, axes1 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
     #         plt.subplots_adjust(hspace=0.6, wspace=0.25)
     #         _plot_grid(fig1, axes1, y2_ds_by_key, hist_vals_raw, title_suffix="")
     #         fig1.suptitle("PlethApp summary — raw", y=0.995, fontsize=12)
     #         pdf.savefig(fig1, dpi=150)
     #         plt.close(fig1)
+    #         fig1, axes1 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
 
     #         # Page 2 — NORMALIZED
-    #         fig2, axes2 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
     #         plt.subplots_adjust(hspace=0.6, wspace=0.25)
     #         _plot_grid(fig2, axes2, y2_ds_by_key_norm, hist_vals_norm, title_suffix=" (norm)")
     #         fig2.suptitle("PlethApp summary — normalized", y=0.995, fontsize=12)
     #         pdf.savefig(fig2, dpi=150)
     #         plt.close(fig2)
+    #         fig2, axes2 = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
 
     def _save_metrics_summary_pdf(
         self,
@@ -10537,13 +9999,8 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     ##################################################
     ##Curration                                     ##
     ##################################################
-    # def on_curation_choose_dir_clicked(self):
-    #     base = QFileDialog.getExistingDirectory(self, "Choose a folder to scan", self._last_scanned_dir if hasattr(self, "_last_scanned_dir") else str(Path.home()))
     #     if not base:
     #         return
-    #     self._last_scanned_dir = base
-    #     groups = self._scan_csv_groups(Path(base))
-    #     self._populate_file_list_from_groups(groups)
 
     def on_curation_choose_dir_clicked(self):
         # Get last used directory from settings, default to home
@@ -10817,39 +10274,39 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         return moved, skipped_dups
 
 
-    # def _move_items(self, src_lw, dst_lw, rows_to_move: list[int]):
     #     """
     #     Move given rows from src_lw to dst_lw, skipping duplicates by full path.
     #     Preserves per-item tooltip and UserRole. Returns (moved_count, skipped_dups).
     #     """
     #     if not rows_to_move:
+    # def _move_items(self, src_lw, dst_lw, rows_to_move: list[int]):
     #         return 0, 0
 
     #     # Build a plan: check duplicates before removing anything
-    #     plan = []
     #     for r in rows_to_move:
-    #         it = src_lw.item(r)
     #         if it is None:
     #             continue
+    #         plan.append((r, is_dup))
+    #     plan = []
+    #         it = src_lw.item(r)
     #         full_path = it.data(Qt.ItemDataRole.UserRole)
     #         is_dup = self._list_has_path(dst_lw, full_path)
-    #         plan.append((r, is_dup))
 
     #     # Take items in descending row order to avoid index shifting
-    #     taken = []
-    #     skipped_dups = 0
     #     for r, is_dup in sorted(plan, key=lambda x: x[0], reverse=True):
     #         if is_dup:
-    #             skipped_dups += 1
     #             continue
-    #         it = src_lw.takeItem(r)  # this detaches the item from src
     #         if it is not None:
     #             taken.append((r, it))
+    #     taken = []
+    #     skipped_dups = 0
+    #             skipped_dups += 1
+    #         it = src_lw.takeItem(r)  # this detaches the item from src
 
     #     # Add to destination in ascending original order
-    #     moved = 0
     #     for _, it in sorted(taken, key=lambda x: x[0]):
     #         dst_lw.addItem(it)
+    #     moved = 0
     #         moved += 1
 
     #     # Optional: keep lists sorted alphabetically by name
@@ -10909,18 +10366,18 @@ GMM is an unsupervised machine learning technique that automatically identifies 
             pass
 
 
-    # def on_consolidate_save_data_clicked(self):
     #     """Consolidate data from selected files."""
+    # def on_consolidate_save_data_clicked(self):
     #     from PyQt6.QtCore import Qt
     #     import pandas as pd
     #     from pathlib import Path
         
     #     # Get all selected files from right list
+    #         if item:
+    #             items.append(item)
     #     items = []
     #     for i in range(self.FilestoConsolidateList.count()):
     #         item = self.FilestoConsolidateList.item(i)
-    #         if item:
-    #             items.append(item)
         
     #     if not items:
     #         QMessageBox.warning(self, "Consolidate", "No files selected to consolidate.")
@@ -10931,11 +10388,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     breaths_files = []
         
     #     for item in items:
-    #         meta = item.data(Qt.ItemDataRole.UserRole) or {}
     #         if meta.get("means"):
     #             means_files.append((meta["root"], Path(meta["means"])))
     #         if meta.get("breaths"):
     #             breaths_files.append((meta["root"], Path(meta["breaths"])))
+    #         meta = item.data(Qt.ItemDataRole.UserRole) or {}
         
     #     if not means_files:
     #         QMessageBox.warning(self, "Consolidate", "No *_means_by_time.csv files selected.")
@@ -10946,37 +10403,37 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         consolidated_data = self._consolidate_means_files(means_files)
             
     #         # Save consolidated data
-    #         save_dir = QFileDialog.getExistingDirectory(
     #             self, "Choose folder to save consolidated data",
     #             str(means_files[0][1].parent)
     #         )
+    #         save_dir = QFileDialog.getExistingDirectory(
             
     #         if save_dir:
-    #             self._save_consolidated_data(consolidated_data, Path(save_dir))
     #             QMessageBox.information(
     #                 self, "Success", 
     #                 f"Consolidated {len(means_files)} files.\nSaved to: {save_dir}"
     #             )
+    #             self._save_consolidated_data(consolidated_data, Path(save_dir))
         
     #     except Exception as e:
     #         QMessageBox.critical(self, "Consolidation Error", f"Failed to consolidate:\n{e}")
-    #         import traceback
     #         traceback.print_exc()
+    #         import traceback
 
 
-    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Consolidate means_by_time CSV files.
     #     Returns dict: {metric_name: DataFrame with 't' and columns for each file}
     #     """
+    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
         
     #     # Metrics to extract (mean columns only)
-    #     metrics = [
     #         'if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 
     #         'ti', 'te', 'vent_proxy'
     #     ]
+    #     metrics = [
         
     #     consolidated = {}
         
@@ -11019,8 +10476,8 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         result_df = pd.DataFrame({'t': t_values})
             
     #         for root, path in files:
-    #             df = pd.read_csv(path)
     #             if metric_norm_col in df.columns:
+    #             df = pd.read_csv(path)
     #                 result_df[f"{metric}_norm_mean_{root}"] = df[metric_norm_col].values
             
     #         consolidated[f"{metric}_norm"] = result_df
@@ -11028,25 +10485,25 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     return consolidated
 
 
-    # def _save_consolidated_data(self, consolidated: dict, save_dir: Path):
     #     """Save consolidated dataframes to CSV files."""
     #     for metric_name, df in consolidated.items():
-    #         out_path = save_dir / f"consolidated_{metric_name}_means.csv"
     #         df.to_csv(out_path, index=False)
     #         print(f"Saved: {out_path}")
+    # def _save_consolidated_data(self, consolidated: dict, save_dir: Path):
+    #         out_path = save_dir / f"consolidated_{metric_name}_means.csv"
 
-    # def on_consolidate_save_data_clicked(self):
     #     """Consolidate data from selected files into a single Excel file."""
+    # def on_consolidate_save_data_clicked(self):
     #     from PyQt6.QtCore import Qt
     #     import pandas as pd
     #     from pathlib import Path
         
     #     # Get all selected files from right list
+    #         if item:
+    #             items.append(item)
     #     items = []
     #     for i in range(self.FilestoConsolidateList.count()):
     #         item = self.FilestoConsolidateList.item(i)
-    #         if item:
-    #             items.append(item)
         
     #     if not items:
     #         QMessageBox.warning(self, "Consolidate", "No files selected to consolidate.")
@@ -11057,11 +10514,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     breaths_files = []
         
     #     for item in items:
-    #         meta = item.data(Qt.ItemDataRole.UserRole) or {}
     #         if meta.get("means"):
     #             means_files.append((meta["root"], Path(meta["means"])))
     #         if meta.get("breaths"):
     #             breaths_files.append((meta["root"], Path(meta["breaths"])))
+    #         meta = item.data(Qt.ItemDataRole.UserRole) or {}
         
     #     if not means_files:
     #         QMessageBox.warning(self, "Consolidate", "No *_means_by_time.csv files selected.")
@@ -11072,37 +10529,37 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         consolidated_data = self._consolidate_means_files(means_files)
             
     #         # Choose save location
-    #         save_path, _ = QFileDialog.getSaveFileName(
     #             self, "Save consolidated data as...",
     #             str(means_files[0][1].parent / "consolidated_data.xlsx"),
     #             "Excel Files (*.xlsx)"
     #         )
+    #         save_path, _ = QFileDialog.getSaveFileName(
             
     #         if save_path:
-    #             self._save_consolidated_to_excel(consolidated_data, Path(save_path))
     #             QMessageBox.information(
     #                 self, "Success", 
     #                 f"Consolidated {len(means_files)} files.\nSaved to: {save_path}"
     #             )
+    #             self._save_consolidated_to_excel(consolidated_data, Path(save_path))
         
     #     except Exception as e:
     #         QMessageBox.critical(self, "Consolidation Error", f"Failed to consolidate:\n{e}")
-    #         import traceback
     #         traceback.print_exc()
+    #         import traceback
 
 
-    # def on_consolidate_save_data_clicked(self):
     #     """Consolidate data from selected files into a single Excel file."""
+    # def on_consolidate_save_data_clicked(self):
     #     from PyQt6.QtCore import Qt
     #     import pandas as pd
     #     from pathlib import Path
         
     #     # Get all selected files from right list
+    #         if item:
+    #             items.append(item)
     #     items = []
     #     for i in range(self.FilestoConsolidateList.count()):
     #         item = self.FilestoConsolidateList.item(i)
-    #         if item:
-    #             items.append(item)
         
     #     if not items:
     #         QMessageBox.warning(self, "Consolidate", "No files selected to consolidate.")
@@ -11113,11 +10570,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     breaths_files = []
         
     #     for item in items:
-    #         meta = item.data(Qt.ItemDataRole.UserRole) or {}
     #         if meta.get("means"):
     #             means_files.append((meta["root"], Path(meta["means"])))
     #         if meta.get("breaths"):
     #             breaths_files.append((meta["root"], Path(meta["breaths"])))
+    #         meta = item.data(Qt.ItemDataRole.UserRole) or {}
         
     #     if not means_files and not breaths_files:
     #         QMessageBox.warning(self, "Consolidate", "No CSV files selected.")
@@ -11131,34 +10588,34 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             consolidated_data.update(self._consolidate_means_files(means_files))
             
     #         if breaths_files:
-    #             histogram_data = self._consolidate_breaths_histograms(breaths_files)
     #             consolidated_data.update(histogram_data)
+    #             histogram_data = self._consolidate_breaths_histograms(breaths_files)
             
     #         # Choose save location
-    #         default_name = "consolidated_data.xlsx"
     #         if means_files:
-    #             default_name = str(means_files[0][1].parent / "consolidated_data.xlsx")
     #         elif breaths_files:
+    #         default_name = "consolidated_data.xlsx"
+    #             default_name = str(means_files[0][1].parent / "consolidated_data.xlsx")
     #             default_name = str(breaths_files[0][1].parent / "consolidated_data.xlsx")
                 
-    #         save_path, _ = QFileDialog.getSaveFileName(
     #             self, "Save consolidated data as...",
     #             default_name,
     #             "Excel Files (*.xlsx)"
     #         )
+    #         save_path, _ = QFileDialog.getSaveFileName(
             
     #         if save_path:
-    #             self._save_consolidated_to_excel(consolidated_data, Path(save_path))
-    #             n_files = len(means_files) + len(breaths_files)
     #             QMessageBox.information(
     #                 self, "Success", 
     #                 f"Consolidated {n_files} files.\nSaved to: {save_path}"
     #             )
+    #             self._save_consolidated_to_excel(consolidated_data, Path(save_path))
+    #             n_files = len(means_files) + len(breaths_files)
         
     #     except Exception as e:
     #         QMessageBox.critical(self, "Consolidation Error", f"Failed to consolidate:\n{e}")
-    #         import traceback
     #         traceback.print_exc()
+    #         import traceback
 
     def _propose_consolidated_filename(self, files: list) -> tuple[str, list[str]]:
         """Generate a descriptive filename based on the files being consolidated.
@@ -11454,11 +10911,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         finally:
             progress.close()
 
-    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Process breaths CSV files and create histograms for each metric.
     #     Returns dict: {metric_name_region: DataFrame with histogram bins and counts per file}
     #     """
+    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
         
@@ -11466,12 +10923,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     metrics = ['if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 'ti', 'te', 'vent_proxy']
         
     #     # Regions in the breaths CSV
-    #     regions = {
     #         'all': '',  # no suffix for "all" block
     #         'baseline': '_baseline',
     #         'stim': '_stim', 
     #         'post': '_post'
     #     }
+    #     regions = {
         
     #     consolidated = {}
         
@@ -11489,7 +10946,6 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     df = pd.read_csv(path)
                         
     #                     if col_name in df.columns:
-    #                         values = df[col_name].dropna().values
     #                         if len(values) > 0:
     #                             all_data.append(values)
     #                             file_roots.append(root)
@@ -11497,6 +10953,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                             print(f"No data for {col_name} in {root}")
     #                     else:
     #                         print(f"Column {col_name} not found in {root}")
+    #                         values = df[col_name].dropna().values
                             
     #                 except Exception as e:
     #                     print(f"Error reading {path}: {e}")
@@ -11527,11 +10984,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         
     #     return consolidated
 
-    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Process breaths CSV files and create density histograms for each metric.
     #     Returns dict: {metric_name: DataFrame with histogram bins and densities per file}
     #     """
+    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
         
@@ -11539,22 +10996,16 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     metrics = ['if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 'ti', 'te', 'vent_proxy']
         
     #     # Regions in the breaths CSV
-    #     regions = {
     #         'all': '',
     #         'baseline': '_baseline',
     #         'stim': '_stim', 
     #         'post': '_post'
     #     }
+    #     regions = {
         
     #     consolidated = {}
         
     #     # Helper to calculate mean and SEM
-    #     def calc_mean_sem(data_array):
-    #         mean = np.nanmean(data_array, axis=1)
-    #         n = np.sum(np.isfinite(data_array), axis=1)
-    #         std = np.nanstd(data_array, axis=1, ddof=1)
-    #         sem = np.where(n >= 2, std / np.sqrt(n), np.nan)
-    #         return mean, sem
         
     #     for metric in metrics:
     #         # For IF, combine all regions into one sheet
@@ -11573,12 +11024,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                         df = pd.read_csv(path)
                             
     #                         if col_name in df.columns:
-    #                             values = df[col_name].dropna().values
     #                             if len(values) > 0:
     #                                 all_data.append(values)
     #                                 file_roots.append(root)
     #                     except Exception as e:
     #                         print(f"Error reading {path}: {e}")
+    #                             values = df[col_name].dropna().values
                     
     #                 if not all_data:
     #                     continue
@@ -11592,13 +11043,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 # Calculate density histogram for each file
     #                 region_data = {f'bin_center_{region_name}': bin_centers}
                     
-    #                 density_arrays = []
     #                 for root, values in zip(file_roots, all_data):
-    #                     counts, _ = np.histogram(values, bins=bin_edges)
-    #                     # Convert to density (normalize so integral = 1)
-    #                     bin_widths = np.diff(bin_edges)
-    #                     density = counts / (counts.sum() * bin_widths)
-    #                     region_data[f'{root}_{region_name}'] = density
     #                     density_arrays.append(density)
                     
     #                 # Calculate mean and SEM for this region
@@ -11613,20 +11058,20 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                     
     #                 # Combine with other regions
     #                 if combined_df is None:
-    #                     combined_df = region_df
     #                 else:
     #                     # Add blank column separator
-    #                     combined_df[''] = ''
     #                     # Merge horizontally
+    #                     combined_df = region_df
+    #                     combined_df[''] = ''
     #                     combined_df = pd.concat([combined_df, region_df], axis=1)
                 
     #             if combined_df is not None:
-    #                 consolidated[f'{metric}_histogram'] = {
     #                     'time_series': combined_df, 
     #                     'raw_summary': {}, 
     #                     'norm_summary': {}, 
     #                     'windows': []
     #                 }
+    #                 consolidated[f'{metric}_histogram'] = {
             
     #         else:
     #             # For other metrics, keep separate sheets per region
@@ -11641,12 +11086,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                         df = pd.read_csv(path)
                             
     #                         if col_name in df.columns:
-    #                             values = df[col_name].dropna().values
     #                             if len(values) > 0:
     #                                 all_data.append(values)
     #                                 file_roots.append(root)
     #                     except Exception as e:
     #                         print(f"Error reading {path}: {e}")
+    #                             values = df[col_name].dropna().values
                     
     #                 if not all_data:
     #                     continue
@@ -11657,12 +11102,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                     
     #                 hist_data = {'bin_center': (bin_edges[:-1] + bin_edges[1:]) / 2}
                     
-    #                 density_arrays = []
     #                 for root, values in zip(file_roots, all_data):
-    #                     counts, _ = np.histogram(values, bins=bin_edges)
-    #                     bin_widths = np.diff(bin_edges)
-    #                     density = counts / (counts.sum() * bin_widths)
-    #                     hist_data[root] = density
     #                     density_arrays.append(density)
                     
     #                 # Calculate mean and SEM
@@ -11674,22 +11114,22 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                     
     #                 hist_df = pd.DataFrame(hist_data)
                     
-    #                 key = f"{metric}_histogram_{region_name}"
-    #                 consolidated[key] = {
     #                     'time_series': hist_df, 
     #                     'raw_summary': {}, 
     #                     'norm_summary': {}, 
     #                     'windows': []
     #                 }
+    #                 key = f"{metric}_histogram_{region_name}"
+    #                 consolidated[key] = {
         
     #     return consolidated
 
 
-    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Process breaths CSV files and create density histograms for each metric.
     #     Returns dict: {metric_name: DataFrame with histogram bins and densities per file}
     #     """
+    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
         
@@ -11697,22 +11137,16 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     metrics = ['if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 'ti', 'te', 'vent_proxy']
         
     #     # Regions in the breaths CSV
-    #     regions = {
     #         'all': '',
     #         'baseline': '_baseline',
     #         'stim': '_stim', 
     #         'post': '_post'
     #     }
+    #     regions = {
         
     #     consolidated = {}
         
     #     # Helper to calculate mean and SEM
-    #     def calc_mean_sem(data_array):
-    #         mean = np.nanmean(data_array, axis=1)
-    #         n = np.sum(np.isfinite(data_array), axis=1)
-    #         std = np.nanstd(data_array, axis=1, ddof=1)
-    #         sem = np.where(n >= 2, std / np.sqrt(n), np.nan)
-    #         return mean, sem
         
     #     # Process each metric (combine all regions into one sheet)
     #     for metric in metrics:
@@ -11730,12 +11164,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     df = pd.read_csv(path)
                         
     #                     if col_name in df.columns:
-    #                         values = df[col_name].dropna().values
     #                         if len(values) > 0:
     #                             all_data.append(values)
     #                             file_roots.append(root)
     #                 except Exception as e:
     #                     print(f"Error reading {path}: {e}")
+    #                         values = df[col_name].dropna().values
                 
     #             if not all_data:
     #                 continue
@@ -11749,13 +11183,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Calculate density histogram for each file
     #             region_data = {f'bin_center_{region_name}': bin_centers}
                 
-    #             density_arrays = []
     #             for root, values in zip(file_roots, all_data):
-    #                 counts, _ = np.histogram(values, bins=bin_edges)
-    #                 # Convert to density (normalize so integral = 1)
-    #                 bin_widths = np.diff(bin_edges)
-    #                 density = counts / (counts.sum() * bin_widths)
-    #                 region_data[f'{root}_{region_name}'] = density
     #                 density_arrays.append(density)
                 
     #             # Calculate mean and SEM for this region
@@ -11770,28 +11198,28 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                 
     #             # Combine with other regions
     #             if combined_df is None:
-    #                 combined_df = region_df
     #             else:
     #                 # Add blank column separator between regions
-    #                 combined_df[''] = ''
     #                 # Merge horizontally
+    #                 combined_df = region_df
+    #                 combined_df[''] = ''
     #                 combined_df = pd.concat([combined_df, region_df], axis=1)
             
     #         if combined_df is not None:
-    #             consolidated[f'{metric}_histogram'] = {
     #                 'time_series': combined_df, 
     #                 'raw_summary': {}, 
     #                 'norm_summary': {}, 
     #                 'windows': []
     #             }
+    #             consolidated[f'{metric}_histogram'] = {
         
     #     return consolidated
 
-    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Process breaths CSV files and create density histograms for each metric.
     #     Returns dict: {metric_name: DataFrame with histogram bins and densities per file}
     #     """
+    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
         
@@ -11799,22 +11227,16 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     metrics = ['if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 'ti', 'te', 'vent_proxy']
         
     #     # Regions in the breaths CSV
-    #     regions = {
     #         'all': '',
     #         'baseline': '_baseline',
     #         'stim': '_stim', 
     #         'post': '_post'
     #     }
+    #     regions = {
         
     #     consolidated = {}
         
     #     # Helper to calculate mean and SEM
-    #     def calc_mean_sem(data_array):
-    #         mean = np.nanmean(data_array, axis=1)
-    #         n = np.sum(np.isfinite(data_array), axis=1)
-    #         std = np.nanstd(data_array, axis=1, ddof=1)
-    #         sem = np.where(n >= 2, std / np.sqrt(n), np.nan)
-    #         return mean, sem
         
     #     # Process each metric (combine all regions into one sheet)
     #     for metric in metrics:
@@ -11833,12 +11255,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     df = pd.read_csv(path)
                         
     #                     if col_name in df.columns:
-    #                         values = df[col_name].dropna().values
     #                         if len(values) > 0:
     #                             all_data.append(values)
     #                             file_roots.append(root)
     #                 except Exception as e:
     #                     print(f"Error reading {path}: {e}")
+    #                         values = df[col_name].dropna().values
                 
     #             if not all_data:
     #                 continue
@@ -11852,13 +11274,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Calculate density histogram for each file
     #             region_data = {f'bin_center_{region_name}': bin_centers}
                 
-    #             density_arrays = []
     #             for root, values in zip(file_roots, all_data):
-    #                 counts, _ = np.histogram(values, bins=bin_edges)
-    #                 # Convert to density (normalize so integral = 1)
-    #                 bin_widths = np.diff(bin_edges)
-    #                 density = counts / (counts.sum() * bin_widths)
-    #                 region_data[f'{root}_{region_name}'] = density
     #                 density_arrays.append(density)
                 
     #             # Calculate mean and SEM for this region
@@ -11873,11 +11289,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                 
     #             # Combine with other regions
     #             if combined_df is None:
-    #                 combined_df = region_df
     #             else:
     #                 # Add blank column separator between regions
-    #                 combined_df[''] = ''
     #                 # Merge horizontally
+    #                 combined_df = region_df
+    #                 combined_df[''] = ''
     #                 combined_df = pd.concat([combined_df, region_df], axis=1)
             
     #         # Add extra blank column before normalized data
@@ -11897,12 +11313,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     df = pd.read_csv(path)
                         
     #                     if col_name in df.columns:
-    #                         values = df[col_name].dropna().values
     #                         if len(values) > 0:
     #                             all_data_norm.append(values)
     #                             file_roots_norm.append(root)
     #                 except Exception as e:
     #                     print(f"Error reading {path}: {e}")
+    #                         values = df[col_name].dropna().values
                 
     #             if not all_data_norm:
     #                 continue
@@ -11916,12 +11332,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Calculate density histogram for each file
     #             region_data_norm = {f'bin_center_{region_name}_norm': bin_centers_norm}
                 
-    #             density_arrays_norm = []
     #             for root, values in zip(file_roots_norm, all_data_norm):
-    #                 counts, _ = np.histogram(values, bins=bin_edges_norm)
-    #                 bin_widths = np.diff(bin_edges_norm)
-    #                 density = counts / (counts.sum() * bin_widths)
-    #                 region_data_norm[f'{root}_{region_name}_norm'] = density
     #                 density_arrays_norm.append(density)
                 
     #             # Calculate mean and SEM for normalized region
@@ -11937,25 +11348,25 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Combine with existing data
     #             if combined_df is not None:
     #                 # Add blank column separator between regions
-    #                 combined_df[''] = ''
     #                 # Merge horizontally
+    #                 combined_df[''] = ''
     #                 combined_df = pd.concat([combined_df, region_df_norm], axis=1)
             
     #         if combined_df is not None:
-    #             consolidated[f'{metric}_histogram'] = {
     #                 'time_series': combined_df, 
     #                 'raw_summary': {}, 
     #                 'norm_summary': {}, 
     #                 'windows': []
     #             }
+    #             consolidated[f'{metric}_histogram'] = {
         
     #     return consolidated
 
-    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Process breaths CSV files and create density histograms for each metric.
     #     Returns dict: {metric_name: DataFrame with histogram bins and densities per file}
     #     """
+    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
         
@@ -11963,22 +11374,16 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     metrics = ['if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 'ti', 'te', 'vent_proxy']
         
     #     # Regions in the breaths CSV
-    #     regions = {
     #         'all': '',
     #         'baseline': '_baseline',
     #         'stim': '_stim', 
     #         'post': '_post'
     #     }
+    #     regions = {
         
     #     consolidated = {}
         
     #     # Helper to calculate mean and SEM
-    #     def calc_mean_sem(data_array):
-    #         mean = np.nanmean(data_array, axis=1)
-    #         n = np.sum(np.isfinite(data_array), axis=1)
-    #         std = np.nanstd(data_array, axis=1, ddof=1)
-    #         sem = np.where(n >= 2, std / np.sqrt(n), np.nan)
-    #         return mean, sem
         
     #     # Process each metric (combine all regions into one sheet)
     #     for metric in metrics:
@@ -11997,12 +11402,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     df = pd.read_csv(path)
                         
     #                     if col_name in df.columns:
-    #                         values = df[col_name].dropna().values
     #                         if len(values) > 0:
     #                             all_data.append(values)
     #                             file_roots.append(root)
     #                 except Exception as e:
     #                     print(f"Error reading {path}: {e}")
+    #                         values = df[col_name].dropna().values
                 
     #             if not all_data:
     #                 continue
@@ -12016,13 +11421,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Calculate density histogram for each file
     #             region_data = {f'bin_center_{region_name}': bin_centers}
                 
-    #             density_arrays = []
     #             for root, values in zip(file_roots, all_data):
-    #                 counts, _ = np.histogram(values, bins=bin_edges)
-    #                 # Convert to density (normalize so integral = 1)
-    #                 bin_widths = np.diff(bin_edges)
-    #                 density = counts / (counts.sum() * bin_widths)
-    #                 region_data[f'{root}_{region_name}'] = density
     #                 density_arrays.append(density)
                 
     #             # Calculate mean and SEM for this region
@@ -12037,11 +11436,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                 
     #             # Combine with other regions
     #             if combined_df is None:
-    #                 combined_df = region_df
     #             else:
     #                 # Add blank column separator between regions
-    #                 combined_df[''] = ''
     #                 # Merge horizontally
+    #                 combined_df = region_df
+    #                 combined_df[''] = ''
     #                 combined_df = pd.concat([combined_df, region_df], axis=1)
             
     #         # Add extra blank column before normalized data
@@ -12061,12 +11460,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     df = pd.read_csv(path)
                         
     #                     if col_name in df.columns:
-    #                         values = df[col_name].dropna().values
     #                         if len(values) > 0:
     #                             all_data_norm.append(values)
     #                             file_roots_norm.append(root)
     #                 except Exception as e:
     #                     print(f"Error reading {path}: {e}")
+    #                         values = df[col_name].dropna().values
                 
     #             if not all_data_norm:
     #                 continue
@@ -12080,12 +11479,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Calculate density histogram for each file
     #             region_data_norm = {f'bin_center_{region_name}_norm': bin_centers_norm}
                 
-    #             density_arrays_norm = []
     #             for root, values in zip(file_roots_norm, all_data_norm):
-    #                 counts, _ = np.histogram(values, bins=bin_edges_norm)
-    #                 bin_widths = np.diff(bin_edges_norm)
-    #                 density = counts / (counts.sum() * bin_widths)
-    #                 region_data_norm[f'{root}_{region_name}_norm'] = density
     #                 density_arrays_norm.append(density)
                 
     #             # Calculate mean and SEM for normalized region
@@ -12101,25 +11495,25 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Combine with existing data
     #             if combined_df is not None:
     #                 # Add blank column separator between regions
-    #                 combined_df[''] = ''
     #                 # Merge horizontally
+    #                 combined_df[''] = ''
     #                 combined_df = pd.concat([combined_df, region_df_norm], axis=1)
             
     #         if combined_df is not None:
-    #             consolidated[f'{metric}_histogram'] = {
     #                 'time_series': combined_df, 
     #                 'raw_summary': {}, 
     #                 'norm_summary': {}, 
     #                 'windows': []
     #             }
+    #             consolidated[f'{metric}_histogram'] = {
         
     #     return consolidated
 
-    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Process breaths CSV files and create density histograms for each metric.
     #     Returns dict: {metric_name: DataFrame with histogram bins and densities per file}
     #     """
+    # def _consolidate_breaths_histograms(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
         
@@ -12127,22 +11521,16 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     metrics = ['if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 'ti', 'te', 'vent_proxy']
         
     #     # Regions in the breaths CSV
-    #     regions = {
     #         'all': '',
     #         'baseline': '_baseline',
     #         'stim': '_stim', 
     #         'post': '_post'
     #     }
+    #     regions = {
         
     #     consolidated = {}
         
     #     # Helper to calculate mean and SEM
-    #     def calc_mean_sem(data_array):
-    #         mean = np.nanmean(data_array, axis=1)
-    #         n = np.sum(np.isfinite(data_array), axis=1)
-    #         std = np.nanstd(data_array, axis=1, ddof=1)
-    #         sem = np.where(n >= 2, std / np.sqrt(n), np.nan)
-    #         return mean, sem
         
     #     # Process each metric (combine all regions into one sheet)
     #     for metric in metrics:
@@ -12161,12 +11549,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     df = pd.read_csv(path)
                         
     #                     if col_name in df.columns:
-    #                         values = df[col_name].dropna().values
     #                         if len(values) > 0:
     #                             all_data.append(values)
     #                             file_roots.append(root)
     #                 except Exception as e:
     #                     print(f"Error reading {path}: {e}")
+    #                         values = df[col_name].dropna().values
                 
     #             if not all_data:
     #                 continue
@@ -12180,13 +11568,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Calculate density histogram for each file
     #             region_data = {f'bin_center_{region_name}': bin_centers}
                 
-    #             density_arrays = []
     #             for root, values in zip(file_roots, all_data):
-    #                 counts, _ = np.histogram(values, bins=bin_edges)
-    #                 # Convert to density (normalize so integral = 1)
-    #                 bin_widths = np.diff(bin_edges)
-    #                 density = counts / (counts.sum() * bin_widths)
-    #                 region_data[f'{root}_{region_name}'] = density
     #                 density_arrays.append(density)
                 
     #             # Calculate mean and SEM for this region
@@ -12201,11 +11583,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                 
     #             # Combine with other regions
     #             if combined_df is None:
-    #                 combined_df = region_df
     #             else:
     #                 # Add blank column separator between regions
-    #                 combined_df[''] = ''
     #                 # Merge horizontally
+    #                 combined_df = region_df
+    #                 combined_df[''] = ''
     #                 combined_df = pd.concat([combined_df, region_df], axis=1)
             
     #         # Add extra blank column before normalized data
@@ -12225,12 +11607,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     df = pd.read_csv(path)
                         
     #                     if col_name in df.columns:
-    #                         values = df[col_name].dropna().values
     #                         if len(values) > 0:
     #                             all_data_norm.append(values)
     #                             file_roots_norm.append(root)
     #                 except Exception as e:
     #                     print(f"Error reading {path}: {e}")
+    #                         values = df[col_name].dropna().values
                 
     #             if not all_data_norm:
     #                 continue
@@ -12244,12 +11626,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Calculate density histogram for each file
     #             region_data_norm = {f'bin_center_{region_name}_norm': bin_centers_norm}
                 
-    #             density_arrays_norm = []
     #             for root, values in zip(file_roots_norm, all_data_norm):
-    #                 counts, _ = np.histogram(values, bins=bin_edges_norm)
-    #                 bin_widths = np.diff(bin_edges_norm)
-    #                 density = counts / (counts.sum() * bin_widths)
-    #                 region_data_norm[f'{root}_{region_name}_norm'] = density
     #                 density_arrays_norm.append(density)
                 
     #             # Calculate mean and SEM for normalized region
@@ -12265,17 +11642,17 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Combine with existing data
     #             if combined_df is not None:
     #                 # Add blank column separator between regions
-    #                 combined_df[''] = ''
     #                 # Merge horizontally
+    #                 combined_df[''] = ''
     #                 combined_df = pd.concat([combined_df, region_df_norm], axis=1)
             
     #         if combined_df is not None:
-    #             consolidated[f'{metric}_histogram'] = {
     #                 'time_series': combined_df, 
     #                 'raw_summary': {}, 
     #                 'norm_summary': {}, 
     #                 'windows': []
     #             }
+    #             consolidated[f'{metric}_histogram'] = {
         
     #     return consolidated
 
@@ -12601,19 +11978,19 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         else:
             return pd.DataFrame(), warnings
 
-    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Consolidate means_by_time CSV files.
     #     Returns dict: {metric_name: DataFrame with 't' and columns for each file}
     #     """
+    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
         
     #     # Metrics to extract (mean columns only)
-    #     metrics = [
     #         'if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 
     #         'ti', 'te', 'vent_proxy'
     #     ]
+    #     metrics = [
         
     #     consolidated = {}
         
@@ -12652,28 +12029,28 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         result_df = pd.DataFrame({'t': t_values})
             
     #         for root, path in files:
-    #             df = pd.read_csv(path)
     #             if metric_norm_col in df.columns:
+    #             df = pd.read_csv(path)
     #                 result_df[root] = df[metric_norm_col].values
             
     #         consolidated[f"{metric}_norm"] = result_df
         
     #     return consolidated
 
-    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Consolidate means_by_time CSV files.
     #     Interpolates all data to a common time base.
     #     Returns dict: {metric_name: DataFrame with 't' and columns for each file}
     #     """
+    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
     #     from scipy.interpolate import interp1d
         
-    #     metrics = [
     #         'if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 
     #         'ti', 'te', 'vent_proxy'
     #     ]
+    #     metrics = [
         
     #     # Determine common time base (use first file's time)
     #     first_root, first_path = files[0]
@@ -12704,28 +12081,28 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             # Check if time arrays match
     #             if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
     #                 # Direct assignment if times match
-    #                 result_df[root] = y_file
     #             else:
     #                 # Interpolate to common time base
     #                 print(f"Interpolating {root} to common time base for {metric}")
+    #                 result_df[root] = y_file
                     
     #                 # Remove NaN values before interpolation
-    #                 mask = np.isfinite(y_file)
     #                 if mask.sum() < 2:
     #                     print(f"Warning: Not enough valid data in {root} for {metric}")
-    #                     result_df[root] = np.nan
     #                     continue
+    #                 mask = np.isfinite(y_file)
+    #                     result_df[root] = np.nan
                     
     #                 try:
-    #                     f_interp = interp1d(
     #                         t_file[mask], y_file[mask], 
     #                         kind='linear', 
     #                         bounds_error=False, 
     #                         fill_value=np.nan
     #                     )
-    #                     result_df[root] = f_interp(t_common)
     #                 except Exception as e:
     #                     print(f"Error interpolating {root} for {metric}: {e}")
+    #                     f_interp = interp1d(
+    #                     result_df[root] = f_interp(t_common)
     #                     result_df[root] = np.nan
             
     #         consolidated[metric] = result_df
@@ -12749,41 +12126,36 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             y_file = df[metric_norm_col].values
                 
     #             if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
-    #                 result_df[root] = y_file
     #             else:
-    #                 mask = np.isfinite(y_file)
-    #                 if mask.sum() >= 2:
     #                     try:
-    #                         f_interp = interp1d(
     #                             t_file[mask], y_file[mask], 
     #                             kind='linear', 
     #                             bounds_error=False, 
     #                             fill_value=np.nan
     #                         )
-    #                         result_df[root] = f_interp(t_common)
     #                     except:
-    #                         result_df[root] = np.nan
     #                 else:
+    #                         result_df[root] = np.nan
     #                     result_df[root] = np.nan
             
     #         consolidated[f"{metric}_norm"] = result_df
         
     #     return consolidated
 
-    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Consolidate means_by_time CSV files.
     #     Interpolates all data to a common time base.
     #     Returns dict: {metric_name: DataFrame with 't', file columns, 'mean', and 'sem'}
     #     """
+    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
     #     from scipy.interpolate import interp1d
         
-    #     metrics = [
     #         'if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 
     #         'ti', 'te', 'vent_proxy'
     #     ]
+    #     metrics = [
         
     #     # Determine common time base (use first file's time)
     #     first_root, first_path = files[0]
@@ -12793,8 +12165,8 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     consolidated = {}
         
     #     # Helper function to calculate mean and SEM
-    #     def add_mean_sem(df, t_col='t'):
     #         """Add mean and SEM columns to dataframe, excluding the time column."""
+    #     def add_mean_sem(df, t_col='t'):
     #         data_cols = [col for col in df.columns if col != t_col]
     #         data_array = df[data_cols].values
             
@@ -12829,27 +12201,27 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                 
     #             # Check if time arrays match
     #             if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
-    #                 result_df[root] = y_file
     #             else:
     #                 # Interpolate to common time base
     #                 print(f"Interpolating {root} to common time base for {metric}")
+    #                 result_df[root] = y_file
                     
-    #                 mask = np.isfinite(y_file)
     #                 if mask.sum() < 2:
     #                     print(f"Warning: Not enough valid data in {root} for {metric}")
-    #                     result_df[root] = np.nan
     #                     continue
+    #                 mask = np.isfinite(y_file)
+    #                     result_df[root] = np.nan
                     
     #                 try:
-    #                     f_interp = interp1d(
     #                         t_file[mask], y_file[mask], 
     #                         kind='linear', 
     #                         bounds_error=False, 
     #                         fill_value=np.nan
     #                     )
-    #                     result_df[root] = f_interp(t_common)
     #                 except Exception as e:
     #                     print(f"Error interpolating {root} for {metric}: {e}")
+    #                     f_interp = interp1d(
+    #                     result_df[root] = f_interp(t_common)
     #                     result_df[root] = np.nan
             
     #         # Add mean and SEM columns
@@ -12875,21 +12247,16 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             y_file = df[metric_norm_col].values
                 
     #             if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
-    #                 result_df[root] = y_file
     #             else:
-    #                 mask = np.isfinite(y_file)
-    #                 if mask.sum() >= 2:
     #                     try:
-    #                         f_interp = interp1d(
     #                             t_file[mask], y_file[mask], 
     #                             kind='linear', 
     #                             bounds_error=False, 
     #                             fill_value=np.nan
     #                         )
-    #                         result_df[root] = f_interp(t_common)
     #                     except:
-    #                         result_df[root] = np.nan
     #                 else:
+    #                         result_df[root] = np.nan
     #                     result_df[root] = np.nan
             
     #         # Add mean and SEM columns
@@ -12898,20 +12265,20 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         
     #     return consolidated
 
-    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Consolidate means_by_time CSV files.
     #     Interpolates all data to a common time base.
     #     Returns dict: {metric_name: DataFrame with 't', raw data, raw mean/sem, norm data, norm mean/sem}
     #     """
+    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
     #     from scipy.interpolate import interp1d
         
-    #     metrics = [
     #         'if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 
     #         'ti', 'te', 'vent_proxy'
     #     ]
+    #     metrics = [
         
     #     # Determine common time base (use first file's time)
     #     first_root, first_path = files[0]
@@ -12921,13 +12288,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     consolidated = {}
         
     #     # Helper function to calculate mean and SEM
-    #     def calc_mean_sem(data_array):
     #         """Calculate mean and SEM from array of values."""
-    #         mean = np.nanmean(data_array, axis=1)
-    #         n = np.sum(np.isfinite(data_array), axis=1)
-    #         std = np.nanstd(data_array, axis=1, ddof=1)
-    #         sem = np.where(n >= 2, std / np.sqrt(n), np.nan)
-    #         return mean, sem
         
     #     # Process each metric (combining raw and normalized in same sheet)
     #     for metric in metrics:
@@ -12941,8 +12302,8 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         result_df = pd.DataFrame({'t': t_common})
             
     #         # Collect raw data from all files
-    #         raw_data_cols = []
     #         for root, path in files:
+    #         raw_data_cols = []
     #             df = pd.read_csv(path)
                 
     #             if metric_mean_col not in df.columns:
@@ -12953,23 +12314,18 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             y_file = df[metric_mean_col].values
                 
     #             if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
-    #                 result_df[root] = y_file
     #             else:
     #                 print(f"Interpolating {root} to common time base for {metric}")
-    #                 mask = np.isfinite(y_file)
-    #                 if mask.sum() >= 2:
     #                     try:
-    #                         f_interp = interp1d(
     #                             t_file[mask], y_file[mask], 
     #                             kind='linear', 
     #                             bounds_error=False, 
     #                             fill_value=np.nan
     #                         )
-    #                         result_df[root] = f_interp(t_common)
     #                     except Exception as e:
     #                         print(f"Error interpolating {root} for {metric}: {e}")
-    #                         result_df[root] = np.nan
     #                 else:
+    #                         result_df[root] = np.nan
     #                     result_df[root] = np.nan
                 
     #             raw_data_cols.append(root)
@@ -12981,8 +12337,8 @@ GMM is an unsupervised machine learning technique that automatically identifies 
             
     #         # Collect normalized data from all files
     #         if metric_norm_col in df_first.columns:
-    #             norm_data_cols = []
     #             for root, path in files:
+    #             norm_data_cols = []
     #                 df = pd.read_csv(path)
                     
     #                 if metric_norm_col not in df.columns:
@@ -12994,21 +12350,16 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 norm_col_name = f"{root}_norm"
                     
     #                 if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
-    #                     result_df[norm_col_name] = y_file
     #                 else:
-    #                     mask = np.isfinite(y_file)
-    #                     if mask.sum() >= 2:
     #                         try:
-    #                             f_interp = interp1d(
     #                                 t_file[mask], y_file[mask], 
     #                                 kind='linear', 
     #                                 bounds_error=False, 
     #                                 fill_value=np.nan
     #                             )
-    #                             result_df[norm_col_name] = f_interp(t_common)
     #                         except:
-    #                             result_df[norm_col_name] = np.nan
     #                     else:
+    #                             result_df[norm_col_name] = np.nan
     #                         result_df[norm_col_name] = np.nan
                     
     #                 norm_data_cols.append(norm_col_name)
@@ -13022,20 +12373,20 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         
     #     return consolidated
 
-    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     """
     #     Consolidate means_by_time CSV files.
     #     Interpolates all data to a common time base and adds summary statistics.
     #     Returns dict: {metric_name: DataFrame with time series + summary stats}
     #     """
+    # def _consolidate_means_files(self, files: list[tuple[str, Path]]) -> dict:
     #     import pandas as pd
     #     import numpy as np
     #     from scipy.interpolate import interp1d
         
-    #     metrics = [
     #         'if', 'amp_insp', 'amp_exp', 'area_insp', 'area_exp', 
     #         'ti', 'te', 'vent_proxy'
     #     ]
+    #     metrics = [
         
     #     # Determine common time base (use first file's time)
     #     first_root, first_path = files[0]
@@ -13045,24 +12396,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #     consolidated = {}
         
     #     # Helper function to calculate mean and SEM
-    #     def calc_mean_sem(data_array):
     #         """Calculate mean and SEM from array of values."""
-    #         mean = np.nanmean(data_array, axis=1)
-    #         n = np.sum(np.isfinite(data_array), axis=1)
-    #         std = np.nanstd(data_array, axis=1, ddof=1)
-    #         sem = np.where(n >= 2, std / np.sqrt(n), np.nan)
-    #         return mean, sem
         
     #     # Helper function to calculate window mean
-    #     def window_mean(t, y, t_start, t_end):
     #         """Calculate mean of y values where t is between t_start and t_end."""
-    #         mask = (t >= t_start) & (t < t_end)
-    #         if mask.sum() == 0:
-    #             return np.nan
-    #         return np.nanmean(y[mask])
         
     #     # Define time windows for summary stats
-    #     windows = [
     #         ('Baseline (-10 to 0s)', -10.0, 0.0),
     #         ('Baseline (-5 to 0s)', -5.0, 0.0),
     #         ('Stim (0-15s)', 0.0, 15.0),
@@ -13074,6 +12413,7 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         ('Post (20-25s)', 20.0, 25.0),
     #         ('Post (25-30s)', 25.0, 30.0),
     #     ]
+    #     windows = [
         
     #     # Process each metric (combining raw and normalized in same sheet)
     #     for metric in metrics:
@@ -13091,8 +12431,8 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         norm_data_dict = {}
             
     #         # Collect raw data from all files
-    #         raw_data_cols = []
     #         for root, path in files:
+    #         raw_data_cols = []
     #             df = pd.read_csv(path)
                 
     #             if metric_mean_col not in df.columns:
@@ -13103,27 +12443,17 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             y_file = df[metric_mean_col].values
                 
     #             if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
-    #                 result_df[root] = y_file
-    #                 raw_data_dict[root] = (t_common, y_file)
     #             else:
     #                 print(f"Interpolating {root} to common time base for {metric}")
-    #                 mask = np.isfinite(y_file)
-    #                 if mask.sum() >= 2:
     #                     try:
-    #                         f_interp = interp1d(
     #                             t_file[mask], y_file[mask], 
     #                             kind='linear', 
     #                             bounds_error=False, 
     #                             fill_value=np.nan
     #                         )
-    #                         y_interp = f_interp(t_common)
-    #                         result_df[root] = y_interp
-    #                         raw_data_dict[root] = (t_common, y_interp)
     #                     except Exception as e:
     #                         print(f"Error interpolating {root} for {metric}: {e}")
-    #                         result_df[root] = np.nan
     #                 else:
-    #                     result_df[root] = np.nan
                 
     #             raw_data_cols.append(root)
             
@@ -13134,8 +12464,8 @@ GMM is an unsupervised machine learning technique that automatically identifies 
             
     #         # Collect normalized data from all files
     #         if metric_norm_col in df_first.columns:
-    #             norm_data_cols = []
     #             for root, path in files:
+    #             norm_data_cols = []
     #                 df = pd.read_csv(path)
                     
     #                 if metric_norm_col not in df.columns:
@@ -13147,25 +12477,15 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 norm_col_name = f"{root}_norm"
                     
     #                 if np.allclose(t_file, t_common, rtol=1e-5, atol=1e-8):
-    #                     result_df[norm_col_name] = y_file
-    #                     norm_data_dict[root] = (t_common, y_file)
     #                 else:
-    #                     mask = np.isfinite(y_file)
-    #                     if mask.sum() >= 2:
     #                         try:
-    #                             f_interp = interp1d(
     #                                 t_file[mask], y_file[mask], 
     #                                 kind='linear', 
     #                                 bounds_error=False, 
     #                                 fill_value=np.nan
     #                             )
-    #                             y_interp = f_interp(t_common)
-    #                             result_df[norm_col_name] = y_interp
-    #                             norm_data_dict[root] = (t_common, y_interp)
     #                         except:
-    #                             result_df[norm_col_name] = np.nan
     #                     else:
-    #                         result_df[norm_col_name] = np.nan
                     
     #                 norm_data_cols.append(norm_col_name)
                 
@@ -13175,54 +12495,54 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 result_df['mean_norm'], result_df['sem_norm'] = calc_mean_sem(norm_data)
             
     #         # Insert blank column before normalized data
-    #         norm_start_idx = None
     #         for i, col in enumerate(result_df.columns):
     #             if '_norm' in str(col):
-    #                 norm_start_idx = i
     #                 break
     #         if norm_start_idx is not None:
     #             result_df.insert(norm_start_idx, '', '')
+    #         norm_start_idx = None
+    #                 norm_start_idx = i
             
     #         # Add another blank column before summary stats
     #         result_df['  '] = ''
             
     #         # Build summary statistics table
     #         # RAW summary stats
-    #         summary_rows = []
     #         for root in raw_data_dict.keys():
+    #             for window_name, t_start, t_end in windows:
+    #             summary_rows.append(row)
+    #         summary_rows = []
     #             t, y = raw_data_dict[root]
     #             row = {'File': root}
-    #             for window_name, t_start, t_end in windows:
     #                 row[window_name] = window_mean(t, y, t_start, t_end)
-    #             summary_rows.append(row)
             
     #         if summary_rows:
-    #             summary_df = pd.DataFrame(summary_rows)
     #             # Add to result_df (will create columns to the right)
     #             for col in summary_df.columns:
-    #                 if col != 'File':
-    #                     result_df[col] = summary_df[col].values
     #             # Add file names as a column
     #             result_df.insert(len(result_df.columns) - len(windows), 'File', summary_df['File'].values)
+    #             summary_df = pd.DataFrame(summary_rows)
+    #                 if col != 'File':
+    #                     result_df[col] = summary_df[col].values
             
     #         # NORMALIZED summary stats (if they exist)
     #         if norm_data_dict:
     #             result_df['   '] = ''  # Another blank separator
                 
-    #             norm_summary_rows = []
     #             for root in norm_data_dict.keys():
+    #                 for window_name, t_start, t_end in windows:
+    #                 norm_summary_rows.append(row)
+    #             norm_summary_rows = []
     #                 t, y = norm_data_dict[root]
     #                 row = {'File_norm': root}
-    #                 for window_name, t_start, t_end in windows:
     #                     row[f"{window_name}_norm"] = window_mean(t, y, t_start, t_end)
-    #                 norm_summary_rows.append(row)
                 
     #             if norm_summary_rows:
-    #                 norm_summary_df = pd.DataFrame(norm_summary_rows)
     #                 for col in norm_summary_df.columns:
+    #                 result_df.insert(len(result_df.columns) - len(windows), 'File_norm', norm_summary_df['File_norm'].values)
+    #                 norm_summary_df = pd.DataFrame(norm_summary_rows)
     #                     if col != 'File_norm':
     #                         result_df[col] = norm_summary_df[col].values
-    #                 result_df.insert(len(result_df.columns) - len(windows), 'File_norm', norm_summary_df['File_norm'].values)
             
     #         consolidated[metric] = result_df
         
@@ -13894,8 +13214,8 @@ GMM is an unsupervised machine learning technique that automatically identifies 
 
         return combined_sighs
 
-    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     """Save consolidated dataframes to a single Excel file with multiple sheets."""
+    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     import pandas as pd
     #     from openpyxl import load_workbook
     #     from openpyxl.styles import Font
@@ -13905,19 +13225,19 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #         for metric_name, df in consolidated.items():
     #             # Insert blank column between raw and normalized data
     #             # Find where normalized columns start (first column with '_norm' in name)
-    #             norm_start_idx = None
     #             for i, col in enumerate(df.columns):
     #                 if '_norm' in str(col):
-    #                     norm_start_idx = i
     #                     break
+    #             norm_start_idx = None
+    #                     norm_start_idx = i
                 
     #             if norm_start_idx is not None:
     #                 # Insert blank column before normalized data
     #                 df.insert(norm_start_idx, '', '')
                 
-    #             sheet_name = metric_name[:31]
     #             df.to_excel(writer, sheet_name=sheet_name, index=False)
     #             print(f"Saved sheet: {sheet_name}")
+    #             sheet_name = metric_name[:31]
         
     #     # Now apply bold formatting
     #     wb = load_workbook(save_path)
@@ -13934,43 +13254,38 @@ GMM is an unsupervised machine learning technique that automatically identifies 
             
     #         for cell in header_row:
     #             if cell.value in bold_columns:
-    #                 col_letter = cell.column_letter
     #                 # Bold the entire column
     #                 for row in ws.iter_rows(min_row=1, max_row=ws.max_row, 
     #                                     min_col=cell.column, max_col=cell.column):
     #                     for c in row:
+    #                 col_letter = cell.column_letter
     #                         c.font = bold_font
         
     #     wb.save(save_path)
     #     print(f"Applied bold formatting. Consolidated Excel file saved: {save_path}")
 
 
-    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     """Save consolidated dataframes to a single Excel file with multiple sheets."""
+    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     import pandas as pd
         
     #     with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
     #         for metric_name, df in consolidated.items():
     #             # Excel sheet names have a 31 character limit
-    #             sheet_name = metric_name[:31]
     #             df.to_excel(writer, sheet_name=sheet_name, index=False)
     #             print(f"Saved sheet: {sheet_name}")
+    #             sheet_name = metric_name[:31]
         
     #     print(f"Consolidated Excel file saved: {save_path}")
 
 
-    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     """Save consolidated dataframes to a single Excel file with multiple sheets."""
+    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     import pandas as pd
     #     from openpyxl import load_workbook
     #     from openpyxl.styles import Font
         
     #     # Helper to calculate window means
-    #     def window_mean(t, y, t_start, t_end):
-    #         mask = (t >= t_start) & (t < t_end)
-    #         if mask.sum() == 0:
-    #             return np.nan
-    #         return np.nanmean(y[mask])
         
     #     with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
     #         for metric_name, data_dict in consolidated.items():
@@ -13988,35 +13303,35 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             summary_start_row = len(time_series_df) + 3
                 
     #             # Build raw summary DataFrame
-    #             raw_summary_rows = []
     #             for root in raw_summary.keys():
+    #                 for window_name, t_start, t_end in windows:
+    #                 raw_summary_rows.append(row)
+    #             raw_summary_rows = []
     #                 t, y = raw_summary[root]
     #                 row = {'File': root}
-    #                 for window_name, t_start, t_end in windows:
     #                     row[window_name] = window_mean(t, y, t_start, t_end)
-    #                 raw_summary_rows.append(row)
                 
     #             if raw_summary_rows:
-    #                 raw_summary_df = pd.DataFrame(raw_summary_rows)
     #                 raw_summary_df.to_excel(writer, sheet_name=sheet_name, 
     #                                     index=False, startrow=summary_start_row)
+    #                 raw_summary_df = pd.DataFrame(raw_summary_rows)
                 
     #             # Build normalized summary DataFrame  
     #             if norm_summary:
     #                 norm_start_row = summary_start_row + len(raw_summary_rows) + 3
                     
-    #                 norm_summary_rows = []
     #                 for root in norm_summary.keys():
+    #                     for window_name, t_start, t_end in windows:
+    #                     norm_summary_rows.append(row)
+    #                 norm_summary_rows = []
     #                     t, y = norm_summary[root]
     #                     row = {'File': root}
-    #                     for window_name, t_start, t_end in windows:
     #                         row[f"{window_name}_norm"] = window_mean(t, y, t_start, t_end)
-    #                     norm_summary_rows.append(row)
                     
     #                 if norm_summary_rows:
-    #                     norm_summary_df = pd.DataFrame(norm_summary_rows)
     #                     norm_summary_df.to_excel(writer, sheet_name=sheet_name, 
     #                                         index=False, startrow=norm_start_row)
+    #                     norm_summary_df = pd.DataFrame(norm_summary_rows)
                 
     #             print(f"Saved sheet: {sheet_name}")
         
@@ -14033,30 +13348,19 @@ GMM is an unsupervised machine learning technique that automatically identifies 
             
     #         for cell in header_row:
     #             if cell.value in bold_columns:
-    #                 col_letter = cell.column_letter
     #                 # Bold the entire column (only in time series section)
     #                 for row in ws.iter_rows(min_row=1, max_row=len(time_series_df)+1, 
     #                                     min_col=cell.column, max_col=cell.column):
     #                     for c in row:
+    #                 col_letter = cell.column_letter
     #                         c.font = bold_font
         
     #     wb.save(save_path)
     #     print(f"Applied bold formatting. Consolidated Excel file saved: {save_path}")
 
-    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     """Save consolidated dataframes to a single Excel file with multiple sheets."""
-    #     import pandas as pd
-    #     import numpy as np
-    #     from openpyxl import load_workbook
-    #     from openpyxl.styles import Font
-    #     from openpyxl.utils.dataframe import dataframe_to_rows
         
     #     # Helper to calculate window means
-    #     def window_mean(t, y, t_start, t_end):
-    #         mask = (t >= t_start) & (t < t_end)
-    #         if mask.sum() == 0:
-    #             return np.nan
-    #         return np.nanmean(y[mask])
         
     #     with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
     #         for metric_name, data_dict in consolidated.items():
@@ -14077,13 +13381,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             worksheet = writer.sheets[sheet_name]
                 
     #             # Build raw summary DataFrame
-    #             raw_summary_rows = []
     #             for root in raw_summary.keys():
+    #                 for window_name, t_start, t_end in windows:
+    #                 raw_summary_rows.append(row)
+    #             raw_summary_rows = []
     #                 t, y = raw_summary[root]
     #                 row = {'File': root}
-    #                 for window_name, t_start, t_end in windows:
     #                     row[window_name] = window_mean(t, y, t_start, t_end)
-    #                 raw_summary_rows.append(row)
                 
     #             if raw_summary_rows:
     #                 raw_summary_df = pd.DataFrame(raw_summary_rows)
@@ -14098,13 +13402,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 # Start normalized summary after raw summary + 2 blank columns
     #                 norm_start_col = summary_start_col + len(raw_summary_df.columns) + 2
                     
-    #                 norm_summary_rows = []
     #                 for root in norm_summary.keys():
+    #                     for window_name, t_start, t_end in windows:
+    #                     norm_summary_rows.append(row)
+    #                 norm_summary_rows = []
     #                     t, y = norm_summary[root]
     #                     row = {'File': root}
-    #                     for window_name, t_start, t_end in windows:
     #                         row[f"{window_name}_norm"] = window_mean(t, y, t_start, t_end)
-    #                     norm_summary_rows.append(row)
                     
     #                 if norm_summary_rows:
     #                     norm_summary_df = pd.DataFrame(norm_summary_rows)
@@ -14129,30 +13433,19 @@ GMM is an unsupervised machine learning technique that automatically identifies 
             
     #         for cell in header_row:
     #             if cell.value in bold_columns:
-    #                 col_letter = cell.column_letter
     #                 # Bold the entire column (only for time series height)
     #                 for row in ws.iter_rows(min_row=1, max_row=ws.max_row, 
     #                                     min_col=cell.column, max_col=cell.column):
     #                     for c in row:
+    #                 col_letter = cell.column_letter
     #                         c.font = bold_font
         
     #     wb.save(save_path)
     #     print(f"Applied bold formatting. Consolidated Excel file saved: {save_path}")
 
-    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     """Save consolidated dataframes to a single Excel file with multiple sheets."""
-    #     import pandas as pd
-    #     import numpy as np
-    #     from openpyxl import load_workbook
-    #     from openpyxl.styles import Font
-    #     from openpyxl.utils.dataframe import dataframe_to_rows
         
     #     # Helper to calculate window means
-    #     def window_mean(t, y, t_start, t_end):
-    #         mask = (t >= t_start) & (t < t_end)
-    #         if mask.sum() == 0:
-    #             return np.nan
-    #         return np.nanmean(y[mask])
         
     #     with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
     #         for metric_name, data_dict in consolidated.items():
@@ -14175,13 +13468,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 worksheet = writer.sheets[sheet_name]
                     
     #                 # Build raw summary DataFrame
-    #                 raw_summary_rows = []
     #                 for root in raw_summary.keys():
+    #                     for window_name, t_start, t_end in windows:
+    #                     raw_summary_rows.append(row)
+    #                 raw_summary_rows = []
     #                     t, y = raw_summary[root]
     #                     row = {'File': root}
-    #                     for window_name, t_start, t_end in windows:
     #                         row[window_name] = window_mean(t, y, t_start, t_end)
-    #                     raw_summary_rows.append(row)
                     
     #                 if raw_summary_rows:
     #                     raw_summary_df = pd.DataFrame(raw_summary_rows)
@@ -14196,13 +13489,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     # Start normalized summary after raw summary + 2 blank columns
     #                     norm_start_col = summary_start_col + len(raw_summary_df.columns) + 2
                         
-    #                     norm_summary_rows = []
     #                     for root in norm_summary.keys():
+    #                         for window_name, t_start, t_end in windows:
+    #                         norm_summary_rows.append(row)
+    #                     norm_summary_rows = []
     #                         t, y = norm_summary[root]
     #                         row = {'File': root}
-    #                         for window_name, t_start, t_end in windows:
     #                             row[f"{window_name}_norm"] = window_mean(t, y, t_start, t_end)
-    #                         norm_summary_rows.append(row)
                         
     #                     if norm_summary_rows:
     #                         norm_summary_df = pd.DataFrame(norm_summary_rows)
@@ -14227,31 +13520,20 @@ GMM is an unsupervised machine learning technique that automatically identifies 
             
     #         for cell in header_row:
     #             if cell.value in bold_columns:
-    #                 col_letter = cell.column_letter
     #                 # Bold the entire column
     #                 for row in ws.iter_rows(min_row=1, max_row=ws.max_row, 
     #                                     min_col=cell.column, max_col=cell.column):
     #                     for c in row:
+    #                 col_letter = cell.column_letter
     #                         c.font = bold_font
         
     #     wb.save(save_path)
     #     print(f"Applied bold formatting. Consolidated Excel file saved: {save_path}")
 
 
-    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     """Save consolidated dataframes to a single Excel file with multiple sheets."""
-    #     import pandas as pd
-    #     import numpy as np
-    #     from openpyxl import load_workbook
-    #     from openpyxl.styles import Font
-    #     from openpyxl.utils.dataframe import dataframe_to_rows
         
     #     # Helper to calculate window means
-    #     def window_mean(t, y, t_start, t_end):
-    #         mask = (t >= t_start) & (t < t_end)
-    #         if mask.sum() == 0:
-    #             return np.nan
-    #         return np.nanmean(y[mask])
         
     #     with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
     #         for metric_name, data_dict in consolidated.items():
@@ -14274,13 +13556,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 worksheet = writer.sheets[sheet_name]
                     
     #                 # Build raw summary DataFrame
-    #                 raw_summary_rows = []
     #                 for root in raw_summary.keys():
+    #                     for window_name, t_start, t_end in windows:
+    #                     raw_summary_rows.append(row)
+    #                 raw_summary_rows = []
     #                     t, y = raw_summary[root]
     #                     row = {'File': root}
-    #                     for window_name, t_start, t_end in windows:
     #                         row[window_name] = window_mean(t, y, t_start, t_end)
-    #                     raw_summary_rows.append(row)
                     
     #                 if raw_summary_rows:
     #                     raw_summary_df = pd.DataFrame(raw_summary_rows)
@@ -14295,13 +13577,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     # Start normalized summary after raw summary + 2 blank columns
     #                     norm_start_col = summary_start_col + len(raw_summary_df.columns) + 2
                         
-    #                     norm_summary_rows = []
     #                     for root in norm_summary.keys():
+    #                         for window_name, t_start, t_end in windows:
+    #                         norm_summary_rows.append(row)
+    #                     norm_summary_rows = []
     #                         t, y = norm_summary[root]
     #                         row = {'File': root}
-    #                         for window_name, t_start, t_end in windows:
     #                             row[f"{window_name}_norm"] = window_mean(t, y, t_start, t_end)
-    #                         norm_summary_rows.append(row)
                         
     #                     if norm_summary_rows:
     #                         norm_summary_df = pd.DataFrame(norm_summary_rows)
@@ -14332,31 +13614,19 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 cell_val.startswith('mean_') or 
     #                 cell_val.startswith('sem_')):
                     
-    #                 col_letter = cell.column_letter
     #                 # Bold the entire column
     #                 for row in ws.iter_rows(min_row=1, max_row=ws.max_row, 
     #                                     min_col=cell.column, max_col=cell.column):
     #                     for c in row:
+    #                 col_letter = cell.column_letter
     #                         c.font = bold_font
         
     #     wb.save(save_path)
     #     print(f"Applied bold formatting. Consolidated Excel file saved: {save_path}")
 
-    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     """Save consolidated dataframes to a single Excel file with multiple sheets."""
-    #     import pandas as pd
-    #     import numpy as np
-    #     from openpyxl import load_workbook
-    #     from openpyxl.styles import Font
-    #     from openpyxl.utils.dataframe import dataframe_to_rows
-    #     from openpyxl.chart import ScatterChart, Reference, Series
         
     #     # Helper to calculate window means
-    #     def window_mean(t, y, t_start, t_end):
-    #         mask = (t >= t_start) & (t < t_end)
-    #         if mask.sum() == 0:
-    #             return np.nan
-    #         return np.nanmean(y[mask])
         
     #     with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
     #         for metric_name, data_dict in consolidated.items():
@@ -14379,13 +13649,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 worksheet = writer.sheets[sheet_name]
                     
     #                 # Build raw summary DataFrame
-    #                 raw_summary_rows = []
     #                 for root in raw_summary.keys():
+    #                     for window_name, t_start, t_end in windows:
+    #                     raw_summary_rows.append(row)
+    #                 raw_summary_rows = []
     #                     t, y = raw_summary[root]
     #                     row = {'File': root}
-    #                     for window_name, t_start, t_end in windows:
     #                         row[window_name] = window_mean(t, y, t_start, t_end)
-    #                     raw_summary_rows.append(row)
                     
     #                 if raw_summary_rows:
     #                     raw_summary_df = pd.DataFrame(raw_summary_rows)
@@ -14400,13 +13670,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     # Start normalized summary after raw summary + 2 blank columns
     #                     norm_start_col = summary_start_col + len(raw_summary_df.columns) + 2
                         
-    #                     norm_summary_rows = []
     #                     for root in norm_summary.keys():
+    #                         for window_name, t_start, t_end in windows:
+    #                         norm_summary_rows.append(row)
+    #                     norm_summary_rows = []
     #                         t, y = norm_summary[root]
     #                         row = {'File': root}
-    #                         for window_name, t_start, t_end in windows:
     #                             row[f"{window_name}_norm"] = window_mean(t, y, t_start, t_end)
-    #                         norm_summary_rows.append(row)
                         
     #                     if norm_summary_rows:
     #                         norm_summary_df = pd.DataFrame(norm_summary_rows)
@@ -14437,11 +13707,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 cell_val.startswith('mean_') or 
     #                 cell_val.startswith('sem_')):
                     
-    #                 col_letter = cell.column_letter
     #                 # Bold the entire column
     #                 for row in ws.iter_rows(min_row=1, max_row=ws.max_row, 
     #                                     min_col=cell.column, max_col=cell.column):
     #                     for c in row:
+    #                 col_letter = cell.column_letter
     #                         c.font = bold_font
             
     #         # Add charts for histogram sheets
@@ -14450,11 +13720,6 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #             regions = ['all', 'baseline', 'stim', 'post']
                 
     #             # Chart 1: Raw means overlay
-    #             chart1 = ScatterChart()
-    #             chart1.title = f"{sheet_name} - Raw Mean Histograms"
-    #             chart1.x_axis.title = "Bin Center"
-    #             chart1.y_axis.title = "Density"
-    #             chart1.style = 2
                 
     #             for region in regions:
     #                 bin_col = None
@@ -14469,24 +13734,19 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                     
     #                 if bin_col and mean_col:
     #                     # Create x values (bin centers)
-    #                     xvalues = Reference(ws, min_col=bin_col, min_row=2, max_row=ws.max_row)
     #                     # Create y values (means)
+    #                     xvalues = Reference(ws, min_col=bin_col, min_row=2, max_row=ws.max_row)
     #                     yvalues = Reference(ws, min_col=mean_col, min_row=2, max_row=ws.max_row)
                         
-    #                     series = Series(yvalues, xvalues, title=region)
     #                     chart1.series.append(series)
+    #                     series = Series(yvalues, xvalues, title=region)
                 
     #             # Position chart below data
+    #             ws.add_chart(chart1, f"A{ws.max_row + 3}")
     #             chart1.width = 20
     #             chart1.height = 12
-    #             ws.add_chart(chart1, f"A{ws.max_row + 3}")
                 
     #             # Chart 2: Normalized means overlay
-    #             chart2 = ScatterChart()
-    #             chart2.title = f"{sheet_name} - Normalized Mean Histograms"
-    #             chart2.x_axis.title = "Bin Center (normalized)"
-    #             chart2.y_axis.title = "Density"
-    #             chart2.style = 2
                 
     #             for region in regions:
     #                 bin_col_norm = None
@@ -14503,34 +13763,21 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     xvalues = Reference(ws, min_col=bin_col_norm, min_row=2, max_row=ws.max_row)
     #                     yvalues = Reference(ws, min_col=mean_col_norm, min_row=2, max_row=ws.max_row)
                         
-    #                     series = Series(yvalues, xvalues, title=f"{region}_norm")
     #                     chart2.series.append(series)
+    #                     series = Series(yvalues, xvalues, title=f"{region}_norm")
                 
     #             # Position chart to the right of first chart
+    #             ws.add_chart(chart2, f"M{ws.max_row + 3}")
     #             chart2.width = 20
     #             chart2.height = 12
-    #             ws.add_chart(chart2, f"M{ws.max_row + 3}")
         
     #     wb.save(save_path)
     #     print(f"Applied bold formatting and charts. Consolidated Excel file saved: {save_path}")
 
 
-    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     """Save consolidated dataframes to a single Excel file with multiple sheets."""
-    #     import pandas as pd
-    #     import numpy as np
-    #     from openpyxl import load_workbook
-    #     from openpyxl.styles import Font
-    #     from openpyxl.utils.dataframe import dataframe_to_rows
-    #     from openpyxl.chart import ScatterChart, Reference, Series
-    #     from openpyxl.chart.axis import NumericAxis
         
     #     # Helper to calculate window means
-    #     def window_mean(t, y, t_start, t_end):
-    #         mask = (t >= t_start) & (t < t_end)
-    #         if mask.sum() == 0:
-    #             return np.nan
-    #         return np.nanmean(y[mask])
         
     #     with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
     #         for metric_name, data_dict in consolidated.items():
@@ -14553,13 +13800,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 worksheet = writer.sheets[sheet_name]
                     
     #                 # Build raw summary DataFrame
-    #                 raw_summary_rows = []
     #                 for root in raw_summary.keys():
+    #                     for window_name, t_start, t_end in windows:
+    #                     raw_summary_rows.append(row)
+    #                 raw_summary_rows = []
     #                     t, y = raw_summary[root]
     #                     row = {'File': root}
-    #                     for window_name, t_start, t_end in windows:
     #                         row[window_name] = window_mean(t, y, t_start, t_end)
-    #                     raw_summary_rows.append(row)
                     
     #                 if raw_summary_rows:
     #                     raw_summary_df = pd.DataFrame(raw_summary_rows)
@@ -14574,13 +13821,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     # Start normalized summary after raw summary + 2 blank columns
     #                     norm_start_col = summary_start_col + len(raw_summary_df.columns) + 2
                         
-    #                     norm_summary_rows = []
     #                     for root in norm_summary.keys():
+    #                         for window_name, t_start, t_end in windows:
+    #                         norm_summary_rows.append(row)
+    #                     norm_summary_rows = []
     #                         t, y = norm_summary[root]
     #                         row = {'File': root}
-    #                         for window_name, t_start, t_end in windows:
     #                             row[f"{window_name}_norm"] = window_mean(t, y, t_start, t_end)
-    #                         norm_summary_rows.append(row)
                         
     #                     if norm_summary_rows:
     #                         norm_summary_df = pd.DataFrame(norm_summary_rows)
@@ -14611,11 +13858,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 cell_val.startswith('mean_') or 
     #                 cell_val.startswith('sem_')):
                     
-    #                 col_letter = cell.column_letter
     #                 # Bold the entire column
     #                 for row in ws.iter_rows(min_row=1, max_row=ws.max_row, 
     #                                     min_col=cell.column, max_col=cell.column):
     #                     for c in row:
+    #                 col_letter = cell.column_letter
     #                         c.font = bold_font
             
     #         # Add charts for histogram sheets
@@ -14650,12 +13897,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     xvalues = Reference(ws, min_col=bin_col, min_row=2, max_row=ws.max_row)
     #                     yvalues = Reference(ws, min_col=mean_col, min_row=2, max_row=ws.max_row)
                         
-    #                     series = Series(yvalues, xvalues, title=region)
     #                     chart1.series.append(series)
+    #                     series = Series(yvalues, xvalues, title=region)
                 
+    #             ws.add_chart(chart1, f"A{ws.max_row + 3}")
     #             chart1.width = 20
     #             chart1.height = 12
-    #             ws.add_chart(chart1, f"A{ws.max_row + 3}")
                 
     #             # Chart 2: Normalized means overlay
     #             chart2 = ScatterChart()
@@ -14684,12 +13931,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     xvalues = Reference(ws, min_col=bin_col_norm, min_row=2, max_row=ws.max_row)
     #                     yvalues = Reference(ws, min_col=mean_col_norm, min_row=2, max_row=ws.max_row)
                         
-    #                     series = Series(yvalues, xvalues, title=f"{region}_norm")
     #                     chart2.series.append(series)
+    #                     series = Series(yvalues, xvalues, title=f"{region}_norm")
                 
+    #             ws.add_chart(chart2, f"M{ws.max_row + 3}")
     #             chart2.width = 20
     #             chart2.height = 12
-    #             ws.add_chart(chart2, f"M{ws.max_row + 3}")
             
     #         # Add charts for time series sheets (not histograms)
     #         elif '_histogram' not in sheet_name:
@@ -14699,12 +13946,6 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                 
     #             # Find t, mean, and mean_norm columns
     #             for idx, cell in enumerate(header_row, start=1):
-    #                 if cell.value == 't':
-    #                     t_col = idx
-    #                 elif cell.value == 'mean':
-    #                     mean_col = idx
-    #                 elif cell.value == 'mean_norm':
-    #                     mean_norm_col = idx
                 
     #             # Chart 1: Raw mean vs time
     #             if t_col and mean_col:
@@ -14723,12 +13964,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 xvalues = Reference(ws, min_col=t_col, min_row=2, max_row=ws.max_row)
     #                 yvalues = Reference(ws, min_col=mean_col, min_row=2, max_row=ws.max_row)
                     
-    #                 series = Series(yvalues, xvalues, title="Mean")
     #                 chart1.series.append(series)
+    #                 series = Series(yvalues, xvalues, title="Mean")
                     
+    #                 ws.add_chart(chart1, f"A{ws.max_row + 3}")
     #                 chart1.width = 20
     #                 chart1.height = 12
-    #                 ws.add_chart(chart1, f"A{ws.max_row + 3}")
                 
     #             # Chart 2: Normalized mean vs time
     #             if t_col and mean_norm_col:
@@ -14747,32 +13988,19 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 xvalues = Reference(ws, min_col=t_col, min_row=2, max_row=ws.max_row)
     #                 yvalues = Reference(ws, min_col=mean_norm_col, min_row=2, max_row=ws.max_row)
                     
-    #                 series = Series(yvalues, xvalues, title="Mean (normalized)")
     #                 chart2.series.append(series)
+    #                 series = Series(yvalues, xvalues, title="Mean (normalized)")
                     
+    #                 ws.add_chart(chart2, f"M{ws.max_row + 3}")
     #                 chart2.width = 20
     #                 chart2.height = 12
-    #                 ws.add_chart(chart2, f"M{ws.max_row + 3}")
         
     #     wb.save(save_path)
     #     print(f"Applied bold formatting and charts. Consolidated Excel file saved: {save_path}")
 
-    # def _save_consolidated_to_excel(self, consolidated: dict, save_path: Path):
     #     """Save consolidated dataframes to a single Excel file with multiple sheets."""
-    #     import pandas as pd
-    #     import numpy as np
-    #     from openpyxl import load_workbook
-    #     from openpyxl.styles import Font
-    #     from openpyxl.utils.dataframe import dataframe_to_rows
-    #     from openpyxl.chart import ScatterChart, Reference, Series
-    #     from openpyxl.chart.marker import Marker
         
     #     # Helper to calculate window means
-    #     def window_mean(t, y, t_start, t_end):
-    #         mask = (t >= t_start) & (t < t_end)
-    #         if mask.sum() == 0:
-    #             return np.nan
-    #         return np.nanmean(y[mask])
         
     #     with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
     #         for metric_name, data_dict in consolidated.items():
@@ -14795,13 +14023,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 worksheet = writer.sheets[sheet_name]
                     
     #                 # Build raw summary DataFrame
-    #                 raw_summary_rows = []
     #                 for root in raw_summary.keys():
+    #                     for window_name, t_start, t_end in windows:
+    #                     raw_summary_rows.append(row)
+    #                 raw_summary_rows = []
     #                     t, y = raw_summary[root]
     #                     row = {'File': root}
-    #                     for window_name, t_start, t_end in windows:
     #                         row[window_name] = window_mean(t, y, t_start, t_end)
-    #                     raw_summary_rows.append(row)
                     
     #                 if raw_summary_rows:
     #                     raw_summary_df = pd.DataFrame(raw_summary_rows)
@@ -14816,13 +14044,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     # Start normalized summary after raw summary + 2 blank columns
     #                     norm_start_col = summary_start_col + len(raw_summary_df.columns) + 2
                         
-    #                     norm_summary_rows = []
     #                     for root in norm_summary.keys():
+    #                         for window_name, t_start, t_end in windows:
+    #                         norm_summary_rows.append(row)
+    #                     norm_summary_rows = []
     #                         t, y = norm_summary[root]
     #                         row = {'File': root}
-    #                         for window_name, t_start, t_end in windows:
     #                             row[f"{window_name}_norm"] = window_mean(t, y, t_start, t_end)
-    #                         norm_summary_rows.append(row)
                         
     #                     if norm_summary_rows:
     #                         norm_summary_df = pd.DataFrame(norm_summary_rows)
@@ -14853,11 +14081,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 cell_val.startswith('mean_') or 
     #                 cell_val.startswith('sem_')):
                     
-    #                 col_letter = cell.column_letter
     #                 # Bold the entire column
     #                 for row in ws.iter_rows(min_row=1, max_row=ws.max_row, 
     #                                     min_col=cell.column, max_col=cell.column):
     #                     for c in row:
+    #                 col_letter = cell.column_letter
     #                         c.font = bold_font
             
     #         # Add charts for histogram sheets
@@ -14895,14 +14123,14 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     xvalues = Reference(ws, min_col=bin_col, min_row=2, max_row=ws.max_row)
     #                     yvalues = Reference(ws, min_col=mean_col, min_row=2, max_row=ws.max_row)
                         
+    #                     chart1.series.append(series)
     #                     series = Series(yvalues, xvalues, title=region)
     #                     series.marker = Marker('none')  # No markers, just lines
     #                     series.smooth = True
-    #                     chart1.series.append(series)
                 
+    #             ws.add_chart(chart1, f"A{ws.max_row + 3}")
     #             chart1.width = 20
     #             chart1.height = 12
-    #             ws.add_chart(chart1, f"A{ws.max_row + 3}")
                 
     #             # Chart 2: Normalized means overlay
     #             chart2 = ScatterChart()
@@ -14933,14 +14161,14 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                     xvalues = Reference(ws, min_col=bin_col_norm, min_row=2, max_row=ws.max_row)
     #                     yvalues = Reference(ws, min_col=mean_col_norm, min_row=2, max_row=ws.max_row)
                         
+    #                     chart2.series.append(series)
     #                     series = Series(yvalues, xvalues, title=f"{region}_norm")
     #                     series.marker = Marker('none')
     #                     series.smooth = True
-    #                     chart2.series.append(series)
                 
+    #             ws.add_chart(chart2, f"M{ws.max_row + 3}")
     #             chart2.width = 20
     #             chart2.height = 12
-    #             ws.add_chart(chart2, f"M{ws.max_row + 3}")
             
     #         # Add charts for time series sheets (not histograms)
     #         elif '_histogram' not in sheet_name:
@@ -14950,12 +14178,6 @@ GMM is an unsupervised machine learning technique that automatically identifies 
                 
     #             # Find t, mean, and mean_norm columns
     #             for idx, cell in enumerate(header_row, start=1):
-    #                 if cell.value == 't':
-    #                     t_col = idx
-    #                 elif cell.value == 'mean':
-    #                     mean_col = idx
-    #                 elif cell.value == 'mean_norm':
-    #                     mean_norm_col = idx
                 
     #             # Chart 1: Raw mean vs time
     #             if t_col and mean_col:
@@ -14977,15 +14199,15 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 xvalues = Reference(ws, min_col=t_col, min_row=2, max_row=ws.max_row)
     #                 yvalues = Reference(ws, min_col=mean_col, min_row=2, max_row=ws.max_row)
                     
+    #                 chart1.series.append(series)
     #                 series = Series(yvalues, xvalues, title="Mean")
     #                 series.marker = Marker('none')  # No markers, just line
     #                 series.smooth = True
     #                 series.graphicalProperties.line.solidFill = "4472C4"  # Solid blue line
-    #                 chart1.series.append(series)
                     
+    #                 ws.add_chart(chart1, f"A{ws.max_row + 3}")
     #                 chart1.width = 20
     #                 chart1.height = 12
-    #                 ws.add_chart(chart1, f"A{ws.max_row + 3}")
                 
     #             # Chart 2: Normalized mean vs time
     #             if t_col and mean_norm_col:
@@ -15007,15 +14229,15 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     #                 xvalues = Reference(ws, min_col=t_col, min_row=2, max_row=ws.max_row)
     #                 yvalues = Reference(ws, min_col=mean_norm_col, min_row=2, max_row=ws.max_row)
                     
+    #                 chart2.series.append(series)
     #                 series = Series(yvalues, xvalues, title="Mean (normalized)")
     #                 series.marker = Marker('none')
     #                 series.smooth = True
     #                 series.graphicalProperties.line.solidFill = "ED7D31"  # Solid orange line
-    #                 chart2.series.append(series)
                     
+    #                 ws.add_chart(chart2, f"M{ws.max_row + 3}")
     #                 chart2.width = 20
     #                 chart2.height = 12
-    #                 ws.add_chart(chart2, f"M{ws.max_row + 3}")
         
     #     wb.save(save_path)
     #     print(f"Applied bold formatting and charts. Consolidated Excel file saved: {save_path}")

@@ -85,13 +85,13 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
     return None
 
 
-# def compute_breath_events(y: np.ndarray,
 #                           peaks_idx: np.ndarray,
-#                           direction: str = "up",
-#                           eps: float = 0.0) -> Dict[str, np.ndarray]:
 #     """
 #     Given a processed 1D signal y and inspiratory peaks (indices),
 #     compute breath onsets, offsets, and expiratory extrema.
+# def compute_breath_events(y: np.ndarray,
+#                           direction: str = "up",
+#                           eps: float = 0.0) -> Dict[str, np.ndarray]:
 
 #     Rules:
 #       - Onset: nearest zero crossing *before* each peak in y; if none found
@@ -104,11 +104,11 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #     Returns dict with keys: 'onsets', 'offsets', 'expmins' (np.int arrays).
 #     (For direction='down', 'expmins' holds those inter-peak maxima.)
 #     """
+#                 "offsets": np.array([], dtype=int),
+#                 "expmins": np.array([], dtype=int)}
 #     peaks_idx = np.asarray(peaks_idx, dtype=int)
 #     if peaks_idx.size == 0:
 #         return {"onsets": np.array([], dtype=int),
-#                 "offsets": np.array([], dtype=int),
-#                 "expmins": np.array([], dtype=int)}
 
 #     y = np.asarray(y, dtype=float)
 #     dy = np.gradient(y)
@@ -122,42 +122,37 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #         right_bound = peaks_idx[i+1] if i < n - 1 else (N - 1)
 
 #         # Onset (before pk)
-#         onset = _first_zc_before(y, pk, left_bound, eps=eps)
 #         if onset is None:
-#             onset = _first_zc_before(dy, pk, left_bound, eps=eps)
 #         if onset is not None:
 #             onsets.append(onset)
+#         onset = _first_zc_before(y, pk, left_bound, eps=eps)
+#             onset = _first_zc_before(dy, pk, left_bound, eps=eps)
 
 #         # Offset (after pk)
-#         offset = _first_zc_after(y, pk, right_bound, eps=eps)
 #         if offset is None:
-#             offset = _first_zc_after(dy, pk, right_bound, eps=eps)
 #         if offset is not None:
 #             offsets.append(offset)
+#         offset = _first_zc_after(y, pk, right_bound, eps=eps)
+#             offset = _first_zc_after(dy, pk, right_bound, eps=eps)
 
 #         # Expiratory extremum strictly between pk and next pk
 #         if i < n - 1:
-#             nxt = peaks_idx[i + 1]
-#             if nxt - pk >= 2:
-#                 seg = y[pk + 1:nxt]
 #                 if seg.size > 0:
-#                     if direction == "down":
-#                         j = int(pk + 1 + np.argmax(seg))  # maxima between troughs
 #                     else:
-#                         j = int(pk + 1 + np.argmin(seg))  # minima between peaks
 #                     expmins.append(j)
+#                         j = int(pk + 1 + np.argmin(seg))  # minima between peaks
 
-#     return {
 #         "onsets":  np.asarray(onsets,  dtype=int),
 #         "offsets": np.asarray(offsets, dtype=int),
 #         "expmins": np.asarray(expmins, dtype=int),
 #     }
+#     return {
 
-# def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
-#                           sr_hz: float, exclude_sec: float = 0.010) -> Dict[str, np.ndarray]:
 #     """
 #     Given a processed 1D signal y and inspiratory peaks (indices),
 #     compute breath onsets, offsets, and expiratory minima.
+# def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
+#                           sr_hz: float, exclude_sec: float = 0.010) -> Dict[str, np.ndarray]:
 
 #     Rules:
 #       - Onset: nearest zero crossing *before* each peak in y; if none found
@@ -168,20 +163,15 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #         but ignoring ±exclude_sec around the peak.
 #       - Expiratory minimum: argmin(y) strictly between consecutive peaks.
 #     """
-#     if peaks_idx is None or len(peaks_idx) == 0:
-#         return {"onsets": np.array([], dtype=int),
 #                 "offsets": np.array([], dtype=int),
 #                 "expmins": np.array([], dtype=int)}
+#     if peaks_idx is None or len(peaks_idx) == 0:
+#         return {"onsets": np.array([], dtype=int),
 
-#     y = np.asarray(y, dtype=float)
-#     dy = np.gradient(y)
-#     onsets, offsets, expmins = [], [], []
-#     N = len(y)
-#     n = len(peaks_idx)
 
+#     if excl_n < 0:
 #     # convert exclusion to samples (ensure >= 1 if sr is valid)
 #     excl_n = int(round(exclude_sec * sr_hz)) if (sr_hz and sr_hz > 0) else 0
-#     if excl_n < 0:
 #         excl_n = 0
 
 #     for i, pk in enumerate(peaks_idx):
@@ -189,52 +179,40 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #         right_bound = peaks_idx[i+1] if i < n - 1 else (N - 1)
 
 #         # Onset (raw y)
-#         onset = _first_zc_before(y, pk, left_bound)
 #         if onset is None:
 #             # fallback to dy, but exclude ±excl_n around pk
+#         if onset is not None:
+#             onsets.append(onset)
+#         onset = _first_zc_before(y, pk, left_bound)
 #             lo = max(left_bound,  pk - excl_n)
 #             hi = min(right_bound, pk + excl_n)
 #             onset = _first_zc_before(dy, pk, left_bound, exclude_lo=lo, exclude_hi=hi)
-#         if onset is not None:
-#             onsets.append(onset)
 
 #         # Offset (raw y)
-#         offset = _first_zc_after(y, pk, right_bound)
 #         if offset is None:
+#         if offset is not None:
+#             offsets.append(offset)
+#         offset = _first_zc_after(y, pk, right_bound)
 #             lo = max(left_bound,  pk - excl_n)
 #             hi = min(right_bound, pk + excl_n)
 #             offset = _first_zc_after(dy, pk, right_bound, exclude_lo=lo, exclude_hi=hi)
-#         if offset is not None:
-#             offsets.append(offset)
         
 #         # --- Expiratory offsets: first zero-cross in y or d1 after offset, whichever first ---
-#         expoffs: list[int] = []
-#         if onsets is not None and len(onsets) >= 2 and offsets is not None and len(offsets) >= 1:
-#             on = np.asarray(onsets, dtype=int)
-#             off = np.asarray(offsets, dtype=int)
-#             ncyc = max(0, len(on) - 1)
 #             for i in range(ncyc):
-#                 if i >= len(off):
 #                     continue
-#                 oi = int(off[i])
 #                 # search window: (offset .. next onset)
-#                 i_start = max(0, oi)
-#                 i_end   = min(len(y), int(on[i+1]))
-#                 if i_end - i_start >= 2:
-#                     k = _first_zero_cross_either(y, i_start, i_end, sr_hz)
 #                     if k is not None:
 #                         expoffs.append(int(k))
 
 #         # Expiratory minimum between pk and next pk
 #         if i < n - 1:
+#                 if seg.size > 0:
+#                     expmins.append(j)
 #             nxt = peaks_idx[i + 1]
 #             if nxt - pk >= 2:
 #                 seg = y[pk + 1:nxt]
-#                 if seg.size > 0:
 #                     j = int(pk + 1 + np.argmin(seg))
-#                     expmins.append(j)
 
-#     return {
 #         # "onsets":  np.asarray(onsets,  dtype=int),
 #         # "offsets": np.asarray(offsets, dtype=int),
 #         # "expmins": np.asarray(expmins, dtype=int),
@@ -243,12 +221,13 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #         "expmins": np.asarray(expmins, dtype=int) if expmins is not None else np.array([], dtype=int),
 #         "expoffs": np.asarray(sorted(set(expoffs)), dtype=int),   
 #     }
+#     return {
 
-# def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
-#                           sr_hz: float, exclude_sec: float = 0.010) -> Dict[str, np.ndarray]:
 #     """
 #     Given a processed 1D signal y and inspiratory peaks (indices),
 #     compute breath onsets, offsets, expiratory minima, and expiratory offsets.
+# def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
+#                           sr_hz: float, exclude_sec: float = 0.010) -> Dict[str, np.ndarray]:
 
 #     Rules:
 #       - Onset : nearest zero crossing *before* each peak in y; fallback to dy/dt crossing,
@@ -260,14 +239,14 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 
 #     Returns dict with keys: 'onsets', 'offsets', 'expmins', 'expoffs' (np.int arrays).
 #     """
-#     peaks_idx = np.asarray(peaks_idx, dtype=int)
-#     if peaks_idx.size == 0:
-#         return {
 #             "onsets":  np.array([], dtype=int),
 #             "offsets": np.array([], dtype=int),
 #             "expmins": np.array([], dtype=int),
 #             "expoffs": np.array([], dtype=int),
 #         }
+#     peaks_idx = np.asarray(peaks_idx, dtype=int)
+#     if peaks_idx.size == 0:
+#         return {
 
 #     y  = np.asarray(y, dtype=float)
 #     dy = np.gradient(y)
@@ -292,70 +271,59 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #         right_bound = peaks_idx[i + 1] if i < n - 1 else (N - 1)
 
 #         # Onset (prefer y; fallback to dy/dt with exclusion)
-#         onset = _first_zc_before_from_zc(zc_y, pk, left_bound)
 #         if onset is None:
+#         if onset is not None:
+#             onsets.append(onset)
+#         onset = _first_zc_before_from_zc(zc_y, pk, left_bound)
 #             lo = max(left_bound,  pk - excl_n)
 #             hi = min(right_bound, pk + excl_n)
 #             onset = _first_zc_before_from_zc(zc_dy, pk, left_bound, exclude_lo=lo, exclude_hi=hi)
-#         if onset is not None:
-#             onsets.append(onset)
 
 #         # Offset (prefer y; fallback to dy/dt with exclusion)
-#         offset = _first_zc_after_from_zc(zc_y, pk, right_bound)
 #         if offset is None:
+#         if offset is not None:
+#             offsets.append(offset)
+#         offset = _first_zc_after_from_zc(zc_y, pk, right_bound)
 #             lo = max(left_bound,  pk - excl_n)
 #             hi = min(right_bound, pk + excl_n)
 #             offset = _first_zc_after_from_zc(zc_dy, pk, right_bound, exclude_lo=lo, exclude_hi=hi)
-#         if offset is not None:
-#             offsets.append(offset)
 
 #         # Expiratory minimum strictly between pk and next pk
 #         if i < n - 1:
+#                 if seg.size:
+#                     expmins.append(int(pk + 1 + int(np.argmin(seg))))
 #             nxt = peaks_idx[i + 1]
 #             if nxt - pk >= 2:
 #                 seg = y[pk + 1 : nxt]
-#                 if seg.size:
-#                     expmins.append(int(pk + 1 + int(np.argmin(seg))))
 
 #     # Pass 2: expiratory offsets once (no rework inside the loop)
-#     expoffs: list[int] = []
-#     if len(onsets) >= 2 and len(offsets) >= 1:
-#         on  = np.asarray(onsets,  dtype=int)
-#         off = np.asarray(offsets, dtype=int)
-#         ncyc = min(len(off), len(on) - 1)
 #         # Use the same “either y or d1” rule as before,
 #         # but do it once per cycle.
 #         for i in range(ncyc):
-#             i_start = max(0,         int(off[i]))
-#             i_end   = min(int(on[i+1]), N)
-#             if i_end - i_start >= 2:
 #                 # # earliest of y-cross or d1-cross
-#                 # k_y  = _first_zc_after_from_zc(zc_y,  i_start - 1, i_end)   # -1 so we can find crossing at i_start+1
-#                 # k_d1 = _first_zc_after_from_zc(zc_dy, i_start - 1, i_end)
-#                 # cand = [k for k in (k_y, k_d1) if k is not None]
 #                 # if cand:
 #                 #     expoffs.append(int(min(cand)))
 #                 # first zero-cross in y, SECOND zero-cross in dy/dt
+#                 if cand:
+#                     expoffs.append(int(min(cand)))  # whichever occurs earlier after offset
 #                 k_y  = _first_zc_after_from_zc(zc_y,  i_start - 1, i_end)
 #                 k_d1 = _kth_zc_after_from_zc(zc_dy, i_start - 1, i_end, k=2)
 #                 cand = [k for k in (k_y, k_d1) if k is not None]
-#                 if cand:
-#                     expoffs.append(int(min(cand)))  # whichever occurs earlier after offset
 
-#     return {
 #         "onsets":  np.asarray(onsets,  dtype=int),
 #         "offsets": np.asarray(offsets, dtype=int),
 #         "expmins": np.asarray(expmins, dtype=int),
 #         "expoffs": np.asarray(expoffs, dtype=int),
 #     }
+#     return {
 
 
-# def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
-#                           sr_hz: float, exclude_sec: float = 0.010) -> Dict[str, np.ndarray]:
 #     """
 #     Given a processed 1D signal y and inspiratory peaks (indices),
 #     compute breath onsets, offsets, expiratory minima (now via d1 ZC after offset),
 #     and expiratory offsets.
+# def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
+#                           sr_hz: float, exclude_sec: float = 0.010) -> Dict[str, np.ndarray]:
 
 #     Rules:
 #       - Onset : nearest zero crossing *before* each peak in y; fallback to dy/dt crossing,
@@ -369,20 +337,15 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 
 #     Returns dict with keys: 'onsets', 'offsets', 'expmins', 'expoffs' (np.int arrays).
 #     """
-#     peaks_idx = np.asarray(peaks_idx, dtype=int)
-#     if peaks_idx.size == 0:
-#         return {
 #             "onsets":  np.array([], dtype=int),
 #             "offsets": np.array([], dtype=int),
 #             "expmins": np.array([], dtype=int),
 #             "expoffs": np.array([], dtype=int),
 #         }
+#     peaks_idx = np.asarray(peaks_idx, dtype=int)
+#     if peaks_idx.size == 0:
+#         return {
 
-#     y  = np.asarray(y, dtype=float)
-#     # dy = np.gradient(y)
-#     dy = _d1_lowpass20(y, sr_hz)
-#     N  = len(y)
-#     n  = len(peaks_idx)
 
 #     # Precompute zero-crossings (left indices) once
 #     zc_y  = _zero_crossings_left_indices(y)
@@ -401,22 +364,22 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #         right_bound = peaks_idx[i + 1] if i < n - 1 else (N - 1)
 
 #         # Onset (prefer y; fallback to dy/dt with exclusion)
-#         onset = _first_zc_before_from_zc(zc_y, pk, left_bound)
 #         if onset is None:
+#         if onset is not None:
+#             onsets.append(onset)
+#         onset = _first_zc_before_from_zc(zc_y, pk, left_bound)
 #             lo = max(left_bound,  pk - excl_n)
 #             hi = min(right_bound, pk + excl_n)
 #             onset = _first_zc_before_from_zc(zc_dy, pk, left_bound, exclude_lo=lo, exclude_hi=hi)
-#         if onset is not None:
-#             onsets.append(onset)
 
 #         # Offset (prefer y; fallback to dy/dt with exclusion)
-#         offset = _first_zc_after_from_zc(zc_y, pk, right_bound)
 #         if offset is None:
+#         if offset is not None:
+#             offsets.append(offset)
+#         offset = _first_zc_after_from_zc(zc_y, pk, right_bound)
 #             lo = max(left_bound,  pk - excl_n)
 #             hi = min(right_bound, pk + excl_n)
 #             offset = _first_zc_after_from_zc(zc_dy, pk, right_bound, exclude_lo=lo, exclude_hi=hi)
-#         if offset is not None:
-#             offsets.append(offset)
 
 #     # Pass 2: expmins (FIRST d1 ZC after offset) and expoffs (earliest of y-ZC, SECOND d1-ZC)
 #     expmins: list[int] = []
@@ -432,33 +395,33 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #             i_start = max(0, int(off[i]))
 #             i_end   = min(int(on[i + 1]), N)  # inclusive right bound behavior handled by helpers
 
-#             if i_end - i_start >= 1:
 #                 # Expiratory "min": FIRST zero-cross in dy/dt after the offset
-#                 k_d1_first = _first_zc_after_from_zc(zc_dy, i_start, i_end)
 #                 if k_d1_first is not None:
 #                     expmins.append(int(k_d1_first))
+#             if i_end - i_start >= 1:
+#                 k_d1_first = _first_zc_after_from_zc(zc_dy, i_start, i_end)
 
 #                 # Expiratory offset: earliest of {y-ZC, SECOND d1-ZC} after the offset
+#                 if cand:
+#                     expoffs.append(int(min(cand)))
 #                 k_y        = _first_zc_after_from_zc( zc_y,  i_start - 1, i_end)
 #                 k_d1_second= _kth_zc_after_from_zc(zc_dy, i_start - 1, i_end, k=2)
 #                 cand = [k for k in (k_y, k_d1_second) if k is not None]
-#                 if cand:
-#                     expoffs.append(int(min(cand)))
 
-#     return {
 #         "onsets":  np.asarray(onsets,  dtype=int),
 #         "offsets": np.asarray(offsets, dtype=int),
 #         "expmins": np.asarray(expmins, dtype=int),
 #         "expoffs": np.asarray(expoffs, dtype=int),
 #     }
+#     return {
 
 
-# def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
-#                           sr_hz: float, exclude_sec: float = 0.010) -> Dict[str, np.ndarray]:
 #     """
 #     Given a processed 1D signal y and inspiratory peaks (indices),
 #     compute breath onsets, offsets, expiratory minima (via first d1 ZC after offset),
 #     and expiratory offsets.
+# def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
+#                           sr_hz: float, exclude_sec: float = 0.010) -> Dict[str, np.ndarray]:
 
 #     Rules:
 #       - Onset : nearest zero crossing *before* each peak in y; fallback to dy/dt crossing,
@@ -470,14 +433,14 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #       - Exp offset: FIRST zero crossing in y after the inspiratory offset
 #                     (search window: offset .. next onset).   <-- simplified
 #     """
-#     peaks_idx = np.asarray(peaks_idx, dtype=int)
-#     if peaks_idx.size == 0:
-#         return {
 #             "onsets":  np.array([], dtype=int),
 #             "offsets": np.array([], dtype=int),
 #             "expmins": np.array([], dtype=int),
 #             "expoffs": np.array([], dtype=int),
 #         }
+#     peaks_idx = np.asarray(peaks_idx, dtype=int)
+#     if peaks_idx.size == 0:
+#         return {
 
 #     y  = np.asarray(y, dtype=float)
 #     dy = np.gradient(y)
@@ -501,22 +464,22 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #         right_bound = peaks_idx[i + 1] if i < n - 1 else (N - 1)
 
 #         # Onset (prefer y; fallback to dy/dt with exclusion)
-#         onset = _first_zc_before_from_zc(zc_y, pk, left_bound)
 #         if onset is None:
+#         if onset is not None:
+#             onsets.append(onset)
+#         onset = _first_zc_before_from_zc(zc_y, pk, left_bound)
 #             lo = max(left_bound,  pk - excl_n)
 #             hi = min(right_bound, pk + excl_n)
 #             onset = _first_zc_before_from_zc(zc_dy, pk, left_bound, exclude_lo=lo, exclude_hi=hi)
-#         if onset is not None:
-#             onsets.append(onset)
 
 #         # Offset (prefer y; fallback to dy/dt with exclusion)
-#         offset = _first_zc_after_from_zc(zc_y, pk, right_bound)
 #         if offset is None:
+#         if offset is not None:
+#             offsets.append(offset)
+#         offset = _first_zc_after_from_zc(zc_y, pk, right_bound)
 #             lo = max(left_bound,  pk - excl_n)
 #             hi = min(right_bound, pk + excl_n)
 #             offset = _first_zc_after_from_zc(zc_dy, pk, right_bound, exclude_lo=lo, exclude_hi=hi)
-#         if offset is not None:
-#             offsets.append(offset)
 
 #     # Pass 2: expmins (FIRST d1 ZC after offset) and expoffs (FIRST y ZC after offset)
 #     expmins: list[int] = []
@@ -532,23 +495,23 @@ def _first_zc_after(x: np.ndarray, idx: int, right_bound: int, eps: float = 0.0)
 #             i_start = max(0, int(off[i]))
 #             i_end   = min(int(on[i + 1]), N)
 
-#             if i_end - i_start >= 1:
 #                 # Exp "min": FIRST zero-cross in dy/dt after the offset (unchanged)
-#                 k_d1_first = _first_zc_after_from_zc(zc_dy, i_start, i_end)
 #                 if k_d1_first is not None:
 #                     expmins.append(int(k_d1_first))
+#             if i_end - i_start >= 1:
+#                 k_d1_first = _first_zc_after_from_zc(zc_dy, i_start, i_end)
 
 #                 # Expiratory offset: FIRST zero-cross in y after the offset (simplified)
-#                 k_y = _first_zc_after_from_zc(zc_y, i_start - 1, i_end)
 #                 if k_y is not None:
 #                     expoffs.append(int(k_y))
+#                 k_y = _first_zc_after_from_zc(zc_y, i_start - 1, i_end)
 
-#     return {
 #         "onsets":  np.asarray(onsets,  dtype=int),
 #         "offsets": np.asarray(offsets, dtype=int),
 #         "expmins": np.asarray(expmins, dtype=int),
 #         "expoffs": np.asarray(expoffs, dtype=int),
 #     }
+#     return {
 
 def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
                           sr_hz: float, exclude_sec: float = 0.005) -> Dict[str, np.ndarray]:
@@ -874,23 +837,18 @@ def compute_breath_events(y: np.ndarray, peaks_idx: np.ndarray,
 
 
 
-# def detect_peaks_and_breaths(
 #     y: np.ndarray, sr_hz: float,
-#     thresh: float | None = None,
-#     prominence: float | None = None,
-#     min_dist_samples: int | None = None,
-#     direction: str = "up",
 # ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
 #     """
 #     Convenience: run peak detection then compute breath events.
 #     """
-#     pks = detect_peaks(
 #         y=y, sr_hz=sr_hz,
 #         thresh=thresh,
 #         prominence=prominence,
 #         min_dist_samples=min_dist_samples,
 #         direction=direction,
 #     )
+#     pks = detect_peaks(
 #     breaths = compute_breath_events(y, pks, direction=direction)
 #     return pks, breaths
 
