@@ -15,6 +15,49 @@ def mean_subtract(y: np.ndarray, mean_val: float | None) -> np.ndarray:
     return y - (0.0 if mean_val is None else float(mean_val))
 
 
+def zscore_normalize(y: np.ndarray, global_mean: float | None = None, global_std: float | None = None) -> np.ndarray:
+    """
+    Z-score normalization: (y - mean) / std.
+
+    Normalizes the signal to have zero mean and unit standard deviation.
+    Handles NaN values by computing statistics only on valid data.
+
+    Args:
+        y: Input signal array
+        global_mean: Pre-computed global mean (optional). If provided, uses this instead of computing from y.
+        global_std: Pre-computed global std (optional). If provided, uses this instead of computing from y.
+
+    Returns:
+        Z-score normalized signal (same shape as input)
+    """
+    y = np.asarray(y, dtype=float)
+
+    # Handle all-NaN case
+    if np.all(np.isnan(y)):
+        return y
+
+    # If global statistics are provided, use them
+    if global_mean is not None and global_std is not None:
+        mean_val = float(global_mean)
+        std_val = float(global_std)
+    else:
+        # Compute mean and std only on valid (non-NaN) values
+        valid_mask = ~np.isnan(y)
+        if not np.any(valid_mask):
+            return y
+
+        mean_val = np.mean(y[valid_mask])
+        std_val = np.std(y[valid_mask], ddof=1)  # Use sample std (ddof=1)
+
+    # Avoid division by zero
+    if std_val == 0 or not np.isfinite(std_val):
+        # Signal is constant - just subtract mean
+        return y - mean_val
+
+    # Apply z-score normalization
+    return (y - mean_val) / std_val
+
+
 try:
     from scipy.ndimage import uniform_filter1d
     def _movmean(x: np.ndarray, n: int) -> np.ndarray:

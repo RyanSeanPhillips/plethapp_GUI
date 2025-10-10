@@ -17,6 +17,10 @@ from pathlib import Path
 from typing import List
 import sys
 import os
+
+# Fix KMeans memory leak warning on Windows
+os.environ['OMP_NUM_THREADS'] = '1'
+
 import numpy as np
 import pandas as pd
 
@@ -69,11 +73,29 @@ class MainWindow(QMainWindow):
         # Filter order
         self.filter_order = 4  # Default Butterworth filter order
 
+        # Z-score normalization
+        self.use_zscore_normalization = True  # Default: enabled
+        self.zscore_global_mean = None  # Global mean across all sweeps (cached)
+        self.zscore_global_std = None   # Global std across all sweeps (cached)
+
+        # GMM clustering cache (for fast dialog loading)
+        self._cached_gmm_results = None
+
+        # Navigation mode: "sweep" or "window"
+        self.navigation_mode = "sweep"  # Default to sweep view
+
         # Outlier detection metrics (default set)
         self.outlier_metrics = ["if", "amp_insp", "amp_exp", "ti", "te", "area_insp", "area_exp"]
 
+        # Cross-sweep outlier detection
+        self.global_outlier_stats = None  # Dict[metric_key, (mean, std)] - computed across all sweeps
+        self.metrics_by_sweep = {}  # Dict[sweep_idx, Dict[metric_key, metric_array]]
+        self.onsets_by_sweep = {}  # Dict[sweep_idx, onsets_array]
+
         # Eupnea detection parameters
+        self.eupnea_freq_threshold = 5.0  # Hz - frequency threshold for eupnea (used in frequency mode)
         self.eupnea_min_duration = 2.0  # seconds - minimum sustained duration for eupnea region
+        self.eupnea_detection_mode = "gmm"  # "gmm" or "frequency" - default to GMM-based detection
 
         # --- Embed Matplotlib into MainPlot (QFrame in Designer) ---
         self.plot_host = PlotHost(self.MainPlot)
@@ -124,18 +146,17 @@ class MainWindow(QMainWindow):
         self.OutlierThreshButton.clicked.connect(self.on_outlier_thresh_clicked)
 
         # Eupnea Threshold button
-        self.EupneaThreshButton.clicked.connect(self.on_eupnea_thresh_clicked)
 
-        # --- Wire sweep navigation ---
-        self.PrevSweepButton.clicked.connect(self.on_prev_sweep)
-        self.NextSweepButton.clicked.connect(self.on_next_sweep)
-        self.SnaptoSweepButton.clicked.connect(self.on_snap_to_sweep)
-        
+        # GMM Clustering button
+        self.GMMClusteringButton.clicked.connect(self.on_gmm_clustering_clicked)
 
-        # --- Wire window navigation ---
-        self.PrevWindowButton.clicked.connect(self.on_prev_window)
-        self.NextWindowButton.clicked.connect(self.on_next_window)
-        self.SnaptoWindowButton.clicked.connect(self.on_snap_to_window)
+        # Auto-Update GMM checkbox
+        self.AutoUpdateGMMCheckbox.toggled.connect(self.on_auto_update_gmm_toggled)
+
+        # --- Wire unified navigation ---
+        self.PrevButton.clicked.connect(self.on_unified_prev)
+        self.NextButton.clicked.connect(self.on_unified_next)
+        self.ViewModeToggleButton.clicked.connect(self.on_toggle_view_mode)
         self.WindowRangeValue.setText("20")# Default window length
         # overlap settings for window stepping
         self._win_overlap_frac = 0.10   # 10% of the window length
@@ -157,16 +178,16 @@ class MainWindow(QMainWindow):
         self.PeakPromValue.textChanged.connect(self._maybe_enable_peak_apply)
         self.MinPeakDistValue.textChanged.connect(self._maybe_enable_peak_apply)
 
-        # Default for refractory period / min peak distance (seconds)
-        self.MinPeakDistValue.setText("0.05")
+        # Default values for peak detection
+        self.ThreshVal.setText("0.4")         # threshold
+        self.PeakPromValue.setText("0.4")     # prominence
+        self.MinPeakDistValue.setText("0.05") # min peak distance (seconds)
 
         # Default values for eupnea and apnea thresholds
-        self.EupneaThresh.setText("5.0")  # Hz - breathing below this is eupnea
         self.ApneaThresh.setText("0.5")   # seconds - gaps longer than this are apnea
         self.OutlierSD.setText("3.0")     # SD - standard deviations for outlier detection
 
-        # Connect signals for eupnea/apnea/outlier threshold changes to trigger redraw
-        self.EupneaThresh.textChanged.connect(self._on_region_threshold_changed)
+        # Connect signals for apnea/outlier threshold changes to trigger redraw
         self.ApneaThresh.textChanged.connect(self._on_region_threshold_changed)
         self.OutlierSD.textChanged.connect(self._on_region_threshold_changed)
 
@@ -270,11 +291,88 @@ class MainWindow(QMainWindow):
         self.FileListSearchBox.setPlaceholderText("Filter by keywords (e.g., 'gfp 2.5mW' or 'gfp, chr2')...")
         # Wire consolidate button
         self.ConsolidateSaveDataButton.clicked.connect(self.on_consolidate_save_data_clicked)
-        
 
+
+        # ========================================
+        # TESTING MODE: Auto-load file and set channels
+        # ========================================
+        # To enable: set environment variable PLETHAPP_TESTING=1
+        # Example: set PLETHAPP_TESTING=1 && python main.py
+        if os.environ.get('PLETHAPP_TESTING') == '1':
+            print("[TESTING MODE] Auto-loading test file...")
+            test_file = Path(r"C:\Users\rphil2\Dropbox\python scripts\breath_analysis\pyqt6\examples\25121004.abf")
+            if test_file.exists():
+                QTimer.singleShot(100, lambda: self._auto_load_test_file(test_file))
+            else:
+                print(f"[TESTING MODE] Warning: Test file not found: {test_file}")
 
         # optional: keep a handle to the chosen dir
         self._curation_dir = None
+
+    def _auto_load_test_file(self, file_path: Path):
+        """Helper function for testing mode - auto-loads file and sets channels."""
+        print(f"[TESTING MODE] Loading {file_path}...")
+        self.load_file(file_path)
+
+        # Poll until file is loaded, then set channels
+        self._check_file_loaded_timer = QTimer()
+        self._check_file_loaded_timer.timeout.connect(self._check_if_file_loaded)
+        self._check_file_loaded_timer.start(100)  # Check every 100ms
+
+    def _check_if_file_loaded(self):
+        """Poll to see if file has finished loading."""
+        # Check if state has been populated with data AND combos have been populated
+        if (self.state.t is not None and
+            self.state.sweeps is not None and
+            len(self.state.sweeps) > 0 and
+            self.AnalyzeChanSelect.count() > 0 and
+            self.StimChanSelect.count() > 0):
+            # File is loaded and combos are populated!
+            self._check_file_loaded_timer.stop()
+            self._set_test_channels()
+
+    def _set_test_channels(self):
+        """Helper function for testing mode - sets analysis and stim channels."""
+        print("[TESTING MODE] Setting analyze channel to 0, stim channel to 7...")
+        print(f"[TESTING MODE] AnalyzeChanSelect has {self.AnalyzeChanSelect.count()} items")
+        print(f"[TESTING MODE] StimChanSelect has {self.StimChanSelect.count()} items")
+
+        # Set analyze channel to index 1 (channel 0, since index 0 is "All Channels")
+        if self.AnalyzeChanSelect.count() > 1:
+            self.AnalyzeChanSelect.setCurrentIndex(1)  # Channel 0 is at index 1
+            print(f"[TESTING MODE] Set analyze channel to index 1: {self.AnalyzeChanSelect.currentText()}")
+            # Manually trigger the channel change handler
+            self.on_analyze_channel_changed(1)
+
+        # Set stim channel to 7 (need to find the index)
+        stim_channel_set = False
+        for i in range(self.StimChanSelect.count()):
+            item_text = self.StimChanSelect.itemText(i)
+            # Check if this item contains "7" (handles "7", "IN 7", "Channel 7", etc.)
+            # Extract the number from the item text
+            if "7" in item_text.split():  # Split by whitespace and check if "7" is one of the words
+                print(f"[TESTING MODE] Found stim channel at index {i}: '{item_text}'")
+                self.StimChanSelect.setCurrentIndex(i)
+                stim_channel_set = True
+                # Manually trigger the channel change handler
+                self.on_stim_channel_changed(i)
+                break
+
+        if not stim_channel_set:
+            print("[TESTING MODE] Warning: Could not find stim channel '7'")
+
+        # Wait a bit for channels to be processed, then click Apply Peak Detection
+        QTimer.singleShot(200, self._click_apply_peak_detection)
+
+    def _click_apply_peak_detection(self):
+        """Helper for testing mode - clicks the Apply button for peak detection."""
+        if self.ApplyPeakFindPushButton.isEnabled():
+            print("[TESTING MODE] Clicking Apply Peak Detection button...")
+            self.ApplyPeakFindPushButton.click()
+            print("[TESTING MODE] Auto-load complete!")
+        else:
+            print("[TESTING MODE] Warning: Apply Peak Detection button is not enabled")
+            print("[TESTING MODE] Auto-load complete (but peaks not detected)")
 
     # ---------- File browse ----------
     def closeEvent(self, event):
@@ -480,8 +578,17 @@ class MainWindow(QMainWindow):
             self.state.omitted_sweeps.clear()
             self._refresh_omit_button_label()
 
+        # Clear cross-sweep outlier detection data
+        self.metrics_by_sweep.clear()
+        self.onsets_by_sweep.clear()
+        self.global_outlier_stats = None
+
         # Clear global trace cache when loading new file
         self._global_trace_cache = {}
+
+        # Clear z-score global statistics cache
+        self.zscore_global_mean = None
+        self.zscore_global_std = None
 
 
 
@@ -612,6 +719,11 @@ class MainWindow(QMainWindow):
             self.state.omitted_sweeps.clear()
             self._refresh_omit_button_label()
 
+        # Clear cross-sweep outlier detection data
+        self.metrics_by_sweep.clear()
+        self.onsets_by_sweep.clear()
+        self.global_outlier_stats = None
+
         # Clear global trace cache when loading new file
         self._global_trace_cache = {}
 
@@ -642,6 +754,10 @@ class MainWindow(QMainWindow):
         #Clear omitted sweeps
         self.state.omitted_sweeps.clear()
         self._refresh_omit_button_label()
+
+        # Clear z-score global statistics cache
+        self.zscore_global_mean = None
+        self.zscore_global_std = None
 
         # Start in grid mode (All Channels view)
         st.analyze_chan = None  # None = grid mode showing all channels
@@ -696,8 +812,57 @@ class MainWindow(QMainWindow):
             st.use_mean_sub, st.mean_val,
             st.use_invert,
             self.filter_order,
-            self.notch_filter_lower, self.notch_filter_upper
+            self.notch_filter_lower, self.notch_filter_upper,
+            self.use_zscore_normalization
         )
+
+    def _compute_global_zscore_stats(self):
+        """
+        Compute global mean and std across all sweeps for z-score normalization.
+        This ensures all sweeps are normalized relative to the same baseline.
+        """
+        import numpy as np
+
+        st = self.state
+        if not st.analyze_chan or st.analyze_chan not in st.sweeps:
+            return None, None
+
+        Y = st.sweeps[st.analyze_chan]  # (n_samples, n_sweeps)
+
+        # Collect all processed data across sweeps (apply filters but not z-score)
+        all_data = []
+        for sweep_idx in range(Y.shape[1]):
+            y_raw = Y[:, sweep_idx]
+
+            # Apply all filters EXCEPT z-score
+            y = filters.apply_all_1d(
+                y_raw, st.sr_hz,
+                st.use_low, st.low_hz,
+                st.use_high, st.high_hz,
+                st.use_mean_sub, st.mean_val,
+                st.use_invert,
+                order=self.filter_order
+            )
+
+            # Apply notch filter if configured
+            if self.notch_filter_lower is not None and self.notch_filter_upper is not None:
+                y = self._apply_notch_filter(y, st.sr_hz, self.notch_filter_lower, self.notch_filter_upper)
+
+            all_data.append(y)
+
+        # Concatenate all sweeps
+        concatenated = np.concatenate(all_data)
+
+        # Compute global statistics (excluding NaN values)
+        valid_mask = ~np.isnan(concatenated)
+        if not np.any(valid_mask):
+            return None, None
+
+        global_mean = np.mean(concatenated[valid_mask])
+        global_std = np.std(concatenated[valid_mask], ddof=1)
+
+        print(f"[zscore] Computed global stats: mean={global_mean:.4f}, std={global_std:.4f}")
+        return global_mean, global_std
 
     def plot_all_channels(self):
         """Plot the current sweep for every channel, one panel per channel."""
@@ -762,6 +927,15 @@ class MainWindow(QMainWindow):
 
                 st.proc_cache.clear()
 
+                # Clear Y2 plot data
+                st.y2_metric_key = None
+                st.y2_values_by_sweep.clear()
+                self.plot_host.clear_y2()
+                # Reset Y2 dropdown to "None"
+                self.y2plot_dropdown.blockSignals(True)
+                self.y2plot_dropdown.setCurrentIndex(0)  # First item is "None"
+                self.y2plot_dropdown.blockSignals(False)
+
                 # Clear saved view to force fresh autoscale for grid mode
                 self.plot_host.clear_saved_view("grid")
                 self.plot_host.clear_saved_view("single")
@@ -774,6 +948,9 @@ class MainWindow(QMainWindow):
             if new_chan != st.analyze_chan or not self.single_panel_mode:
                 st.analyze_chan = new_chan
                 st.proc_cache.clear()
+                # Clear z-score global statistics cache
+                self.zscore_global_mean = None
+                self.zscore_global_std = None
                 st.peaks_by_sweep.clear()
                 st.sigh_by_sweep.clear()
                 if hasattr(st, 'breath_by_sweep'):
@@ -782,6 +959,15 @@ class MainWindow(QMainWindow):
                 # Clear sniffing regions
                 if hasattr(st, 'sniff_regions_by_sweep'):
                     st.sniff_regions_by_sweep.clear()
+
+                # Clear Y2 plot data
+                st.y2_metric_key = None
+                st.y2_values_by_sweep.clear()
+                self.plot_host.clear_y2()
+                # Reset Y2 dropdown to "None"
+                self.y2plot_dropdown.blockSignals(True)
+                self.y2plot_dropdown.setCurrentIndex(0)  # First item is "None"
+                self.y2plot_dropdown.blockSignals(False)
 
                 # Reset navigation to first sweep
                 st.sweep_idx = 0
@@ -886,6 +1072,10 @@ class MainWindow(QMainWindow):
             self.state.y2_values_by_sweep.clear()
             self.plot_host.clear_y2()
 
+        # Clear z-score global statistics cache (filters changed)
+        self.zscore_global_mean = None
+        self.zscore_global_std = None
+
 
 
         def _val_if_enabled(line, checked: bool, cast=float, default=None):
@@ -947,6 +1137,13 @@ class MainWindow(QMainWindow):
         # Apply notch filter if configured
         if self.notch_filter_lower is not None and self.notch_filter_upper is not None:
             y2 = self._apply_notch_filter(y2, st.sr_hz, self.notch_filter_lower, self.notch_filter_upper)
+
+        # Apply z-score normalization if enabled (using global statistics)
+        if self.use_zscore_normalization:
+            # Compute global stats if not cached
+            if self.zscore_global_mean is None or self.zscore_global_std is None:
+                self.zscore_global_mean, self.zscore_global_std = self._compute_global_zscore_stats()
+            y2 = filters.zscore_normalize(y2, self.zscore_global_mean, self.zscore_global_std)
 
         st.proc_cache[key] = y2
         return st.t, y2
@@ -1102,20 +1299,23 @@ class MainWindow(QMainWindow):
                     ex_idx = br.get("expmins", [])
                     exoff_idx = br.get("expoffs", [])
 
-                    # Get eupnea and apnea thresholds from UI (with defaults)
-                    eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+                    # Get eupnea and apnea thresholds (with defaults)
+                    eupnea_thresh = self.eupnea_freq_threshold
                     apnea_thresh = self._parse_float(self.ApneaThresh) or 0.5    # seconds
 
-                    # Get sniff regions for this sweep
-                    sniff_regions = self.state.sniff_regions_by_sweep.get(s, [])
-
-                    # Compute eupnea regions using UI threshold (excluding sniff regions)
-                    eupnea_mask = metrics.detect_eupnic_regions(
-                        t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx,
-                        freq_threshold_hz=eupnea_thresh,
-                        min_duration_sec=self.eupnea_min_duration,
-                        sniff_regions=sniff_regions
-                    )
+                    # Compute eupnea regions based on selected mode
+                    if self.eupnea_detection_mode == "gmm":
+                        # GMM-based: Eupnea = breaths NOT classified as sniffing
+                        eupnea_mask = self._compute_eupnea_from_gmm(s, len(y))
+                    else:
+                        # Frequency-based (legacy): Use threshold method
+                        sniff_regions = self.state.sniff_regions_by_sweep.get(s, [])
+                        eupnea_mask = metrics.detect_eupnic_regions(
+                            t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx,
+                            freq_threshold_hz=eupnea_thresh,
+                            min_duration_sec=self.eupnea_min_duration,
+                            sniff_regions=sniff_regions
+                        )
 
                     # Compute apnea regions using UI threshold
                     apnea_mask = metrics.detect_apneas(
@@ -1127,7 +1327,7 @@ class MainWindow(QMainWindow):
                     outlier_mask = None
                     failure_mask = None
                     try:
-                        from core.breath_outliers import identify_problematic_breaths
+                        from core.breath_outliers import identify_problematic_breaths, compute_global_metric_statistics
                         import numpy as np
 
                         # Convert indices to arrays (handle both lists and arrays)
@@ -1146,14 +1346,33 @@ class MainWindow(QMainWindow):
                                 )
                                 metrics_dict[metric_key] = metric_arr
 
+                        # Store metrics and onsets for this sweep (for cross-sweep outlier detection)
+                        current_sweep_idx = st.sweep_idx
+                        self.metrics_by_sweep[current_sweep_idx] = metrics_dict
+                        self.onsets_by_sweep[current_sweep_idx] = onsets_arr
+
+                        # Compute global statistics across all sweeps (if we have multiple sweeps analyzed)
+                        if len(self.metrics_by_sweep) >= 2:
+                            # Recompute global stats each time (to account for new/changed sweeps)
+                            self.global_outlier_stats = compute_global_metric_statistics(
+                                self.metrics_by_sweep,
+                                self.onsets_by_sweep,
+                                self.outlier_metrics
+                            )
+                        else:
+                            # Single sweep or first sweep - use per-sweep mode
+                            self.global_outlier_stats = None
+
                         # Get outlier threshold from UI (with default)
                         outlier_sd = self._parse_float(self.OutlierSD) or 3.0  # SD
 
                         # Identify problematic breaths (returns separate masks for outliers and failures)
+                        # Pass global_stats if available for cross-sweep detection
                         outlier_mask, failure_mask = identify_problematic_breaths(
                             t, y, st.sr_hz, peaks_arr, onsets_arr, offsets_arr,
                             expmins_arr, expoffs_arr, metrics_dict, outlier_threshold=outlier_sd,
-                            outlier_metrics=self.outlier_metrics
+                            outlier_metrics=self.outlier_metrics,
+                            global_stats=self.global_outlier_stats
                         )
 
                     except Exception as outlier_error:
@@ -1451,6 +1670,40 @@ class MainWindow(QMainWindow):
             # No previous sweep: stay clamped at the first window
             self._set_window(left=min_left, width=W_eff)
 
+    ##################################################
+    ## Unified Navigation (Sweep/Window Toggle)    ##
+    ##################################################
+    def on_toggle_view_mode(self):
+        """Toggle between sweep and window navigation modes."""
+        if self.navigation_mode == "sweep":
+            self.navigation_mode = "window"
+            self.ViewModeToggleButton.setText("Mode: Window View")
+            self.PrevButton.setToolTip("Move to the previous time window")
+            self.NextButton.setToolTip("Move to the next time window")
+            # Snap to window view (show current position as windowed)
+            self.on_snap_to_window()
+        else:
+            self.navigation_mode = "sweep"
+            self.ViewModeToggleButton.setText("Mode: Sweep View")
+            self.PrevButton.setToolTip("Navigate to the previous sweep")
+            self.NextButton.setToolTip("Navigate to the next sweep")
+            # Snap to sweep view (show full sweep)
+            self.on_snap_to_sweep()
+
+    def on_unified_prev(self):
+        """Unified previous button: dispatches to sweep or window based on mode."""
+        if self.navigation_mode == "sweep":
+            self.on_prev_sweep()
+        else:
+            self.on_prev_window()
+
+    def on_unified_next(self):
+        """Unified next button: dispatches to sweep or window based on mode."""
+        if self.navigation_mode == "sweep":
+            self.on_next_sweep()
+        else:
+            self.on_next_window()
+
     def _sweep_count(self) -> int:
         st = self.state
         if not st.sweeps:
@@ -1508,7 +1761,7 @@ class MainWindow(QMainWindow):
         Y = st.sweeps[chan]
         s = max(0, min(sweep_idx, Y.shape[1]-1))
         key = (chan, s, st.use_low, st.low_hz, st.use_high, st.high_hz, st.use_mean_sub, st.mean_val, st.use_invert,
-               self.notch_filter_lower, self.notch_filter_upper)
+               self.notch_filter_lower, self.notch_filter_upper, self.use_zscore_normalization)
         if key in st.proc_cache:
             return st.proc_cache[key]
         y = Y[:, s]
@@ -1523,6 +1776,13 @@ class MainWindow(QMainWindow):
         # Apply notch filter if configured
         if self.notch_filter_lower is not None and self.notch_filter_upper is not None:
             y2 = self._apply_notch_filter(y2, st.sr_hz, self.notch_filter_lower, self.notch_filter_upper)
+
+        # Apply z-score normalization if enabled (using global statistics)
+        if self.use_zscore_normalization:
+            # Compute global stats if not cached
+            if self.zscore_global_mean is None or self.zscore_global_std is None:
+                self.zscore_global_mean, self.zscore_global_std = self._compute_global_zscore_stats()
+            y2 = filters.zscore_normalize(y2, self.zscore_global_mean, self.zscore_global_std)
 
         st.proc_cache[key] = y2
         return y2
@@ -1603,14 +1863,491 @@ class MainWindow(QMainWindow):
             st.peaks_by_sweep[s] = pks
             st.breath_by_sweep[s] = breaths  # dict with 'onsets', 'offsets', 'expmins'
 
-        # Disable until parameters change again and redraw current sweep
+        # Disable until parameters change again
         self.ApplyPeakFindPushButton.setEnabled(False)
+
         # If a Y2 metric is selected, recompute it now that peaks/breaths changed
         if getattr(self.state, "y2_metric_key", None):
             self._compute_y2_all_sweeps()
             self.plot_host.clear_y2()
 
+        # First redraw: Show detected peaks/breaths immediately
+        print("[peak-detection] Redrawing plot with detected peaks...")
         self.redraw_main_plot()
+
+        # Force Qt to process events so the plot updates before GMM starts
+        from PyQt6.QtWidgets import QApplication
+        QApplication.processEvents()
+
+        # Automatically run GMM clustering to identify and mark sniffing breaths
+        print("[peak-detection] Running automatic GMM clustering...")
+        self._run_automatic_gmm_clustering()
+
+        # Second redraw: Show GMM-detected sniffing/eupnea regions
+        print("[peak-detection] Redrawing plot with GMM results...")
+        self.redraw_main_plot()
+
+    def _compute_eupnea_from_gmm(self, sweep_idx: int, signal_length: int) -> np.ndarray:
+        """
+        Compute eupnea mask from GMM clustering results.
+
+        Eupnea = breaths that are NOT sniffing (based on GMM classification).
+        Groups consecutive eupnic breaths into continuous regions.
+
+        Args:
+            sweep_idx: Index of the current sweep
+            signal_length: Length of the signal array
+
+        Returns:
+            Boolean array (as float 0/1) marking eupneic regions
+        """
+        import numpy as np
+
+        eupnea_mask = np.zeros(signal_length, dtype=bool)
+
+        # Check if GMM probabilities are available for this sweep
+        if not hasattr(self.state, 'gmm_sniff_probabilities'):
+            return eupnea_mask.astype(float)
+
+        if sweep_idx not in self.state.gmm_sniff_probabilities:
+            return eupnea_mask.astype(float)
+
+        # Get breath data for this sweep
+        breath_data = self.state.breath_by_sweep.get(sweep_idx)
+        if breath_data is None:
+            return eupnea_mask.astype(float)
+
+        onsets = breath_data.get('onsets', np.array([]))
+        offsets = breath_data.get('offsets', np.array([]))
+
+        if len(onsets) == 0:
+            return eupnea_mask.astype(float)
+
+        t = self.state.t
+        gmm_probs = self.state.gmm_sniff_probabilities[sweep_idx]
+
+        # Identify eupnic breaths and group consecutive ones
+        eupnic_groups = []
+        current_group_start = None
+        current_group_end = None
+        last_eupnic_idx = None
+
+        for breath_idx in range(len(onsets)):
+            if breath_idx not in gmm_probs:
+                # Close current group if exists
+                if current_group_start is not None:
+                    eupnic_groups.append((current_group_start, current_group_end))
+                    current_group_start = None
+                    current_group_end = None
+                    last_eupnic_idx = None
+                continue
+
+            sniff_prob = gmm_probs[breath_idx]
+
+            # Eupnea if sniffing probability < 0.5 (i.e., more likely eupnea)
+            if sniff_prob < 0.5:
+                # Get time range for this breath
+                start_idx = int(onsets[breath_idx])
+
+                # Get offset time
+                if breath_idx < len(offsets):
+                    end_idx = int(offsets[breath_idx])
+                else:
+                    # Fallback: use next onset or end of trace
+                    if breath_idx + 1 < len(onsets):
+                        end_idx = int(onsets[breath_idx + 1])
+                    else:
+                        end_idx = signal_length
+
+                # Check if this is consecutive with the last eupnic breath
+                if last_eupnic_idx is None or breath_idx != last_eupnic_idx + 1:
+                    # Not consecutive - save current group and start new one
+                    if current_group_start is not None:
+                        eupnic_groups.append((current_group_start, current_group_end))
+                    current_group_start = start_idx
+                    current_group_end = end_idx
+                else:
+                    # Consecutive breath - extend the current group
+                    current_group_end = end_idx
+
+                last_eupnic_idx = breath_idx
+            else:
+                # Non-eupnic breath - close current group if exists
+                if current_group_start is not None:
+                    eupnic_groups.append((current_group_start, current_group_end))
+                    current_group_start = None
+                    current_group_end = None
+                    last_eupnic_idx = None
+
+        # Save final group if exists
+        if current_group_start is not None:
+            eupnic_groups.append((current_group_start, current_group_end))
+
+        # Mark all continuous eupnic regions
+        for start_idx, end_idx in eupnic_groups:
+            eupnea_mask[start_idx:end_idx] = True
+
+        return eupnea_mask.astype(float)
+
+    def _run_automatic_gmm_clustering(self):
+        """
+        Automatically run GMM clustering after peak detection to identify sniffing breaths.
+        Uses default features (if, ti, te, amp_insp, amp_exp, max_dinsp, max_dexp) and 2 clusters.
+        Silently marks identified sniffing breaths with purple background.
+        """
+        from sklearn.mixture import GaussianMixture
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.metrics import silhouette_score
+        import numpy as np
+
+        st = self.state
+
+        # Check if we have breath data
+        if not st.peaks_by_sweep or len(st.peaks_by_sweep) == 0:
+            print("[auto-gmm] No breath data available, skipping automatic GMM clustering")
+            return
+
+        # Default features for eupnea/sniffing separation (including derivative peaks)
+        feature_keys = ["if", "ti", "te", "amp_insp", "amp_exp", "max_dinsp", "max_dexp"]
+        n_clusters = 2
+
+        print(f"\n[auto-gmm] Running automatic GMM clustering with {n_clusters} clusters...")
+        print(f"[auto-gmm] Features: {', '.join(feature_keys)}")
+
+        try:
+            # Collect breath features from all analyzed sweeps
+            feature_matrix, breath_cycles = self._collect_gmm_breath_features(feature_keys)
+
+            if len(feature_matrix) < n_clusters:
+                print(f"[auto-gmm] Not enough breaths ({len(feature_matrix)}) for {n_clusters} clusters, skipping")
+                return
+
+            # Standardize features
+            scaler = StandardScaler()
+            feature_matrix_scaled = scaler.fit_transform(feature_matrix)
+
+            # Fit GMM
+            gmm_model = GaussianMixture(n_components=n_clusters, random_state=42, covariance_type='full')
+            cluster_labels = gmm_model.fit_predict(feature_matrix_scaled)
+
+            # Get probability estimates for each breath
+            cluster_probabilities = gmm_model.predict_proba(feature_matrix_scaled)
+
+            # Check clustering quality
+            silhouette = silhouette_score(feature_matrix_scaled, cluster_labels) if n_clusters > 1 else -1
+            print(f"[auto-gmm] Silhouette score: {silhouette:.3f}")
+
+            # Identify sniffing cluster
+            sniffing_cluster_id = self._identify_gmm_sniffing_cluster(
+                feature_matrix, cluster_labels, feature_keys, silhouette
+            )
+
+            if sniffing_cluster_id is None:
+                print("[auto-gmm] Could not identify sniffing cluster, skipping")
+                return
+
+            # Apply sniffing regions to plot with probabilities
+            n_sniffing_breaths = self._apply_gmm_sniffing_regions(
+                breath_cycles, cluster_labels, cluster_probabilities, sniffing_cluster_id
+            )
+
+            print(f"[auto-gmm] ✓ Marked {n_sniffing_breaths} sniffing breaths across sweeps")
+
+            # Cache results for fast dialog loading
+            self._cached_gmm_results = {
+                'cluster_labels': cluster_labels,
+                'cluster_probabilities': cluster_probabilities,
+                'feature_matrix': feature_matrix,
+                'breath_cycles': breath_cycles,
+                'sniffing_cluster_id': sniffing_cluster_id,
+                'feature_keys': feature_keys
+            }
+            print("[auto-gmm] Cached GMM results for fast dialog loading")
+
+        except Exception as e:
+            print(f"[auto-gmm] Error during automatic GMM clustering: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _collect_gmm_breath_features(self, feature_keys):
+        """Collect per-breath features for GMM clustering."""
+        import numpy as np
+        from core import metrics, filters
+
+        feature_matrix = []
+        breath_cycles = []
+        st = self.state
+
+        for sweep_idx in sorted(st.breath_by_sweep.keys()):
+            breath_data = st.breath_by_sweep[sweep_idx]
+
+            if sweep_idx not in st.peaks_by_sweep:
+                continue
+
+            peaks = st.peaks_by_sweep[sweep_idx]
+            t = st.t
+            y_raw = st.sweeps[st.analyze_chan][:, sweep_idx]
+
+            # Apply filters
+            y = filters.apply_all_1d(
+                y_raw, st.sr_hz,
+                st.use_low, st.low_hz,
+                st.use_high, st.high_hz,
+                st.use_mean_sub, st.mean_val,
+                st.use_invert,
+                order=self.filter_order
+            )
+
+            # Apply notch filter if configured
+            if self.notch_filter_lower is not None and self.notch_filter_upper is not None:
+                y = self._apply_notch_filter(y, st.sr_hz,
+                                              self.notch_filter_lower,
+                                              self.notch_filter_upper)
+
+            # Apply z-score normalization if enabled (using global statistics)
+            if self.use_zscore_normalization:
+                # Compute global stats if not cached
+                if self.zscore_global_mean is None or self.zscore_global_std is None:
+                    self.zscore_global_mean, self.zscore_global_std = self._compute_global_zscore_stats()
+                y = filters.zscore_normalize(y, self.zscore_global_mean, self.zscore_global_std)
+
+            # Get breath events
+            onsets = breath_data.get('onsets', np.array([]))
+            offsets = breath_data.get('offsets', np.array([]))
+            expmins = breath_data.get('expmins', np.array([]))
+            expoffs = breath_data.get('expoffs', np.array([]))
+
+            if len(onsets) == 0:
+                continue
+
+            # Compute metrics
+            metrics_dict = {}
+            for feature_key in feature_keys:
+                if feature_key in metrics.METRICS:
+                    metric_arr = metrics.METRICS[feature_key](
+                        t, y, st.sr_hz, peaks, onsets, offsets, expmins, expoffs
+                    )
+                    metrics_dict[feature_key] = metric_arr
+
+            # Extract per-breath values
+            n_breaths = len(onsets)
+            for breath_idx in range(n_breaths):
+                start = int(onsets[breath_idx])
+                breath_features = []
+                valid_breath = True
+
+                for feature_key in feature_keys:
+                    if feature_key not in metrics_dict:
+                        valid_breath = False
+                        break
+
+                    metric_arr = metrics_dict[feature_key]
+                    if start < len(metric_arr):
+                        val = metric_arr[start]
+                        if np.isnan(val) or not np.isfinite(val):
+                            valid_breath = False
+                            break
+                        breath_features.append(val)
+                    else:
+                        valid_breath = False
+                        break
+
+                if valid_breath and len(breath_features) == len(feature_keys):
+                    feature_matrix.append(breath_features)
+                    breath_cycles.append((sweep_idx, breath_idx))
+
+        return np.array(feature_matrix), breath_cycles
+
+    def _identify_gmm_sniffing_cluster(self, feature_matrix, cluster_labels, feature_keys, silhouette):
+        """Identify which cluster represents sniffing based on IF and Ti."""
+        import numpy as np
+
+        unique_labels = np.unique(cluster_labels)
+        n_clusters = len(unique_labels)
+
+        # Get indices of IF and Ti features
+        if_idx = feature_keys.index('if') if 'if' in feature_keys else None
+        ti_idx = feature_keys.index('ti') if 'ti' in feature_keys else None
+
+        if if_idx is None and ti_idx is None:
+            print("[auto-gmm] Cannot identify sniffing without 'if' or 'ti' features")
+            return None
+
+        # Compute mean IF and Ti for each cluster
+        cluster_stats = {}
+        for cluster_id in unique_labels:
+            mask = cluster_labels == cluster_id
+            stats = {}
+            if if_idx is not None:
+                stats['mean_if'] = np.mean(feature_matrix[mask, if_idx])
+            if ti_idx is not None:
+                stats['mean_ti'] = np.mean(feature_matrix[mask, ti_idx])
+            cluster_stats[cluster_id] = stats
+
+        # Identify sniffing: highest IF and/or lowest Ti
+        cluster_scores = {}
+        for cluster_id in unique_labels:
+            score = 0
+            if if_idx is not None:
+                if_vals = [cluster_stats[c]['mean_if'] for c in unique_labels]
+                if_rank = sorted(if_vals).index(cluster_stats[cluster_id]['mean_if'])
+                score += if_rank / (n_clusters - 1) if n_clusters > 1 else 0
+            if ti_idx is not None:
+                ti_vals = [cluster_stats[c]['mean_ti'] for c in unique_labels]
+                ti_rank = sorted(ti_vals, reverse=True).index(cluster_stats[cluster_id]['mean_ti'])
+                score += ti_rank / (n_clusters - 1) if n_clusters > 1 else 0
+            cluster_scores[cluster_id] = score
+
+        sniffing_cluster_id = max(cluster_scores, key=cluster_scores.get)
+
+        # Log cluster statistics
+        for cluster_id in unique_labels:
+            stats_str = ", ".join([f"{k}={v:.3f}" for k, v in cluster_stats[cluster_id].items()])
+            marker = " (SNIFFING)" if cluster_id == sniffing_cluster_id else ""
+            print(f"[auto-gmm]   Cluster {cluster_id}: {stats_str}{marker}")
+
+        # Validate quality (warn but don't block)
+        sniff_stats = cluster_stats[sniffing_cluster_id]
+        if silhouette < 0.25:
+            print(f"[auto-gmm] ⚠️ Warning: Low cluster separation (silhouette={silhouette:.3f})")
+            print(f"[auto-gmm]   Breathing patterns may be very similar (e.g., anesthetized mouse)")
+        if if_idx is not None and sniff_stats['mean_if'] < 5.0:
+            print(f"[auto-gmm] ⚠️ Warning: 'Sniffing' cluster has low IF ({sniff_stats['mean_if']:.2f} Hz)")
+            print(f"[auto-gmm]   May be normal variation, not true sniffing (typical sniffing: 5-8 Hz)")
+
+        return sniffing_cluster_id
+
+    def _apply_gmm_sniffing_regions(self, breath_cycles, cluster_labels, cluster_probabilities, sniffing_cluster_id):
+        """Apply GMM sniffing cluster results by marking regions on the plot.
+
+        Groups consecutive sniffing breaths into continuous regions.
+        Stores probabilities for each breath.
+
+        Args:
+            breath_cycles: List of (sweep_idx, breath_idx) tuples
+            cluster_labels: Hard cluster assignments
+            cluster_probabilities: Probability matrix (n_breaths, n_clusters)
+            sniffing_cluster_id: Which cluster is sniffing
+        """
+        import numpy as np
+
+        # Store probabilities by (sweep_idx, breath_idx)
+        if not hasattr(self.state, 'gmm_sniff_probabilities'):
+            self.state.gmm_sniff_probabilities = {}
+        self.state.gmm_sniff_probabilities.clear()
+
+        # Group breath cycles by sweep
+        breaths_by_sweep = {}
+        for i, (sweep_idx, breath_idx) in enumerate(breath_cycles):
+            if sweep_idx not in breaths_by_sweep:
+                breaths_by_sweep[sweep_idx] = []
+
+            # Get probability of this breath being sniffing
+            sniff_prob = cluster_probabilities[i, sniffing_cluster_id]
+
+            # Store probability
+            if sweep_idx not in self.state.gmm_sniff_probabilities:
+                self.state.gmm_sniff_probabilities[sweep_idx] = {}
+            self.state.gmm_sniff_probabilities[sweep_idx][breath_idx] = sniff_prob
+
+            breaths_by_sweep[sweep_idx].append((breath_idx, cluster_labels[i], sniff_prob))
+
+        sniffing_regions_by_sweep = {}
+        n_sniffing = 0
+
+        for sweep_idx, breath_list in breaths_by_sweep.items():
+            breath_data = self.state.breath_by_sweep.get(sweep_idx)
+            if breath_data is None:
+                continue
+
+            onsets = breath_data.get('onsets', np.array([]))
+            offsets = breath_data.get('offsets', np.array([]))
+            t = self.state.t
+
+            # Sort breaths by index
+            breath_list = sorted(breath_list, key=lambda x: x[0])
+
+            # Group consecutive sniffing breaths into continuous regions
+            regions = []
+            current_group_start = None
+            current_group_end = None
+            last_sniff_idx = None
+
+            for breath_idx, cluster_id, sniff_prob in breath_list:
+                if cluster_id == sniffing_cluster_id:
+                    n_sniffing += 1
+
+                    if breath_idx >= len(onsets):
+                        continue
+
+                    # Get time range for this breath
+                    start_time = t[int(onsets[breath_idx])]
+
+                    # Get offset time
+                    if breath_idx < len(offsets):
+                        end_idx = int(offsets[breath_idx])
+                    else:
+                        # Fallback: use next onset or end of trace
+                        if breath_idx + 1 < len(onsets):
+                            end_idx = int(onsets[breath_idx + 1])
+                        else:
+                            end_idx = len(t) - 1
+                    end_time = t[end_idx]
+
+                    # Check if this is consecutive with the last sniffing breath (no eupnea breath in between)
+                    if last_sniff_idx is None or breath_idx != last_sniff_idx + 1:
+                        # Not consecutive - save current group and start new one
+                        if current_group_start is not None:
+                            regions.append((current_group_start, current_group_end))
+                        current_group_start = start_time
+                        current_group_end = end_time
+                    else:
+                        # Consecutive breath - extend the current group
+                        current_group_end = end_time
+
+                    last_sniff_idx = breath_idx
+                else:
+                    # Non-sniffing breath - close current group if exists
+                    if current_group_start is not None:
+                        regions.append((current_group_start, current_group_end))
+                        current_group_start = None
+                        current_group_end = None
+                        last_sniff_idx = None
+
+            # Save final group if exists
+            if current_group_start is not None:
+                regions.append((current_group_start, current_group_end))
+
+            if regions:
+                sniffing_regions_by_sweep[sweep_idx] = regions
+
+        # Replace existing sniffing regions with GMM-detected ones
+        total_merged = 0
+        for sweep_idx, regions in sniffing_regions_by_sweep.items():
+            self.state.sniff_regions_by_sweep[sweep_idx] = regions
+            total_merged += len(regions)
+
+        # Calculate probability statistics
+        all_sniff_probs = []
+        for sweep_idx in self.state.gmm_sniff_probabilities:
+            for breath_idx in self.state.gmm_sniff_probabilities[sweep_idx]:
+                prob = self.state.gmm_sniff_probabilities[sweep_idx][breath_idx]
+                all_sniff_probs.append(prob)
+
+        if all_sniff_probs:
+            all_sniff_probs = np.array(all_sniff_probs)
+            sniff_probs_of_sniff_breaths = all_sniff_probs[all_sniff_probs >= 0.5]  # Breaths classified as sniffing
+            if len(sniff_probs_of_sniff_breaths) > 0:
+                mean_conf = np.mean(sniff_probs_of_sniff_breaths)
+                min_conf = np.min(sniff_probs_of_sniff_breaths)
+                uncertain_count = np.sum((sniff_probs_of_sniff_breaths >= 0.5) & (sniff_probs_of_sniff_breaths < 0.7))
+                print(f"[auto-gmm]   Sniffing probability: mean={mean_conf:.3f}, min={min_conf:.3f}")
+                if uncertain_count > 0:
+                    print(f"[auto-gmm]   ⚠️ {uncertain_count} breaths have uncertain classification (50-70% sniffing probability)")
+
+        print(f"[auto-gmm]   Created {total_merged} continuous sniffing region(s) across {len(sniffing_regions_by_sweep)} sweep(s)")
+
+        return n_sniffing
 
     ##################################################
     ##y2 plotting                                   ##
@@ -1645,8 +2382,17 @@ class MainWindow(QMainWindow):
             exm = breaths.get("expmins", None)
             exo = breaths.get("expoffs", None)
 
+            # Set GMM probabilities for this sweep (if available)
+            gmm_probs = None
+            if hasattr(st, 'gmm_sniff_probabilities') and s in st.gmm_sniff_probabilities:
+                gmm_probs = st.gmm_sniff_probabilities[s]
+            metrics.set_gmm_probabilities(gmm_probs)
+
             y2 = fn(st.t, y_proc, st.sr_hz, pks, on, off, exm, exo)
             st.y2_values_by_sweep[s] = y2
+
+        # Clear GMM probabilities after computation
+        metrics.set_gmm_probabilities(None)
 
     def on_y2_metric_changed(self, idx: int):
         key = self.y2plot_dropdown.itemData(idx)
@@ -1967,8 +2713,14 @@ class MainWindow(QMainWindow):
         if getattr(st, "y2_metric_key", None):
             self._compute_y2_all_sweeps()
 
-        # Refresh plot
+        # Refresh plot FIRST to show updated peaks
         self.redraw_main_plot()
+
+        # Re-run GMM clustering to update sniffing regions (if auto-update enabled)
+        if self.AutoUpdateGMMCheckbox.isChecked():
+            self._run_automatic_gmm_clustering()
+            # Redraw again to show updated GMM regions
+            self.redraw_main_plot()
 
     
     # def on_delete_peaks_toggled(self, checked: bool):
@@ -2130,8 +2882,14 @@ class MainWindow(QMainWindow):
         if getattr(st, "y2_metric_key", None):
             self._compute_y2_all_sweeps()
 
-        # Redraw
+        # Refresh plot FIRST to show updated peaks
         self.redraw_main_plot()
+
+        # Re-run GMM clustering to update sniffing regions (if auto-update enabled)
+        if self.AutoUpdateGMMCheckbox.isChecked():
+            self._run_automatic_gmm_clustering()
+            # Redraw again to show updated GMM regions
+            self.redraw_main_plot()
 
 
     # def on_add_sigh_toggled(self, checked: bool):
@@ -3225,6 +3983,16 @@ class MainWindow(QMainWindow):
 
         self.plot_host.canvas.draw_idle()
 
+    def on_auto_update_gmm_toggled(self, checked: bool):
+        """Handle Auto-Update GMM checkbox toggle - run GMM when enabled."""
+        if checked:
+            # User just enabled auto-update - run GMM clustering if we have peaks
+            st = self.state
+            if st.peaks_by_sweep and len(st.peaks_by_sweep) > 0:
+                print("[auto-update-gmm] Auto-update enabled - recalculating sniffing/eupnea regions...")
+                self._run_automatic_gmm_clustering()
+                self.redraw_main_plot()
+
     def on_spectral_analysis_clicked(self):
         """Open spectral analysis dialog and optionally apply notch filter."""
         st = self.state
@@ -3243,7 +4011,10 @@ class MainWindow(QMainWindow):
         stim_spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
 
         # Open dialog
-        dlg = self.SpectralAnalysisDialog(parent=self, t=t, y=y, sr_hz=st.sr_hz, stim_spans=stim_spans, parent_window=self)
+        dlg = self.SpectralAnalysisDialog(
+            parent=self, t=t, y=y, sr_hz=st.sr_hz, stim_spans=stim_spans,
+            parent_window=self, use_zscore=self.use_zscore_normalization
+        )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             # Get filter parameters
             lower, upper = dlg.get_filter_params()
@@ -3289,25 +4060,25 @@ class MainWindow(QMainWindow):
             # Redraw to apply new outlier detection
             self.redraw_main_plot()
 
-    def on_eupnea_thresh_clicked(self):
-        """Open dialog to configure eupnea detection parameters."""
-        # Create and show dialog
-        dlg = self.EupneaParamsDialog(
-            parent=self,
-            freq_threshold=self._parse_float(self.EupneaThresh) or 5.0,
-            min_duration=self.eupnea_min_duration
-        )
+    def on_gmm_clustering_clicked(self):
+        """Open GMM clustering dialog to automatically classify breaths."""
+        # Check if we have breath data
+        st = self.state
+        if not st.peaks_by_sweep or len(st.peaks_by_sweep) == 0:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "No Breath Data",
+                "Please detect peaks first using 'Apply Peak Find' button.\n\n"
+                "GMM clustering requires breath metrics to classify breathing patterns."
+            )
+            return
+
+        # Create and show GMM dialog
+        dlg = self.GMMClusteringDialog(parent=self, main_window=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            # Get parameters from dialog
-            freq_thresh, min_dur = dlg.get_params()
-
-            # Update UI and internal state
-            self.EupneaThresh.setText(str(freq_thresh))
-            self.eupnea_min_duration = min_dur
-
-            print(f"[eupnea-params] Updated: freq_threshold={freq_thresh} Hz, min_duration={min_dur} s")
-
-            # Redraw to apply new eupnea detection
+            # User applied clustering results
+            print("[gmm-clustering] Results applied to main plot")
             self.redraw_main_plot()
 
     def _refresh_omit_button_label(self):
@@ -3411,107 +4182,6 @@ class MainWindow(QMainWindow):
         s = re.sub(r"_+", "_", s)
         s = re.sub(r"-+", "-", s)
         return s
-
-
-    ##################################################
-    ##Eupnea Parameters Dialog                      ##
-    ##################################################
-    class EupneaParamsDialog(QDialog):
-        def __init__(self, parent=None, freq_threshold=5.0, min_duration=2.0):
-            from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel,
-                                        QDoubleSpinBox, QPushButton, QGroupBox)
-            from PyQt6.QtCore import Qt
-
-            super().__init__(parent)
-            self.setWindowTitle("Eupnea Detection Parameters")
-            self.resize(450, 300)
-
-            # Main layout
-            main_layout = QVBoxLayout(self)
-
-            # Title
-            title = QLabel("Configure Eupnea Detection")
-            title.setStyleSheet("font-size: 14pt; font-weight: bold; margin-bottom: 10px;")
-            main_layout.addWidget(title)
-
-            # Description
-            desc = QLabel("Eupnea refers to normal, regular breathing patterns. "
-                         "Configure the criteria used to identify eupneic regions:")
-            desc.setWordWrap(True)
-            desc.setStyleSheet("color: #B0B0B0; margin-bottom: 20px;")
-            main_layout.addWidget(desc)
-
-            # Parameters group
-            params_group = QGroupBox("Detection Parameters")
-            params_layout = QVBoxLayout()
-
-            # Frequency threshold
-            freq_layout = QHBoxLayout()
-            freq_layout.addWidget(QLabel("Maximum Frequency (Hz):"))
-            self.freq_spin = QDoubleSpinBox()
-            self.freq_spin.setRange(0.1, 20.0)
-            self.freq_spin.setValue(freq_threshold)
-            self.freq_spin.setDecimals(1)
-            self.freq_spin.setSingleStep(0.5)
-            self.freq_spin.setToolTip("Breathing must be below this frequency to be considered eupneic")
-            freq_layout.addWidget(self.freq_spin)
-            freq_layout.addWidget(QLabel("(typical: 3-5 Hz)"))
-            freq_layout.addStretch()
-            params_layout.addLayout(freq_layout)
-
-            # Min duration
-            dur_layout = QHBoxLayout()
-            dur_layout.addWidget(QLabel("Minimum Duration (s):"))
-            self.dur_spin = QDoubleSpinBox()
-            self.dur_spin.setRange(0.5, 10.0)
-            self.dur_spin.setValue(min_duration)
-            self.dur_spin.setDecimals(1)
-            self.dur_spin.setSingleStep(0.5)
-            self.dur_spin.setToolTip("Region must sustain these criteria for at least this long")
-            dur_layout.addWidget(self.dur_spin)
-            dur_layout.addWidget(QLabel("(typical: 2-3 s)"))
-            dur_layout.addStretch()
-            params_layout.addLayout(dur_layout)
-
-            params_group.setLayout(params_layout)
-            main_layout.addWidget(params_group)
-
-            # Info about visual indicators
-            visual_info = QLabel("Green overlay indicates detected eupneic regions on the main plot.")
-            visual_info.setWordWrap(True)
-            visual_info.setStyleSheet("color: #2ecc71; font-style: italic; margin-top: 15px;")
-            main_layout.addWidget(visual_info)
-
-            main_layout.addStretch()
-
-            # Dialog buttons
-            button_layout = QHBoxLayout()
-
-            reset_btn = QPushButton("Reset to Defaults")
-            reset_btn.clicked.connect(self.reset_to_defaults)
-            button_layout.addWidget(reset_btn)
-
-            button_layout.addStretch()
-
-            cancel_btn = QPushButton("Cancel")
-            cancel_btn.clicked.connect(self.reject)
-            button_layout.addWidget(cancel_btn)
-
-            ok_btn = QPushButton("OK")
-            ok_btn.setDefault(True)
-            ok_btn.clicked.connect(self.accept)
-            button_layout.addWidget(ok_btn)
-
-            main_layout.addLayout(button_layout)
-
-        def reset_to_defaults(self):
-            """Reset parameters to default values."""
-            self.freq_spin.setValue(5.0)
-            self.dur_spin.setValue(2.0)
-
-        def get_params(self):
-            """Return (freq_threshold, min_duration) tuple."""
-            return (self.freq_spin.value(), self.dur_spin.value())
 
 
     ##################################################
@@ -3640,7 +4310,7 @@ class MainWindow(QMainWindow):
     ##Spectral Analysis Dialog                      ##
     ##################################################
     class SpectralAnalysisDialog(QDialog):
-        def __init__(self, parent=None, t=None, y=None, sr_hz=None, stim_spans=None, parent_window=None):
+        def __init__(self, parent=None, t=None, y=None, sr_hz=None, stim_spans=None, parent_window=None, use_zscore=True):
             from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, QPushButton, QMessageBox
             from PyQt6.QtCore import Qt
             import numpy as np
@@ -3656,6 +4326,7 @@ class MainWindow(QMainWindow):
             self.stim_spans = stim_spans  # List of (start, end) tuples for stimulation periods
             self.notch_lower = None
             self.notch_upper = None
+            self.initial_zscore = use_zscore  # Store initial z-score state
 
             # Normalize time to stim onset if stim available
             self.t_offset = 0
@@ -3733,6 +4404,17 @@ class MainWindow(QMainWindow):
             self.mean_window_spin.setEnabled(self.mean_subtract_cb.isChecked())
             self.mean_window_spin.valueChanged.connect(self.on_mean_window_changed)
             control_layout.addWidget(self.mean_window_spin)
+
+            # Add separator
+            control_layout.addWidget(QLabel("  |  "))
+
+            # Z-Score Normalization checkbox
+            from PyQt6.QtWidgets import QCheckBox
+            self.zscore_cb = QCheckBox("Z-Score Normalization")
+            self.zscore_cb.setChecked(use_zscore)
+            self.zscore_cb.setToolTip("Normalize signal to zero mean and unit standard deviation")
+            self.zscore_cb.toggled.connect(self.on_zscore_toggled)
+            control_layout.addWidget(self.zscore_cb)
 
             control_layout.addStretch()
             main_layout.addLayout(control_layout)
@@ -4023,6 +4705,18 @@ class MainWindow(QMainWindow):
                 self._load_sweep_data()
                 self.update_plots()
 
+        def on_zscore_toggled(self, checked):
+            """Handle z-score normalization checkbox toggle."""
+            if self.parent_window:
+                self.parent_window.use_zscore_normalization = checked
+                # Clear z-score cache to recompute with new setting
+                self.parent_window.zscore_global_mean = None
+                self.parent_window.zscore_global_std = None
+                # Update main window and this dialog
+                self.parent_window.update_and_redraw()
+                self._load_sweep_data()
+                self.update_plots()
+
         def get_filter_params(self):
             """Return the notch filter parameters."""
             return self.notch_lower, self.notch_upper
@@ -4083,6 +4777,1378 @@ class MainWindow(QMainWindow):
                 self.t_offset = self.stim_spans[0][0]  # Use first stim onset
             else:
                 self.t_offset = 0.0
+
+
+    ##################################################
+    ##GMM Breath Clustering Dialog                  ##
+    ##################################################
+    class GMMClusteringDialog(QDialog):
+        def __init__(self, parent=None, main_window=None):
+            from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QPushButton, QCheckBox, QTableWidget, QTableWidgetItem, QGroupBox
+            from PyQt6.QtCore import Qt
+            from PyQt6.QtWidgets import QSizePolicy
+            import numpy as np
+
+            super().__init__(parent)
+            self.setWindowTitle("Eupnea/Sniffing Detection")
+            self.resize(1200, 800)
+
+            self.main_window = main_window
+            self.cluster_labels = None  # Will store cluster assignments
+            self.gmm_model = None
+            self.feature_data = None  # Per-breath feature matrix
+            self.breath_cycles = []  # List of (sweep_idx, breath_idx) tuples
+            self.sniffing_cluster_id = None  # Which cluster represents sniffing
+            self.cluster_colors = {}  # Map cluster_id -> color (purple for sniffing, green for eupnea)
+            self.had_quality_warning = False  # Track if clustering quality was questionable
+
+            # Main layout
+            main_layout = QHBoxLayout(self)
+
+            # Left panel: Controls
+            left_panel = QVBoxLayout()
+            left_panel.setSpacing(10)
+
+            # Help/Info button at top
+            help_layout = QHBoxLayout()
+            help_btn = QPushButton("ℹ️ What is GMM Clustering?")
+            help_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            help_btn.setStyleSheet("""
+                QPushButton {
+                    text-align: left;
+                    border: none;
+                    background: transparent;
+                    text-decoration: underline;
+                    color: #4A9EFF;
+                    font-size: 10pt;
+                }
+                QPushButton:hover {
+                    color: #6BB6FF;
+                }
+            """)
+            help_btn.clicked.connect(self.show_help)
+            help_layout.addWidget(help_btn)
+            help_layout.addStretch()
+            left_panel.addLayout(help_layout)
+
+            # Feature selection group
+            feature_group = QGroupBox("Select Features for Clustering")
+            feature_layout = QVBoxLayout()
+
+            self.feature_checkboxes = {}
+            available_features = ["if", "ti", "te", "amp_insp", "amp_exp", "area_insp", "area_exp", "max_dinsp", "max_dexp"]
+            default_features = ["if", "ti", "te", "amp_insp", "amp_exp", "max_dinsp", "max_dexp"]  # Good defaults for eupnea/sniffing separation
+
+            for feature in available_features:
+                cb = QCheckBox(feature)
+                cb.setChecked(feature in default_features)
+                self.feature_checkboxes[feature] = cb
+                feature_layout.addWidget(cb)
+
+            feature_group.setLayout(feature_layout)
+            left_panel.addWidget(feature_group)
+
+            # Number of clusters
+            cluster_layout = QHBoxLayout()
+            cluster_layout.addWidget(QLabel("Number of Clusters:"))
+            self.n_clusters_spin = QSpinBox()
+            self.n_clusters_spin.setRange(2, 10)
+            self.n_clusters_spin.setValue(2)  # Start with 2 for eupnea/sniffing
+            cluster_layout.addWidget(self.n_clusters_spin)
+            cluster_layout.addStretch()
+            left_panel.addLayout(cluster_layout)
+
+            # Run GMM button
+            self.run_gmm_btn = QPushButton("Run GMM Clustering")
+            self.run_gmm_btn.clicked.connect(self.on_run_gmm)
+            self.run_gmm_btn.setMinimumHeight(40)
+            left_panel.addWidget(self.run_gmm_btn)
+
+            # Results table
+            results_label = QLabel("Cluster Statistics:")
+            results_label.setStyleSheet("font-weight: bold; font-size: 12pt;")
+            left_panel.addWidget(results_label)
+
+            self.results_table = QTableWidget()
+            self.results_table.setColumnCount(4)
+            self.results_table.setHorizontalHeaderLabels(["Cluster", "Count", "Percentage", "Avg Confidence"])
+            self.results_table.horizontalHeader().setStretchLastSection(True)
+            left_panel.addWidget(self.results_table)
+
+            # Status label
+            self.status_label = QLabel("Select features and click 'Run GMM Clustering' to begin.")
+            self.status_label.setWordWrap(True)
+            self.status_label.setStyleSheet("color: #888; font-style: italic;")
+            left_panel.addWidget(self.status_label)
+
+            # Info label about what this dialog does
+            info_label = QLabel("Note: Sniffing breaths will be marked with purple background, eupnea with green overlay.")
+            info_label.setWordWrap(True)
+            info_label.setStyleSheet("color: #888; font-size: 9pt; font-style: italic;")
+            left_panel.addWidget(info_label)
+
+            # Waveform plotting controls
+            waveform_group = QGroupBox("Waveform Visualization")
+            waveform_layout = QVBoxLayout()
+
+            self.plot_waveforms_cb = QCheckBox("Plot Mean Waveforms")
+            self.plot_waveforms_cb.setChecked(True)  # Enabled by default
+            self.plot_waveforms_cb.setToolTip("Enable to plot mean ± SEM waveforms (can be slow with many breaths)")
+            waveform_layout.addWidget(self.plot_waveforms_cb)
+
+            n_breaths_layout = QHBoxLayout()
+            n_breaths_layout.addWidget(QLabel("Max breaths per group:"))
+            self.n_breaths_spin = QSpinBox()
+            self.n_breaths_spin.setRange(10, 500)
+            self.n_breaths_spin.setValue(25)
+            self.n_breaths_spin.setToolTip("Number of breaths to include from each group (eupnea/sniffing)")
+            n_breaths_layout.addWidget(self.n_breaths_spin)
+            n_breaths_layout.addStretch()
+            waveform_layout.addLayout(n_breaths_layout)
+
+            waveform_group.setLayout(waveform_layout)
+            left_panel.addWidget(waveform_group)
+
+            # Eupnea detection mode selection (moved to bottom)
+            from PyQt6.QtWidgets import QRadioButton, QButtonGroup, QDoubleSpinBox
+            mode_group = QGroupBox("Eupnea Detection Method")
+            mode_layout = QVBoxLayout()
+
+            self.detection_mode_button_group = QButtonGroup(self)
+            self.gmm_mode_radio = QRadioButton("GMM-Based (Automatic)")
+            self.gmm_mode_radio.setToolTip("Use GMM clustering to identify eupnea automatically.\n"
+                                           "Breaths NOT classified as sniffing are marked as eupnea.")
+            self.freq_mode_radio = QRadioButton("Frequency-Based (Manual Threshold)")
+            self.freq_mode_radio.setToolTip("Use manual frequency threshold to identify eupnea.\n"
+                                            "Breaths below frequency threshold are marked as eupnea.")
+
+            self.detection_mode_button_group.addButton(self.gmm_mode_radio, 0)
+            self.detection_mode_button_group.addButton(self.freq_mode_radio, 1)
+
+            # Set initial selection based on main window's current mode
+            if hasattr(main_window, 'eupnea_detection_mode') and main_window.eupnea_detection_mode == "frequency":
+                self.freq_mode_radio.setChecked(True)
+            else:
+                self.gmm_mode_radio.setChecked(True)
+
+            mode_layout.addWidget(self.gmm_mode_radio)
+            gmm_info = QLabel("  → Automatic classification from clustering")
+            gmm_info.setStyleSheet("color: #888; font-size: 9pt; margin-left: 20px;")
+            mode_layout.addWidget(gmm_info)
+
+            mode_layout.addWidget(self.freq_mode_radio)
+
+            # Frequency-based parameters (enabled/disabled based on mode selection)
+            freq_params_layout = QVBoxLayout()
+            freq_params_layout.setContentsMargins(30, 5, 0, 0)  # Indent for visual grouping
+
+            freq_thresh_layout = QHBoxLayout()
+            freq_thresh_layout.addWidget(QLabel("Frequency Threshold (Hz):"))
+            self.freq_threshold_spin = QDoubleSpinBox()
+            self.freq_threshold_spin.setRange(0.1, 20.0)
+            self.freq_threshold_spin.setValue(getattr(main_window, 'eupnea_freq_threshold', 5.0))
+            self.freq_threshold_spin.setDecimals(1)
+            self.freq_threshold_spin.setSingleStep(0.5)
+            self.freq_threshold_spin.setToolTip("Breathing below this frequency is considered eupneic")
+            freq_thresh_layout.addWidget(self.freq_threshold_spin)
+            freq_thresh_layout.addStretch()
+            freq_params_layout.addLayout(freq_thresh_layout)
+
+            min_dur_layout = QHBoxLayout()
+            min_dur_layout.addWidget(QLabel("Minimum Duration (s):"))
+            self.min_duration_spin = QDoubleSpinBox()
+            self.min_duration_spin.setRange(0.5, 10.0)
+            self.min_duration_spin.setValue(main_window.eupnea_min_duration if hasattr(main_window, 'eupnea_min_duration') else 2.0)
+            self.min_duration_spin.setDecimals(1)
+            self.min_duration_spin.setSingleStep(0.5)
+            self.min_duration_spin.setToolTip("Region must sustain criteria for at least this long")
+            min_dur_layout.addWidget(self.min_duration_spin)
+            min_dur_layout.addStretch()
+            freq_params_layout.addLayout(min_dur_layout)
+
+            mode_layout.addLayout(freq_params_layout)
+
+            mode_group.setLayout(mode_layout)
+            left_panel.addWidget(mode_group)
+
+            # Connect mode radio buttons to auto-apply changes
+            self.gmm_mode_radio.toggled.connect(self._on_detection_mode_changed)
+            self.freq_mode_radio.toggled.connect(self._on_detection_mode_changed)
+
+            # Connect frequency parameters to auto-apply changes
+            self.freq_threshold_spin.valueChanged.connect(self._on_frequency_params_changed)
+            self.min_duration_spin.valueChanged.connect(self._on_frequency_params_changed)
+
+            # Close button
+            button_layout = QHBoxLayout()
+            close_btn = QPushButton("Close")
+            close_btn.setMinimumHeight(35)
+            close_btn.clicked.connect(self.accept)
+            button_layout.addWidget(close_btn)
+            left_panel.addLayout(button_layout)
+
+            left_panel.addStretch()
+            main_layout.addLayout(left_panel, 1)
+
+            # Right panel: Scrollable Visualizations
+            from PyQt6.QtWidgets import QScrollArea, QWidget
+            from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+            from matplotlib.figure import Figure
+
+            self.scroll_area = QScrollArea()
+            self.scroll_area.setWidgetResizable(True)
+            self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # No horizontal scroll
+            self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.scroll_area.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Enable mouse wheel scrolling
+
+            # Container widget for plots
+            plot_container = QWidget()
+            plot_layout = QVBoxLayout(plot_container)
+            plot_layout.setContentsMargins(0, 0, 0, 0)
+
+            # Matplotlib figure for visualizations (will contain both histograms and scatter plots)
+            # Fit width to window, tall for scrolling
+            self.figure = Figure(figsize=(9, 25))  # Narrower to fit width, tall for vertical scroll
+            self.canvas = FigureCanvasQTAgg(self.figure)
+            self.canvas.setMinimumHeight(2000)  # Tall enough to trigger vertical scrolling
+
+            # Install event filter to forward mouse wheel events to scroll area
+            self.canvas.installEventFilter(self)
+
+            plot_layout.addWidget(self.canvas)
+
+            self.scroll_area.setWidget(plot_container)
+            main_layout.addWidget(self.scroll_area, 2)
+
+            # Auto-run GMM visualization if results already exist (from automatic clustering)
+            # This happens after peak detection, so the dialog can immediately show results
+            if hasattr(main_window.state, 'gmm_sniff_probabilities') and main_window.state.gmm_sniff_probabilities:
+                print("[gmm-dialog] Found existing GMM results, auto-loading visualization...")
+                self._load_existing_gmm_results()
+
+        def _load_existing_gmm_results(self):
+            """Load and display existing GMM results that were computed automatically."""
+            import numpy as np
+
+            try:
+                # Check if main window has cached GMM results
+                if (hasattr(self.main_window, '_cached_gmm_results') and
+                    self.main_window._cached_gmm_results is not None):
+
+                    print("[gmm-dialog] Loading cached GMM results (fast path)...")
+
+                    # Unpack cached results
+                    cached = self.main_window._cached_gmm_results
+                    self.cluster_labels = cached['cluster_labels']
+                    self.cluster_probabilities = cached['cluster_probabilities']
+                    self.feature_data = cached['feature_matrix']
+                    self.breath_cycles = cached['breath_cycles']
+                    self.sniffing_cluster_id = cached['sniffing_cluster_id']
+                    selected_features = cached['feature_keys']
+
+                    # Assign colors based on cached sniffing cluster
+                    for cluster_id in np.unique(self.cluster_labels):
+                        if cluster_id == self.sniffing_cluster_id:
+                            self.cluster_colors[cluster_id] = 'purple'
+                        else:
+                            self.cluster_colors[cluster_id] = 'green'
+
+                    # Update results table
+                    self._update_results_table()
+
+                    # Plot results (only plotting, no re-computation)
+                    self._plot_clusters(self.feature_data, self.cluster_labels, selected_features)
+
+                    self.status_label.setText(f"✓ Loaded cached results: {len(self.feature_data)} breaths classified into {len(np.unique(self.cluster_labels))} clusters.")
+                    self.status_label.setStyleSheet("color: green; font-weight: bold;")
+
+                else:
+                    print("[gmm-dialog] No cached results found, user needs to run GMM manually")
+                    self.status_label.setText("No existing results. Click 'Run GMM Clustering' to analyze breaths.")
+                    self.status_label.setStyleSheet("color: #888; font-style: italic;")
+
+                # Scroll to top
+                self.scroll_area.verticalScrollBar().setValue(0)
+
+            except Exception as e:
+                print(f"[gmm-dialog] Error loading existing results: {e}")
+                import traceback
+                traceback.print_exc()
+
+        def eventFilter(self, obj, event):
+            """Forward wheel events from canvas to scroll area."""
+            from PyQt6.QtCore import QEvent
+            if obj == self.canvas and event.type() == QEvent.Type.Wheel:
+                # Forward wheel event to scroll area
+                self.scroll_area.verticalScrollBar().setValue(
+                    self.scroll_area.verticalScrollBar().value() - event.angleDelta().y() // 2
+                )
+                return True
+            return super().eventFilter(obj, event)
+
+        def _on_detection_mode_changed(self):
+            """Enable/disable frequency parameters and auto-apply detection mode change."""
+            gmm_mode = self.gmm_mode_radio.isChecked()
+            self.freq_threshold_spin.setEnabled(not gmm_mode)
+            self.min_duration_spin.setEnabled(not gmm_mode)
+
+            # Auto-apply detection mode change to main window
+            selected_mode = "gmm" if gmm_mode else "frequency"
+            if self.main_window.eupnea_detection_mode != selected_mode:
+                self.main_window.eupnea_detection_mode = selected_mode
+                print(f"[gmm-dialog] Auto-applied eupnea detection mode: {selected_mode}")
+
+                # Update main window's eupnea regions and redraw
+                self.main_window.redraw_main_plot()
+
+        def _on_frequency_params_changed(self):
+            """Auto-apply frequency parameter changes to main window."""
+            # Only apply if in frequency mode
+            if self.freq_mode_radio.isChecked():
+                # Update main window parameters
+                self.main_window.eupnea_freq_threshold = self.freq_threshold_spin.value()
+                self.main_window.eupnea_min_duration = self.min_duration_spin.value()
+
+                print(f"[gmm-dialog] Auto-applied frequency params: thresh={self.main_window.eupnea_freq_threshold} Hz, "
+                      f"min_dur={self.main_window.eupnea_min_duration} s")
+
+                # Redraw to apply new parameters
+                self.main_window.redraw_main_plot()
+
+        def on_run_gmm(self):
+            """Run GMM clustering on breath metrics."""
+            from sklearn.mixture import GaussianMixture
+            from sklearn.preprocessing import StandardScaler
+            import numpy as np
+
+            # Get selected features
+            selected_features = [f for f, cb in self.feature_checkboxes.items() if cb.isChecked()]
+            if len(selected_features) < 2:
+                self.status_label.setText("Error: Please select at least 2 features.")
+                self.status_label.setStyleSheet("color: red; font-weight: bold;")
+                return
+
+            # Collect breath metrics from all analyzed sweeps
+            self.status_label.setText("Collecting breath metrics...")
+            self.status_label.setStyleSheet("color: blue;")
+
+            try:
+                feature_matrix, breath_cycles = self._collect_breath_features(selected_features)
+
+                if len(feature_matrix) < self.n_clusters_spin.value():
+                    self.status_label.setText(f"Error: Not enough breaths ({len(feature_matrix)}) for {self.n_clusters_spin.value()} clusters.")
+                    self.status_label.setStyleSheet("color: red; font-weight: bold;")
+                    return
+
+                # Standardize features
+                scaler = StandardScaler()
+                feature_matrix_scaled = scaler.fit_transform(feature_matrix)
+
+                # Fit GMM
+                n_clusters = self.n_clusters_spin.value()
+                self.status_label.setText(f"Fitting GMM with {n_clusters} clusters...")
+
+                self.gmm_model = GaussianMixture(n_components=n_clusters, random_state=42, covariance_type='full')
+                self.cluster_labels = self.gmm_model.fit_predict(feature_matrix_scaled)
+                self.cluster_probabilities = self.gmm_model.predict_proba(feature_matrix_scaled)
+                self.feature_data = feature_matrix
+                self.breath_cycles = breath_cycles
+
+                # Check clustering quality
+                quality_warning = self._check_clustering_quality(feature_matrix_scaled, selected_features)
+
+                # Identify sniffing cluster and assign colors
+                self._identify_sniffing_cluster(feature_matrix, selected_features, quality_warning)
+
+                # Update results table
+                self._update_results_table()
+
+                # Plot results (histograms + scatter plots)
+                self._plot_clusters(feature_matrix, self.cluster_labels, selected_features)
+
+                self.status_label.setText(f"✓ Clustering complete: {len(feature_matrix)} breaths classified into {n_clusters} clusters.")
+                self.status_label.setStyleSheet("color: green; font-weight: bold;")
+
+                # Auto-apply results to main plot
+                self._auto_apply_gmm_results()
+
+                # Scroll to top after plotting
+                self.scroll_area.verticalScrollBar().setValue(0)
+
+            except Exception as e:
+                self.status_label.setText(f"Error: {str(e)}")
+                self.status_label.setStyleSheet("color: red; font-weight: bold;")
+                import traceback
+                traceback.print_exc()
+
+        def _check_clustering_quality(self, feature_matrix_scaled, feature_keys):
+            """Check if clustering is meaningful (not just splitting homogeneous data).
+
+            Returns warning message if clustering quality is poor, None otherwise.
+            """
+            import numpy as np
+            from sklearn.metrics import silhouette_score
+
+            # Silhouette score measures how well-separated clusters are
+            # Range: -1 (poor) to +1 (excellent), ~0 means overlapping clusters
+            if len(np.unique(self.cluster_labels)) > 1:
+                silhouette = silhouette_score(feature_matrix_scaled, self.cluster_labels)
+            else:
+                silhouette = -1
+
+            print(f"[gmm-clustering] Silhouette score: {silhouette:.3f}")
+
+            # Warn if clusters are poorly separated
+            if silhouette < 0.25:
+                return (
+                    f"⚠️ Low cluster separation (silhouette={silhouette:.3f}).\n\n"
+                    "This suggests the breathing patterns are very similar.\n"
+                    "The identified 'sniffing' cluster may just be normal variation,\n"
+                    "not distinct sniffing behavior.\n\n"
+                    "Consider: (1) using fewer clusters, or (2) this data may not\n"
+                    "contain distinct sniffing bouts."
+                )
+
+            return None
+
+        def _identify_sniffing_cluster(self, feature_matrix, feature_keys, quality_warning=None):
+            """Identify which cluster represents sniffing and assign colors.
+
+            Sniffing characteristics:
+            - Highest mean instantaneous frequency (if)
+            - Lowest mean inspiratory time (ti)
+
+            Args:
+                quality_warning: Warning message from quality check (if any)
+            """
+            import numpy as np
+            import matplotlib.pyplot as plt
+
+            unique_labels = np.unique(self.cluster_labels)
+            n_clusters = len(unique_labels)
+
+            # Get indices of IF and Ti features
+            if_idx = feature_keys.index('if') if 'if' in feature_keys else None
+            ti_idx = feature_keys.index('ti') if 'ti' in feature_keys else None
+
+            if if_idx is None and ti_idx is None:
+                # Can't identify sniffing without IF or Ti, use default colors
+                print("[gmm-clustering] Warning: Cannot identify sniffing cluster without 'if' or 'ti' features. Using default colors.")
+                colors = plt.cm.tab10(np.linspace(0, 1, n_clusters))
+                self.cluster_colors = {cluster_id: colors[i] for i, cluster_id in enumerate(unique_labels)}
+                self.sniffing_cluster_id = None
+                return
+
+            # Compute mean IF and Ti for each cluster
+            cluster_stats = {}
+            for cluster_id in unique_labels:
+                mask = self.cluster_labels == cluster_id
+                stats = {}
+
+                if if_idx is not None:
+                    stats['mean_if'] = np.mean(feature_matrix[mask, if_idx])
+                if ti_idx is not None:
+                    stats['mean_ti'] = np.mean(feature_matrix[mask, ti_idx])
+
+                cluster_stats[cluster_id] = stats
+
+            # Identify sniffing: highest IF and/or lowest Ti
+            # Score = (normalized IF rank) + (normalized Ti inverse rank)
+            cluster_scores = {}
+            for cluster_id in unique_labels:
+                score = 0
+
+                if if_idx is not None:
+                    # Higher IF = more likely sniffing
+                    if_vals = [cluster_stats[c]['mean_if'] for c in unique_labels]
+                    if_rank = sorted(if_vals).index(cluster_stats[cluster_id]['mean_if'])
+                    score += if_rank / (n_clusters - 1) if n_clusters > 1 else 0
+
+                if ti_idx is not None:
+                    # Lower Ti = more likely sniffing
+                    ti_vals = [cluster_stats[c]['mean_ti'] for c in unique_labels]
+                    ti_rank = sorted(ti_vals, reverse=True).index(cluster_stats[cluster_id]['mean_ti'])
+                    score += ti_rank / (n_clusters - 1) if n_clusters > 1 else 0
+
+                cluster_scores[cluster_id] = score
+
+            # Cluster with highest score is sniffing
+            self.sniffing_cluster_id = max(cluster_scores, key=cluster_scores.get)
+
+            # Validate that the identified cluster actually looks like sniffing
+            # Sniffing typically has IF > 5-6 Hz, eupnea is usually 2-4 Hz
+            sniff_stats = cluster_stats[self.sniffing_cluster_id]
+            if if_idx is not None:
+                sniff_if = sniff_stats['mean_if']
+                # Check if "sniffing" cluster actually has high enough frequency
+                if sniff_if < 5.0:
+                    # This doesn't look like real sniffing
+                    physiological_warning = (
+                        f"⚠️ The identified 'sniffing' cluster has low mean IF ({sniff_if:.2f} Hz).\n\n"
+                        "True sniffing typically has IF > 5-6 Hz.\n"
+                        "This may just be variation in normal breathing, not distinct sniffing.\n\n"
+                        "The cluster separation may not represent meaningful patterns."
+                    )
+                    if quality_warning:
+                        quality_warning = quality_warning + "\n\n" + physiological_warning
+                    else:
+                        quality_warning = physiological_warning
+
+            # Assign colors: purple for sniffing, green for others (if 2 clusters), otherwise tab10
+            if n_clusters == 2:
+                # Simple case: sniffing = purple, other = green
+                for cluster_id in unique_labels:
+                    if cluster_id == self.sniffing_cluster_id:
+                        self.cluster_colors[cluster_id] = 'purple'
+                    else:
+                        self.cluster_colors[cluster_id] = 'green'
+            else:
+                # Multiple clusters: sniffing = purple, others = tab10 colors (avoiding purple)
+                tab10_colors = plt.cm.tab10(np.linspace(0, 1, 10))
+                color_idx = 0
+                for cluster_id in unique_labels:
+                    if cluster_id == self.sniffing_cluster_id:
+                        self.cluster_colors[cluster_id] = 'purple'
+                    else:
+                        # Use green as first alternative color, then other tab10 colors
+                        if color_idx == 0:
+                            self.cluster_colors[cluster_id] = 'green'
+                        else:
+                            # Skip purple-ish colors in tab10 (index 4)
+                            skip_indices = [4]
+                            actual_idx = color_idx
+                            while actual_idx in skip_indices and actual_idx < 10:
+                                actual_idx += 1
+                            self.cluster_colors[cluster_id] = tab10_colors[actual_idx % 10]
+                        color_idx += 1
+
+            print(f"[gmm-clustering] Identified cluster {self.sniffing_cluster_id} as sniffing")
+            for cluster_id in unique_labels:
+                stats_str = ", ".join([f"{k}={v:.3f}" for k, v in cluster_stats[cluster_id].items()])
+                print(f"  Cluster {cluster_id}: {stats_str}, color={self.cluster_colors[cluster_id]}")
+
+            # Show warning if clustering quality is questionable
+            if quality_warning:
+                self.had_quality_warning = True
+                from PyQt6.QtWidgets import QMessageBox
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Clustering Quality Warning")
+                msg.setIcon(QMessageBox.Icon.Warning)
+                msg.setText(quality_warning)
+                msg.setInformativeText("You can still explore the results, but be cautious about applying them to the plot.")
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg.exec()
+            else:
+                self.had_quality_warning = False
+
+        def _collect_breath_features(self, feature_keys):
+            """Collect per-breath features from all analyzed sweeps."""
+            import numpy as np
+            from core import metrics, filters
+
+            feature_matrix = []
+            breath_cycles = []
+
+            # Iterate through all analyzed sweeps
+            st = self.main_window.state
+
+            for sweep_idx in sorted(st.breath_by_sweep.keys()):
+                breath_data = st.breath_by_sweep[sweep_idx]
+
+                # Get peaks from peaks_by_sweep (they're stored separately)
+                if sweep_idx not in st.peaks_by_sweep:
+                    continue
+
+                peaks = st.peaks_by_sweep[sweep_idx]
+
+                # Get time, signal, and event indices for this sweep
+                t = st.t
+                y_raw = st.sweeps[st.analyze_chan][:, sweep_idx]
+
+                # Apply filters to get processed signal (replicate _current_trace logic)
+                y = filters.apply_all_1d(
+                    y_raw, st.sr_hz,
+                    st.use_low, st.low_hz,
+                    st.use_high, st.high_hz,
+                    st.use_mean_sub, st.mean_val,
+                    st.use_invert,
+                    order=self.main_window.filter_order
+                )
+
+                # Apply notch filter if configured
+                if self.main_window.notch_filter_lower is not None and self.main_window.notch_filter_upper is not None:
+                    y = self.main_window._apply_notch_filter(y, st.sr_hz,
+                                                              self.main_window.notch_filter_lower,
+                                                              self.main_window.notch_filter_upper)
+
+                # Apply z-score normalization if enabled (using global statistics)
+                if self.main_window.use_zscore_normalization:
+                    # Compute global stats if not cached
+                    if self.main_window.zscore_global_mean is None or self.main_window.zscore_global_std is None:
+                        self.main_window.zscore_global_mean, self.main_window.zscore_global_std = self.main_window._compute_global_zscore_stats()
+                    y = filters.zscore_normalize(y, self.main_window.zscore_global_mean, self.main_window.zscore_global_std)
+
+                # Get breath event indices
+                onsets = breath_data.get('onsets', np.array([]))
+                offsets = breath_data.get('offsets', np.array([]))
+                expmins = breath_data.get('expmins', np.array([]))
+                expoffs = breath_data.get('expoffs', np.array([]))
+
+                # Skip if no breath events detected
+                if len(onsets) == 0:
+                    continue
+
+                # Compute metrics for this sweep
+                metrics_dict = {}
+                for feature_key in feature_keys:
+                    if feature_key in metrics.METRICS:
+                        metric_arr = metrics.METRICS[feature_key](
+                            t, y, st.sr_hz, peaks, onsets, offsets, expmins, expoffs
+                        )
+                        metrics_dict[feature_key] = metric_arr
+
+                # Extract per-breath values (one value per breath cycle)
+                n_breaths = len(onsets)
+                for breath_idx in range(n_breaths):
+                    start = int(onsets[breath_idx])
+                    breath_features = []
+
+                    # Extract metric value for this breath
+                    valid_breath = True
+                    for feature_key in feature_keys:
+                        if feature_key not in metrics_dict:
+                            valid_breath = False
+                            break
+
+                        metric_arr = metrics_dict[feature_key]
+                        if start < len(metric_arr):
+                            val = metric_arr[start]
+                            if np.isnan(val) or not np.isfinite(val):
+                                valid_breath = False
+                                break
+                            breath_features.append(val)
+                        else:
+                            valid_breath = False
+                            break
+
+                    if valid_breath and len(breath_features) == len(feature_keys):
+                        feature_matrix.append(breath_features)
+                        breath_cycles.append((sweep_idx, breath_idx))
+
+            return np.array(feature_matrix), breath_cycles
+
+        def _update_results_table(self):
+            """Update the results table with cluster statistics."""
+            import numpy as np
+            from PyQt6.QtWidgets import QTableWidgetItem
+            from PyQt6.QtGui import QColor
+
+            unique_clusters = np.unique(self.cluster_labels)
+            self.results_table.setRowCount(len(unique_clusters))
+
+            for i, cluster_id in enumerate(unique_clusters):
+                count = np.sum(self.cluster_labels == cluster_id)
+                percentage = 100.0 * count / len(self.cluster_labels)
+
+                # Calculate average confidence (probability of assigned cluster)
+                mask = self.cluster_labels == cluster_id
+                if hasattr(self, 'cluster_probabilities') and self.cluster_probabilities is not None:
+                    avg_confidence = np.mean(self.cluster_probabilities[mask, cluster_id])
+                else:
+                    avg_confidence = 1.0  # Perfect confidence if no probabilities
+
+                # Label with pattern type if identified
+                if cluster_id == self.sniffing_cluster_id:
+                    label = f"Cluster {cluster_id} (Sniffing)"
+                else:
+                    label = f"Cluster {cluster_id}"
+
+                cluster_item = QTableWidgetItem(label)
+                count_item = QTableWidgetItem(str(count))
+                pct_item = QTableWidgetItem(f"{percentage:.1f}%")
+                conf_item = QTableWidgetItem(f"{avg_confidence:.3f}")
+
+                # Color-code the row
+                if cluster_id in self.cluster_colors:
+                    color = self.cluster_colors[cluster_id]
+                    if isinstance(color, str):
+                        # Named color
+                        bg_color = QColor(color)
+                    else:
+                        # RGBA tuple from colormap
+                        bg_color = QColor(int(color[0]*255), int(color[1]*255), int(color[2]*255))
+
+                    bg_color.setAlpha(80)  # Make it semi-transparent
+                    cluster_item.setBackground(bg_color)
+                    count_item.setBackground(bg_color)
+                    pct_item.setBackground(bg_color)
+                    conf_item.setBackground(bg_color)
+
+                self.results_table.setItem(i, 0, cluster_item)
+                self.results_table.setItem(i, 1, count_item)
+                self.results_table.setItem(i, 2, pct_item)
+                self.results_table.setItem(i, 3, conf_item)
+
+        def _plot_waveform_overlays(self, total_rows, max_cols, labels, colors):
+            """Plot waveform overlays: Column 1 = mean +/- SEM waveforms, Column 2 = mean trajectory line plot."""
+            import numpy as np
+            from core import filters
+
+            if not self.main_window or not hasattr(self.main_window, 'state'):
+                return
+
+            st = self.main_window.state
+
+            # Get current processed signal (with all filters applied)
+            if not st.analyze_chan or st.analyze_chan not in st.sweeps:
+                return
+
+            # Check if waveform plotting is enabled
+            plot_waveforms = self.plot_waveforms_cb.isChecked()
+            max_breaths = self.n_breaths_spin.value()
+
+            # Collect waveform cutouts for each cluster (now restricted to onset -> expoff)
+            eupnea_waveforms = []  # List of (time_array, signal_array) tuples
+            sniffing_waveforms = []
+
+            # Also collect signal and derivative for mean trajectory plot
+            eupnea_trajectories = []  # List of (signal_array, derivative_array) tuples
+            sniffing_trajectories = []
+
+            # Only collect data if plotting is enabled
+            if plot_waveforms:
+                for breath_idx, (sweep_idx, breath_i) in enumerate(self.breath_cycles):
+                    # Early exit if both groups have enough breaths
+                    if len(eupnea_waveforms) >= max_breaths and len(sniffing_waveforms) >= max_breaths:
+                        break
+
+                    cluster_id = labels[breath_idx]
+
+                    # Skip if this cluster already has enough breaths
+                    if cluster_id == self.sniffing_cluster_id:
+                        if len(sniffing_waveforms) >= max_breaths:
+                            continue
+                    else:
+                        if len(eupnea_waveforms) >= max_breaths:
+                            continue
+
+                    # Get breath event data for this sweep
+                    breath_data = st.breath_by_sweep.get(sweep_idx)
+                    if breath_data is None:
+                        continue
+
+                    onsets = breath_data.get('onsets', None)
+                    expoffs = breath_data.get('expoffs', None)
+                    if onsets is None or expoffs is None or len(onsets) == 0 or len(expoffs) == 0:
+                        continue
+
+                    if breath_i >= len(onsets) or breath_i >= len(expoffs):
+                        continue
+
+                    # Get processed signal for this sweep
+                    Y = st.sweeps[st.analyze_chan]
+                    y_raw = Y[:, sweep_idx]
+
+                    # Apply all filters (same as main plot)
+                    y = filters.apply_all_1d(
+                        y_raw,
+                        sr_hz=st.sr_hz,
+                        use_low=st.use_low,
+                        low_hz=st.low_hz,
+                        use_high=st.use_high,
+                        high_hz=st.high_hz,
+                        use_mean=st.use_mean_sub,
+                        mean_param=st.mean_val,
+                        use_inv=st.use_invert,
+                        order=self.main_window.filter_order
+                    )
+
+                    # Apply notch filter if configured
+                    if self.main_window.notch_filter_lower is not None and self.main_window.notch_filter_upper is not None:
+                        y = self.main_window._apply_notch_filter(y, st.sr_hz)
+
+                    # Apply z-score if enabled
+                    if self.main_window.use_zscore_normalization:
+                        if self.main_window.zscore_global_mean is None or self.main_window.zscore_global_std is None:
+                            self.main_window.zscore_global_mean, self.main_window.zscore_global_std = self.main_window._compute_global_zscore_stats()
+                        y = filters.zscore_normalize(y, self.main_window.zscore_global_mean, self.main_window.zscore_global_std)
+
+                    t = st.t
+
+                    # Extract waveform from inspiratory onset to expiratory offset
+                    start_idx = int(onsets[breath_i])
+                    end_idx = int(expoffs[breath_i])
+
+                    # Validate indices
+                    if start_idx < 0 or end_idx >= len(y) or start_idx >= end_idx:
+                        continue
+
+                    # Extract waveform segment (onset -> expoff)
+                    waveform_t = t[start_idx:end_idx+1] - t[start_idx]  # Time relative to onset
+                    waveform_y = y[start_idx:end_idx+1]
+
+                    # Compute first derivative for this segment
+                    dt = 1.0 / st.sr_hz
+                    waveform_dy = np.gradient(waveform_y, dt)
+
+                    # Add to appropriate cluster (limit to max_breaths)
+                    if cluster_id == self.sniffing_cluster_id:
+                        if len(sniffing_waveforms) < max_breaths:
+                            sniffing_waveforms.append((waveform_t, waveform_y))
+                            sniffing_trajectories.append((waveform_y, waveform_dy))
+                    else:
+                        if len(eupnea_waveforms) < max_breaths:
+                            eupnea_waveforms.append((waveform_t, waveform_y))
+                            eupnea_trajectories.append((waveform_y, waveform_dy))
+
+            # ========================================
+            # Column 1: Mean +/- SEM Waveforms (optional)
+            # ========================================
+            if plot_waveforms:
+                ax1 = self.figure.add_subplot(total_rows, max_cols, 1)
+
+                # Helper function to pad waveforms to longest duration
+                def align_and_compute_stats(waveforms):
+                    """Pad waveforms to longest duration, then compute mean +/- SEM."""
+                    if len(waveforms) == 0:
+                        return None, None, None
+
+                    # Find longest duration
+                    max_len = max(len(wf_t) for wf_t, wf_y in waveforms)
+
+                    # Pad all waveforms to max_len with NaN
+                    padded_signals = []
+                    for wf_t, wf_y in waveforms:
+                        if len(wf_y) < max_len:
+                            # Pad with NaN
+                            padded = np.full(max_len, np.nan)
+                            padded[:len(wf_y)] = wf_y
+                            padded_signals.append(padded)
+                        else:
+                            padded_signals.append(wf_y)
+
+                    # Stack and compute statistics (ignoring NaN)
+                    wf_matrix = np.vstack(padded_signals)
+                    mean_wf = np.nanmean(wf_matrix, axis=0)
+                    sem_wf = np.nanstd(wf_matrix, axis=0) / np.sqrt(np.sum(~np.isnan(wf_matrix), axis=0))
+
+                    # Create time axis matching the longest breath
+                    dt = 1.0 / st.sr_hz
+                    t_common = np.arange(max_len) * dt
+
+                    return t_common, mean_wf, sem_wf
+
+                # Plot eupnea mean +/- SEM (green)
+                if eupnea_waveforms:
+                    t_eup, mean_eup, sem_eup = align_and_compute_stats(eupnea_waveforms)
+                    if t_eup is not None:
+                        ax1.plot(t_eup, mean_eup, color='green', linewidth=2.5,
+                                label=f'Eupnea (n={len(eupnea_waveforms)})', alpha=0.9)
+                        ax1.fill_between(t_eup, mean_eup - sem_eup, mean_eup + sem_eup,
+                                        color='green', alpha=0.25, linewidth=0)
+
+                # Plot sniffing mean +/- SEM (purple)
+                if sniffing_waveforms:
+                    t_snf, mean_snf, sem_snf = align_and_compute_stats(sniffing_waveforms)
+                    if t_snf is not None:
+                        ax1.plot(t_snf, mean_snf, color='purple', linewidth=2.5,
+                                label=f'Sniffing (n={len(sniffing_waveforms)})', alpha=0.9)
+                        ax1.fill_between(t_snf, mean_snf - sem_snf, mean_snf + sem_snf,
+                                        color='purple', alpha=0.25, linewidth=0)
+
+                ax1.set_xlabel('Time from Onset (s)', fontsize=11, fontweight='bold')
+                ax1.set_ylabel('Signal Amplitude', fontsize=11, fontweight='bold')
+                ax1.set_title('Mean +/- SEM Breath Waveforms', fontsize=12, fontweight='bold')
+                ax1.legend(loc='best', fontsize=10)
+                ax1.grid(True, alpha=0.3)
+                ax1.axhline(0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+            else:
+                # Placeholder when waveforms disabled
+                ax1 = self.figure.add_subplot(total_rows, max_cols, 1)
+                ax1.text(0.5, 0.5, 'Waveform plotting disabled\n(Enable checkbox to view)',
+                        ha='center', va='center', fontsize=12, color='gray')
+                ax1.set_xlim(0, 1)
+                ax1.set_ylim(0, 1)
+                ax1.axis('off')
+
+            # ========================================
+            # Column 2: Mean Trajectory (Signal vs Derivative) - optional
+            # ========================================
+            if plot_waveforms:
+                ax2 = self.figure.add_subplot(total_rows, max_cols, 2)
+
+                # Helper function to compute mean trajectory with SEM
+                def compute_mean_trajectory_with_sem(trajectories):
+                    """Pad trajectories to longest, then compute mean +/- SEM."""
+                    if len(trajectories) == 0:
+                        return None, None, None, None
+
+                    # Find longest trajectory
+                    max_len = max(len(sig) for sig, deriv in trajectories)
+
+                    # Pad all trajectories to max_len with NaN
+                    padded_sigs = []
+                    padded_derivs = []
+                    for sig, deriv in trajectories:
+                        if len(sig) < max_len:
+                            padded_sig = np.full(max_len, np.nan)
+                            padded_deriv = np.full(max_len, np.nan)
+                            padded_sig[:len(sig)] = sig
+                            padded_deriv[:len(deriv)] = deriv
+                            padded_sigs.append(padded_sig)
+                            padded_derivs.append(padded_deriv)
+                        else:
+                            padded_sigs.append(sig)
+                            padded_derivs.append(deriv)
+
+                    # Stack and compute mean +/- SEM (ignoring NaN)
+                    sig_matrix = np.vstack(padded_sigs)
+                    deriv_matrix = np.vstack(padded_derivs)
+                    mean_sig = np.nanmean(sig_matrix, axis=0)
+                    mean_deriv = np.nanmean(deriv_matrix, axis=0)
+                    sem_sig = np.nanstd(sig_matrix, axis=0) / np.sqrt(np.sum(~np.isnan(sig_matrix), axis=0))
+                    sem_deriv = np.nanstd(deriv_matrix, axis=0) / np.sqrt(np.sum(~np.isnan(deriv_matrix), axis=0))
+
+                    return mean_sig, mean_deriv, sem_sig, sem_deriv
+
+                # Plot mean trajectories as lines with SEM shading
+                if eupnea_trajectories:
+                    mean_sig_eup, mean_deriv_eup, sem_sig_eup, sem_deriv_eup = compute_mean_trajectory_with_sem(eupnea_trajectories)
+                    if mean_sig_eup is not None:
+                        # Plot mean trajectory line
+                        ax2.plot(mean_sig_eup, mean_deriv_eup, color='green', linewidth=2.5,
+                                label=f'Eupnea Mean Trajectory', alpha=0.9, marker='o', markersize=2, markevery=5)
+                        # Add SEM as error bounds (create polygon for shaded region)
+                        # Upper bound: (sig + sem_sig, deriv + sem_deriv)
+                        # Lower bound: (sig - sem_sig, deriv - sem_deriv)
+                        sig_upper = mean_sig_eup + sem_sig_eup
+                        sig_lower = mean_sig_eup - sem_sig_eup
+                        deriv_upper = mean_deriv_eup + sem_deriv_eup
+                        deriv_lower = mean_deriv_eup - sem_deriv_eup
+                        # Create polygon vertices (forward path on upper, backward on lower)
+                        verts_x = np.concatenate([sig_upper, sig_lower[::-1]])
+                        verts_y = np.concatenate([deriv_upper, deriv_lower[::-1]])
+                        ax2.fill(verts_x, verts_y, color='green', alpha=0.15, linewidth=0)
+
+                if sniffing_trajectories:
+                    mean_sig_snf, mean_deriv_snf, sem_sig_snf, sem_deriv_snf = compute_mean_trajectory_with_sem(sniffing_trajectories)
+                    if mean_sig_snf is not None:
+                        # Plot mean trajectory line
+                        ax2.plot(mean_sig_snf, mean_deriv_snf, color='purple', linewidth=2.5,
+                                label=f'Sniffing Mean Trajectory', alpha=0.9, marker='o', markersize=2, markevery=5)
+                        # Add SEM shading
+                        sig_upper = mean_sig_snf + sem_sig_snf
+                        sig_lower = mean_sig_snf - sem_sig_snf
+                        deriv_upper = mean_deriv_snf + sem_deriv_snf
+                        deriv_lower = mean_deriv_snf - sem_deriv_snf
+                        verts_x = np.concatenate([sig_upper, sig_lower[::-1]])
+                        verts_y = np.concatenate([deriv_upper, deriv_lower[::-1]])
+                        ax2.fill(verts_x, verts_y, color='purple', alpha=0.15, linewidth=0)
+
+                ax2.set_xlabel('Signal Amplitude', fontsize=11, fontweight='bold')
+                ax2.set_ylabel('First Derivative (dy/dt)', fontsize=11, fontweight='bold')
+                ax2.set_title('Mean Trajectory (Signal vs Derivative)', fontsize=12, fontweight='bold')
+                ax2.grid(True, alpha=0.3)
+                ax2.axhline(0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+                ax2.axvline(0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+            else:
+                # Placeholder when trajectories disabled
+                ax2 = self.figure.add_subplot(total_rows, max_cols, 2)
+                ax2.text(0.5, 0.5, 'Trajectory plotting disabled\n(Enable checkbox to view)',
+                        ha='center', va='center', fontsize=12, color='gray')
+                ax2.set_xlim(0, 1)
+                ax2.set_ylim(0, 1)
+                ax2.axis('off')
+
+        def _plot_clusters(self, feature_matrix, labels, feature_keys):
+            """Plot histograms for each feature + 2D scatter plots of clusters + waveform overlays."""
+            import numpy as np
+            import matplotlib.pyplot as plt
+            from scipy.stats import gaussian_kde
+
+            self.figure.clear()
+
+            n_features = len(feature_keys)
+            unique_labels = np.unique(labels)
+            n_clusters = len(unique_labels)
+
+            # Use pre-assigned colors (purple for sniffing, green for eupnea, etc.)
+            colors = self.cluster_colors
+
+            # Calculate layout: NEW WAVEFORM ROW at top, then histograms in 2 columns, scatter plots below
+            waveform_rows = 1  # Add 1 row at top for waveform overlays
+            hist_cols = 2
+            hist_rows = int(np.ceil(n_features / hist_cols))
+
+            n_scatter_plots = min(6, (n_features * (n_features - 1)) // 2)  # Max 6 scatter plots
+
+            if n_scatter_plots > 0:
+                scatter_rows = int(np.ceil(np.sqrt(n_scatter_plots)))
+                scatter_cols = int(np.ceil(n_scatter_plots / scatter_rows))
+            else:
+                scatter_rows = 0
+                scatter_cols = 2
+
+            total_rows = waveform_rows + hist_rows + scatter_rows
+            max_cols = 2  # Fixed 2 columns for cleaner layout
+
+            # Fixed number of bins for all histograms
+            n_bins = 50
+
+            # ========================================
+            # Section 0: NEW WAVEFORM OVERLAYS (Top Row)
+            # ========================================
+            self._plot_waveform_overlays(total_rows, max_cols, labels, colors)
+
+            # ========================================
+            # Section 1: Feature Histograms (as line plots)
+            # ========================================
+            for feat_idx, feature_key in enumerate(feature_keys):
+                row = waveform_rows + (feat_idx // hist_cols)  # Offset by waveform_rows
+                col = feat_idx % hist_cols
+                ax = self.figure.add_subplot(total_rows, max_cols, row * max_cols + col + 1)
+
+                feature_data = feature_matrix[:, feat_idx]
+
+                # Calculate histogram bins (same for all overlays)
+                data_min = np.min(feature_data)
+                data_max = np.max(feature_data)
+                bins = np.linspace(data_min, data_max, n_bins)
+                bin_centers = (bins[:-1] + bins[1:]) / 2
+
+                # Plot overall distribution (thicker gray line)
+                counts_all, _ = np.histogram(feature_data, bins=bins)
+                ax.plot(bin_centers, counts_all, color='gray', linewidth=2.5,
+                       label='All Breaths', alpha=0.7)
+
+                # Overlay each cluster's distribution
+                for cluster_id in unique_labels:
+                    mask = labels == cluster_id
+                    cluster_data = feature_data[mask]
+                    counts_cluster, _ = np.histogram(cluster_data, bins=bins)
+
+                    # Label with pattern type if identified
+                    if cluster_id == self.sniffing_cluster_id:
+                        cluster_label = f'Cluster {cluster_id} (Sniffing)'
+                    else:
+                        cluster_label = f'Cluster {cluster_id}'
+
+                    ax.plot(bin_centers, counts_cluster, color=colors[cluster_id],
+                           linewidth=2, label=cluster_label, alpha=0.8)
+
+                ax.set_xlabel(feature_key, fontsize=11, fontweight='bold')
+                ax.set_ylabel('Count', fontsize=10)
+                ax.legend(loc='best', fontsize=8)
+                ax.grid(True, alpha=0.3)
+                ax.set_title(f'{feature_key} Distribution', fontsize=11, fontweight='bold')
+
+            # ========================================
+            # Section 2: 2D Scatter Plots
+            # ========================================
+            if n_scatter_plots > 0:
+                plot_idx = 0
+
+                for i in range(n_features):
+                    for j in range(i + 1, n_features):
+                        if plot_idx >= n_scatter_plots:
+                            break
+
+                        # Calculate position in grid (below histograms, offset by waveform_rows)
+                        row = waveform_rows + hist_rows + (plot_idx // scatter_cols)
+                        col = plot_idx % scatter_cols
+                        ax = self.figure.add_subplot(total_rows, max_cols, row * max_cols + col + 1)
+
+                        # Plot each cluster with different color
+                        for cluster_id in unique_labels:
+                            mask = labels == cluster_id
+
+                            # Label with pattern type if identified
+                            if cluster_id == self.sniffing_cluster_id:
+                                cluster_label = f"Cluster {cluster_id} (Sniffing)"
+                            else:
+                                cluster_label = f"Cluster {cluster_id}"
+
+                            ax.scatter(feature_matrix[mask, i], feature_matrix[mask, j],
+                                     c=[colors[cluster_id]], label=cluster_label,
+                                     alpha=0.6, s=30, edgecolors='black', linewidth=0.5)
+
+                        ax.set_xlabel(feature_keys[i], fontsize=10)
+                        ax.set_ylabel(feature_keys[j], fontsize=10)
+                        ax.legend(loc='best', fontsize=8)
+                        ax.grid(True, alpha=0.3)
+                        ax.set_title(f'{feature_keys[i]} vs {feature_keys[j]}', fontsize=10, fontweight='bold')
+
+                        plot_idx += 1
+
+                    if plot_idx >= n_scatter_plots:
+                        break
+
+            self.figure.tight_layout(pad=2.0)
+            self.canvas.draw()
+
+        def show_help(self):
+            """Display help dialog explaining GMM clustering."""
+            from PyQt6.QtWidgets import QMessageBox
+
+            help_text = """
+<b>Gaussian Mixture Model (GMM) Breath Clustering</b>
+
+<p><b>What is it?</b><br>
+GMM is an unsupervised machine learning technique that automatically identifies distinct breathing patterns by grouping breaths with similar characteristics.</p>
+
+<p><b>How it works:</b><br>
+1. <b>Select Features:</b> Choose which breath metrics to use for clustering (e.g., frequency, timing, amplitude)<br>
+2. <b>Set Number of Clusters:</b> Specify how many breathing patterns to identify (2-10)<br>
+3. <b>Run GMM:</b> The algorithm analyzes all breaths from analyzed sweeps and groups them into clusters<br>
+4. <b>View Results:</b> Examine cluster statistics and 2D scatter plots showing pattern separation</p>
+
+<p><b>Typical Breathing Patterns (4 clusters recommended):</b><br>
+• <b>Normal Breathing (Eupnea):</b> Regular frequency and amplitude<br>
+• <b>Apnea/Pauses:</b> Extended inter-breath intervals<br>
+• <b>Sighs:</b> Large amplitude, longer duration<br>
+• <b>Sniffing:</b> High frequency, short duration, small amplitude</p>
+
+<p><b>Tips:</b><br>
+• Start with default features (IF, Ti, Amp Insp) and 4 clusters<br>
+• Use at least 2-3 features for meaningful separation<br>
+• More analyzed sweeps = better clustering results<br>
+• Experiment with different feature combinations to find optimal separation</p>
+
+<p><b>Recommended Settings:</b><br>
+• <b>For basic pattern detection:</b> IF, Ti, Amp Insp (3 features, 4 clusters)<br>
+• <b>For detailed analysis:</b> All 7 features, 5-6 clusters<br>
+• <b>For sigh detection:</b> Include Amp Insp, Area Insp (high amplitude patterns)</p>
+            """
+
+            msg = QMessageBox(self)
+            msg.setWindowTitle("GMM Clustering Help")
+            msg.setTextFormat(Qt.TextFormat.RichText)
+            msg.setText(help_text)
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
+
+        def _auto_apply_gmm_results(self):
+            """Automatically apply GMM clustering results to main plot (called after successful GMM run)."""
+            import numpy as np
+
+            if self.sniffing_cluster_id is None:
+                print("[gmm-dialog] Cannot auto-apply: no sniffing cluster identified")
+                return
+
+            # Update eupnea detection mode and parameters based on user selection
+            selected_mode = "gmm" if self.gmm_mode_radio.isChecked() else "frequency"
+            self.main_window.eupnea_detection_mode = selected_mode
+
+            # Save frequency-based parameters (used when mode is "frequency")
+            if not hasattr(self.main_window, 'eupnea_freq_threshold'):
+                self.main_window.eupnea_freq_threshold = 5.0
+            self.main_window.eupnea_freq_threshold = self.freq_threshold_spin.value()
+            self.main_window.eupnea_min_duration = self.min_duration_spin.value()
+
+            print(f"[gmm-dialog] Auto-applied eupnea detection mode: {selected_mode}")
+            print(f"[gmm-dialog] Frequency threshold: {self.main_window.eupnea_freq_threshold} Hz, Min duration: {self.main_window.eupnea_min_duration} s")
+
+            # Store GMM probabilities for each breath (needed for GMM-based eupnea detection)
+            # Format: {sweep_idx: {breath_idx: sniffing_probability}}
+            if not hasattr(self.main_window.state, 'gmm_sniff_probabilities'):
+                self.main_window.state.gmm_sniff_probabilities = {}
+
+            for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
+                if sweep_idx not in self.main_window.state.gmm_sniff_probabilities:
+                    self.main_window.state.gmm_sniff_probabilities[sweep_idx] = {}
+
+                # Get probability of being in sniffing cluster
+                sniff_prob = self.cluster_probabilities[i, self.sniffing_cluster_id]
+                self.main_window.state.gmm_sniff_probabilities[sweep_idx][breath_idx] = sniff_prob
+
+            # Collect all sniffing breaths
+            sniffing_regions_by_sweep = {}  # sweep_idx -> list of (start_time, end_time)
+
+            for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
+                cluster_id = self.cluster_labels[i]
+
+                if cluster_id == self.sniffing_cluster_id:
+                    # This breath is sniffing - get its time range
+                    breath_data = self.main_window.state.breath_by_sweep.get(sweep_idx)
+                    if breath_data is None:
+                        continue
+
+                    onsets = breath_data.get('onsets', np.array([]))
+                    offsets = breath_data.get('offsets', np.array([]))
+
+                    if breath_idx >= len(onsets):
+                        continue
+
+                    # Get time range for this breath
+                    t = self.main_window.state.t
+                    start_time = t[int(onsets[breath_idx])]
+
+                    # Offset for this breath (use expiratory offset if available)
+                    if breath_idx < len(offsets):
+                        end_idx = int(offsets[breath_idx])
+                    else:
+                        # Fallback: use next onset or end of trace
+                        if breath_idx + 1 < len(onsets):
+                            end_idx = int(onsets[breath_idx + 1])
+                        else:
+                            end_idx = len(t) - 1
+
+                    end_time = t[end_idx]
+
+                    # Add to sniffing regions for this sweep
+                    if sweep_idx not in sniffing_regions_by_sweep:
+                        sniffing_regions_by_sweep[sweep_idx] = []
+                    sniffing_regions_by_sweep[sweep_idx].append((start_time, end_time))
+
+            # Apply sniffing regions to main window state
+            total_regions = 0
+            for sweep_idx, regions in sniffing_regions_by_sweep.items():
+                if sweep_idx not in self.main_window.state.sniff_regions_by_sweep:
+                    self.main_window.state.sniff_regions_by_sweep[sweep_idx] = []
+
+                # Add all regions
+                self.main_window.state.sniff_regions_by_sweep[sweep_idx].extend(regions)
+
+                # Merge overlapping/adjacent regions
+                self.main_window._merge_sniff_regions(sweep_idx)
+
+                total_regions += len(self.main_window.state.sniff_regions_by_sweep[sweep_idx])
+
+            # Redraw main plot to show sniffing regions AND eupnea (based on selected mode)
+            self.main_window.redraw_main_plot()
+
+            # Log results
+            n_sniffing_breaths = np.sum(self.cluster_labels == self.sniffing_cluster_id)
+            mode_msg = "GMM-based" if selected_mode == "gmm" else "Frequency-based"
+            print(f"[gmm-dialog] Auto-applied {n_sniffing_breaths} sniffing breaths across {len(sniffing_regions_by_sweep)} sweep(s)")
+            print(f"[gmm-dialog] Created {total_regions} merged sniffing regions")
+            print(f"[gmm-dialog] Eupnea detection mode: {mode_msg}")
+
+        def on_apply_to_plot(self):
+            """Apply GMM clustering results to main plot by marking sniffing breaths."""
+            from PyQt6.QtWidgets import QMessageBox
+            import numpy as np
+
+            if self.sniffing_cluster_id is None:
+                QMessageBox.warning(
+                    self,
+                    "No Sniffing Cluster",
+                    "Cannot identify sniffing cluster. Make sure you include 'if' or 'ti' features."
+                )
+                return
+
+            # Warn again if clustering quality was poor
+            if self.had_quality_warning:
+                reply = QMessageBox.question(
+                    self,
+                    "Apply Despite Quality Warning?",
+                    "The clustering quality was flagged as questionable.\n\n"
+                    "The identified 'sniffing' breaths may just be normal variation,\n"
+                    "not true sniffing behavior.\n\n"
+                    "Are you sure you want to apply these results to the plot?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    return
+
+            # Update eupnea detection mode and parameters based on user selection
+            selected_mode = "gmm" if self.gmm_mode_radio.isChecked() else "frequency"
+            self.main_window.eupnea_detection_mode = selected_mode
+
+            # Save frequency-based parameters (used when mode is "frequency")
+            if not hasattr(self.main_window, 'eupnea_freq_threshold'):
+                self.main_window.eupnea_freq_threshold = 5.0
+            self.main_window.eupnea_freq_threshold = self.freq_threshold_spin.value()
+            self.main_window.eupnea_min_duration = self.min_duration_spin.value()
+
+            print(f"[gmm-clustering] Updated eupnea detection mode to: {selected_mode}")
+            print(f"[gmm-clustering] Frequency threshold: {self.main_window.eupnea_freq_threshold} Hz, Min duration: {self.main_window.eupnea_min_duration} s")
+
+            # Store GMM probabilities for each breath (needed for GMM-based eupnea detection)
+            # Format: {sweep_idx: {breath_idx: sniffing_probability}}
+            if not hasattr(self.main_window.state, 'gmm_sniff_probabilities'):
+                self.main_window.state.gmm_sniff_probabilities = {}
+
+            for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
+                if sweep_idx not in self.main_window.state.gmm_sniff_probabilities:
+                    self.main_window.state.gmm_sniff_probabilities[sweep_idx] = {}
+
+                # Get probability of being in sniffing cluster
+                sniff_prob = self.cluster_probabilities[i, self.sniffing_cluster_id]
+                self.main_window.state.gmm_sniff_probabilities[sweep_idx][breath_idx] = sniff_prob
+
+            # Collect all sniffing breaths
+            sniffing_regions_by_sweep = {}  # sweep_idx -> list of (start_time, end_time)
+
+            for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
+                cluster_id = self.cluster_labels[i]
+
+                if cluster_id == self.sniffing_cluster_id:
+                    # This breath is sniffing - get its time range
+                    breath_data = self.main_window.state.breath_by_sweep.get(sweep_idx)
+                    if breath_data is None:
+                        continue
+
+                    onsets = breath_data.get('onsets', np.array([]))
+                    offsets = breath_data.get('offsets', np.array([]))
+
+                    if breath_idx >= len(onsets):
+                        continue
+
+                    # Get time range for this breath
+                    t = self.main_window.state.t
+                    start_time = t[int(onsets[breath_idx])]
+
+                    # Offset for this breath (use expiratory offset if available)
+                    if breath_idx < len(offsets):
+                        end_idx = int(offsets[breath_idx])
+                    else:
+                        # Fallback: use next onset or end of trace
+                        if breath_idx + 1 < len(onsets):
+                            end_idx = int(onsets[breath_idx + 1])
+                        else:
+                            end_idx = len(t) - 1
+
+                    end_time = t[end_idx]
+
+                    # Add to sniffing regions for this sweep
+                    if sweep_idx not in sniffing_regions_by_sweep:
+                        sniffing_regions_by_sweep[sweep_idx] = []
+                    sniffing_regions_by_sweep[sweep_idx].append((start_time, end_time))
+
+            # Apply sniffing regions to main window state
+            total_regions = 0
+            for sweep_idx, regions in sniffing_regions_by_sweep.items():
+                if sweep_idx not in self.main_window.state.sniff_regions_by_sweep:
+                    self.main_window.state.sniff_regions_by_sweep[sweep_idx] = []
+
+                # Add all regions
+                self.main_window.state.sniff_regions_by_sweep[sweep_idx].extend(regions)
+
+                # Merge overlapping/adjacent regions
+                self.main_window._merge_sniff_regions(sweep_idx)
+
+                total_regions += len(self.main_window.state.sniff_regions_by_sweep[sweep_idx])
+
+            # Redraw main plot to show sniffing regions AND eupnea (based on selected mode)
+            self.main_window.redraw_main_plot()
+
+            # Show success message
+            n_sniffing_breaths = np.sum(self.cluster_labels == self.sniffing_cluster_id)
+            mode_msg = "GMM-based" if selected_mode == "gmm" else "Frequency-based"
+            QMessageBox.information(
+                self,
+                "Applied to Plot",
+                f"Marked {n_sniffing_breaths} sniffing breaths across {len(sniffing_regions_by_sweep)} sweep(s).\n\n"
+                f"After merging adjacent regions: {total_regions} total sniffing region(s).\n\n"
+                f"Purple background regions are now visible on the main plot.\n\n"
+                f"Eupnea detection mode: {mode_msg}"
+            )
+
+            print(f"[gmm-clustering] Applied {n_sniffing_breaths} sniffing breaths to main plot")
+            print(f"[gmm-clustering] Created {total_regions} merged sniffing regions across {len(sniffing_regions_by_sweep)} sweeps")
 
 
     class SaveMetaDialog(QDialog):
@@ -6005,6 +8071,28 @@ class MainWindow(QMainWindow):
             self._save_base = suggested
             self._save_meta = vals
 
+            # Check for duplicate files before saving
+            existing_files = []
+            expected_suffixes = ["_bundle.npz", "_means_by_time.csv", "_breaths.csv", "_events.csv", "_summary.pdf"]
+            for suffix in expected_suffixes:
+                filepath = final_dir / (suggested + suffix)
+                if filepath.exists():
+                    existing_files.append(filepath.name)
+
+            if existing_files:
+                # Show warning dialog
+                file_list = "\n  • ".join(existing_files)
+                reply = QMessageBox.question(
+                    self,
+                    "Overwrite Existing Files?",
+                    f"The following files already exist in:\n{final_dir}\n\n  • {file_list}\n\n"
+                    f"Do you want to overwrite them?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No  # Default to No for safety
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    return  # User chose not to overwrite
+
             base_path = self._save_dir / self._save_base
             print(f"[save] base path set: {base_path}")
             try:
@@ -6246,7 +8334,7 @@ class MainWindow(QMainWindow):
             eupnea_baseline_by_key = {}
 
             # Get thresholds from UI
-            eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+            eupnea_thresh = self.eupnea_freq_threshold  # Hz
             apnea_thresh = self._parse_float(self.ApneaThresh) or 0.5    # seconds
 
             # Pre-compute eupnea masks once per sweep
@@ -6466,7 +8554,7 @@ class MainWindow(QMainWindow):
             eupnea_masks_by_sweep = {}
 
             # Get thresholds from UI (for breath classification)
-            eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+            eupnea_thresh = self.eupnea_freq_threshold  # Hz
             apnea_thresh = self._parse_float(self.ApneaThresh) or 0.5    # seconds
 
             t_start = time.time()
@@ -6873,7 +8961,7 @@ class MainWindow(QMainWindow):
             events_rows = []
 
             # Get thresholds from UI
-            eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+            eupnea_thresh = self.eupnea_freq_threshold  # Hz
             apnea_thresh = self._parse_float(self.ApneaThresh) or 0.5    # seconds
 
             for s in kept_sweeps:
@@ -8012,7 +10100,7 @@ class MainWindow(QMainWindow):
         # Prepare EUPNEA-BASED normalized datasets
         y2_ds_by_key_norm_eupnea = {}
         eupnea_baselines_by_key = {}  # Store computed baselines for histogram building
-        eupnea_thresh = self._parse_float(self.EupneaThresh) or 5.0  # Hz
+        eupnea_thresh = self.eupnea_freq_threshold  # Hz
 
         # OPTIMIZATION: Compute eupnea masks once per sweep, reuse for all metrics
         eupnea_masks_by_sweep = {}

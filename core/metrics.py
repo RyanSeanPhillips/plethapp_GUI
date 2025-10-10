@@ -1,7 +1,7 @@
 # core/metrics.py
 from __future__ import annotations
 import numpy as np
-from typing import Dict, List, Tuple, Callable
+from typing import Dict, List, Tuple, Callable, Optional
 
 """
 Scaffold for y2 metrics derived from breath features.
@@ -18,6 +18,21 @@ Inputs:
   - expmins:  expiratory minima indices (np.int)
 """
 
+# Module-level storage for GMM probabilities (set by main window before computing metrics)
+_current_gmm_probabilities: Optional[Dict[int, float]] = None
+
+
+def set_gmm_probabilities(probs: Optional[Dict[int, float]]):
+    """
+    Set GMM probabilities for the current sweep.
+
+    Args:
+        probs: Dict mapping breath_idx -> sniffing probability (0.0 to 1.0)
+               None to clear probabilities
+    """
+    global _current_gmm_probabilities
+    _current_gmm_probabilities = probs
+
 # (human label, key)
 METRIC_SPECS: List[Tuple[str, str]] = [
     ("Instantaneous frequency (Hz)",          "if"),
@@ -30,9 +45,13 @@ METRIC_SPECS: List[Tuple[str, str]] = [
     ("Vent proxy (insp area / cycle dur)",    "vent_proxy"),
     ("d/dt (1st derivative)",                 "d1"),
     ("d²/dt² (2nd derivative)",               "d2"),
+    ("Max inspiratory d/dt (peak insp rate)", "max_dinsp"),
+    ("Max expiratory d/dt (peak exp rate)",   "max_dexp"),
     ("Eupnic breathing regions",              "eupnic"),
     ("Apnea detection",                       "apnea"),
     ("Breathing regularity score (RMSSD)",    "regularity"),
+    ("Sniffing confidence (GMM)",             "sniff_conf"),
+    ("Eupnea confidence (GMM)",               "eupnea_conf"),
 ]
 
 
@@ -755,6 +774,134 @@ def compute_d2(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np
 
 
 ################################################################################
+##### Maximum Inspiratory Derivative (Peak Inhalation Rate)
+################################################################################
+def compute_max_dinsp(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np.ndarray:
+    """
+    Maximum positive derivative during inspiration (peak inhalation rate).
+
+    For each breath cycle, finds the maximum value of dy/dt during the
+    inspiratory phase (onset → offset).
+
+    Returns:
+        Stepwise-constant array where each breath span has its maximum
+        positive derivative value.
+    """
+    N = len(y)
+    out = np.full(N, np.nan, dtype=float)
+
+    if onsets is None or len(onsets) < 1 or offsets is None or len(offsets) < 1:
+        return out
+
+    # Compute first derivative
+    dy_dt = compute_d1(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs)
+
+    on = np.asarray(onsets, dtype=int)
+    off = np.asarray(offsets, dtype=int)
+    spans = _spans_from_bounds(on, N)
+
+    vals: list[float] = []
+    for i in range(len(on) - 1):
+        i0 = int(on[i])      # onset
+        i1 = int(on[i + 1])  # next onset
+
+        # Need a valid offset for this cycle
+        if i >= len(off):
+            vals.append(np.nan)
+            continue
+        oi = int(off[i])  # offset (end of inspiration)
+
+        # Offset must lie within cycle
+        if not (i0 < oi <= i1):
+            vals.append(np.nan)
+            continue
+
+        # Find maximum derivative during inspiration [i0, oi]
+        insp_segment = dy_dt[i0:oi+1]
+        valid_values = insp_segment[~np.isnan(insp_segment)]
+
+        if len(valid_values) == 0:
+            vals.append(np.nan)
+        else:
+            vals.append(float(np.max(valid_values)))
+
+    # Extend last span with last value
+    vals.append(vals[-1] if len(vals) else np.nan)
+    return _step_fill(N, spans, vals)
+
+
+################################################################################
+##### Maximum Expiratory Derivative (Peak Exhalation Rate)
+################################################################################
+def compute_max_dexp(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np.ndarray:
+    """
+    Maximum negative derivative during expiration (peak exhalation rate).
+
+    For each breath cycle, finds the minimum value of dy/dt during the
+    expiratory phase (offset → expiratory offset or next onset).
+    Returns as absolute value for easier interpretation.
+
+    Returns:
+        Stepwise-constant array where each breath span has its maximum
+        negative derivative value (as absolute value).
+    """
+    N = len(y)
+    out = np.full(N, np.nan, dtype=float)
+
+    if onsets is None or len(onsets) < 2 or offsets is None or len(offsets) < 1:
+        return out
+
+    # Compute first derivative
+    dy_dt = compute_d1(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs)
+
+    on = np.asarray(onsets, dtype=int)
+    off = np.asarray(offsets, dtype=int)
+    exo = np.asarray(expoffs, dtype=int) if (expoffs is not None and len(expoffs)) else np.array([], dtype=int)
+    spans = _spans_from_bounds(on, N)
+
+    vals: list[float] = []
+    for i in range(len(on) - 1):
+        i0 = int(on[i])      # onset
+        i1 = int(on[i + 1])  # next onset
+
+        # Need a valid inspiratory offset for this cycle
+        if i >= len(off):
+            vals.append(np.nan)
+            continue
+        oi = int(off[i])  # offset (start of expiration)
+
+        # Offset must lie within cycle
+        if not (i0 <= oi < i1):
+            vals.append(np.nan)
+            continue
+
+        # Determine end of expiration
+        # Prefer expiratory offset if available, otherwise use next onset
+        if exo.size > 0 and i < len(exo):
+            ei = int(exo[i])
+            # Validate expiratory offset
+            if not (oi < ei <= i1):
+                ei = i1  # Fallback to next onset
+        else:
+            ei = i1  # Use next onset
+
+        # Find minimum (most negative) derivative during expiration [oi, ei]
+        exp_segment = dy_dt[oi:ei+1]
+        valid_values = exp_segment[~np.isnan(exp_segment)]
+
+        if len(valid_values) == 0:
+            vals.append(np.nan)
+        else:
+            min_derivative = float(np.min(valid_values))
+            # Return as absolute value for easier interpretation
+            vals.append(abs(min_derivative))
+
+    # Extend last span with last value
+    vals.append(vals[-1] if len(vals) else np.nan)
+    return _step_fill(N, spans, vals)
+
+
+################################################################################
 ##### Eupnic Breathing Detection
 ################################################################################
 
@@ -1056,6 +1203,77 @@ def compute_regularity_score(
 
 
 # Debug wrappers for diagnostic output
+def compute_sniff_confidence(
+    t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None
+) -> np.ndarray:
+    """
+    Return GMM-computed sniffing probability for each breath cycle.
+
+    Uses probabilities from automatic GMM clustering (if available).
+    Returns NaN if GMM has not been run or no probabilities available.
+
+    Returns:
+        Stepwise-constant array where each breath span has its sniffing probability (0.0 to 1.0)
+    """
+    N = len(y)
+
+    # If no GMM probabilities available, return NaN
+    if _current_gmm_probabilities is None or len(_current_gmm_probabilities) == 0:
+        return np.full(N, np.nan, dtype=float)
+
+    # Get breath spans from onsets
+    if onsets is None or len(onsets) == 0:
+        return np.full(N, np.nan, dtype=float)
+
+    spans = _breath_spans_from_onsets(onsets, N)
+
+    # Extract probabilities for each breath
+    probs = []
+    for breath_idx in range(len(onsets)):
+        if breath_idx in _current_gmm_probabilities:
+            probs.append(_current_gmm_probabilities[breath_idx])
+        else:
+            probs.append(np.nan)  # No GMM data for this breath
+
+    return _step_fill(N, spans, probs)
+
+
+def compute_eupnea_confidence(
+    t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None
+) -> np.ndarray:
+    """
+    Return GMM-computed eupnea probability for each breath cycle.
+
+    This is simply (1 - sniffing_probability) for 2-cluster GMM.
+    Returns NaN if GMM has not been run or no probabilities available.
+
+    Returns:
+        Stepwise-constant array where each breath span has its eupnea probability (0.0 to 1.0)
+    """
+    N = len(y)
+
+    # If no GMM probabilities available, return NaN
+    if _current_gmm_probabilities is None or len(_current_gmm_probabilities) == 0:
+        return np.full(N, np.nan, dtype=float)
+
+    # Get breath spans from onsets
+    if onsets is None or len(onsets) == 0:
+        return np.full(N, np.nan, dtype=float)
+
+    spans = _breath_spans_from_onsets(onsets, N)
+
+    # Extract eupnea probabilities (1 - sniffing probability)
+    probs = []
+    for breath_idx in range(len(onsets)):
+        if breath_idx in _current_gmm_probabilities:
+            sniff_prob = _current_gmm_probabilities[breath_idx]
+            probs.append(1.0 - sniff_prob)
+        else:
+            probs.append(np.nan)  # No GMM data for this breath
+
+    return _step_fill(N, spans, probs)
+
+
 def compute_te_debug(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None):
     """Wrapper to enable debug output for Te calculation."""
     print("\n=== DEBUG: Te Calculation ===")
@@ -1075,19 +1293,23 @@ ENABLE_DEBUG_OUTPUT = True
 
 # Registry: key -> function
 METRICS: Dict[str, Callable] = {
-    "if":         compute_if,
-    "amp_insp":   compute_amp_insp,
-    "amp_exp":    compute_amp_exp,
-    "area_insp":  compute_area_insp,
-    "area_exp":   compute_area_exp_debug if ENABLE_DEBUG_OUTPUT else compute_area_exp,
-    "ti":         compute_ti,
-    "te":         compute_te_debug if ENABLE_DEBUG_OUTPUT else compute_te,
-    "vent_proxy": compute_vent_proxy,
-    "d1":         compute_d1,
-    "d2":         compute_d2,
-    "eupnic":     detect_eupnic_regions,
-    "apnea":      detect_apneas,
-    "regularity": compute_regularity_score,
+    "if":          compute_if,
+    "amp_insp":    compute_amp_insp,
+    "amp_exp":     compute_amp_exp,
+    "area_insp":   compute_area_insp,
+    "area_exp":    compute_area_exp_debug if ENABLE_DEBUG_OUTPUT else compute_area_exp,
+    "ti":          compute_ti,
+    "te":          compute_te_debug if ENABLE_DEBUG_OUTPUT else compute_te,
+    "vent_proxy":  compute_vent_proxy,
+    "d1":          compute_d1,
+    "d2":          compute_d2,
+    "max_dinsp":   compute_max_dinsp,
+    "max_dexp":    compute_max_dexp,
+    "eupnic":      detect_eupnic_regions,
+    "apnea":       detect_apneas,
+    "regularity":  compute_regularity_score,
+    "sniff_conf":  compute_sniff_confidence,
+    "eupnea_conf": compute_eupnea_confidence,
 }
 
 # Optional: Enable robust metrics mode

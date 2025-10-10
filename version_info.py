@@ -4,8 +4,8 @@ This file contains metadata that will be embedded in the .exe file
 """
 
 # Version information
-VERSION = (1, 0, 5, 0)
-VERSION_STRING = "1.0.5"
+VERSION = (1, 0, 6, 0)
+VERSION_STRING = "1.0.6"
 
 # Windows version info structure
 version_info = f"""

@@ -14,7 +14,9 @@ from typing import Dict, List, Tuple, Optional
 
 def detect_metric_outliers(metric_array: np.ndarray,
                           onsets: np.ndarray,
-                          n_std: float = 3.0) -> np.ndarray:
+                          n_std: float = 3.0,
+                          global_mean: Optional[float] = None,
+                          global_std: Optional[float] = None) -> np.ndarray:
     """
     Detect outliers in a metric array using statistical threshold (mean ± n_std).
 
@@ -22,6 +24,8 @@ def detect_metric_outliers(metric_array: np.ndarray,
         metric_array: Stepwise metric values (same length as signal)
         onsets: Breath onset indices to define cycle boundaries
         n_std: Number of standard deviations for outlier threshold
+        global_mean: Pre-computed mean across all sweeps (if None, compute from this sweep only)
+        global_std: Pre-computed std across all sweeps (if None, compute from this sweep only)
 
     Returns:
         Boolean mask (same length as metric_array) marking outlier regions
@@ -52,10 +56,15 @@ def detect_metric_outliers(metric_array: np.ndarray,
     if len(cycle_values) < 3:
         return outlier_mask
 
-    # Compute statistics on cycle values
-    cycle_values = np.array(cycle_values)
-    mean_val = np.mean(cycle_values)
-    std_val = np.std(cycle_values)
+    # Use global statistics if provided, otherwise compute from current sweep
+    if global_mean is not None and global_std is not None:
+        mean_val = global_mean
+        std_val = global_std
+    else:
+        # Compute statistics on cycle values (per-sweep mode)
+        cycle_values_arr = np.array(cycle_values)
+        mean_val = np.mean(cycle_values_arr)
+        std_val = np.std(cycle_values_arr)
 
     if std_val == 0:
         return outlier_mask
@@ -115,7 +124,8 @@ def identify_problematic_breaths(t: np.ndarray,
                                  expoffs: np.ndarray,
                                  metrics_dict: Dict[str, np.ndarray],
                                  outlier_threshold: float = 3.0,
-                                 outlier_metrics: list = None) -> Tuple[np.ndarray, np.ndarray]:
+                                 outlier_metrics: list = None,
+                                 global_stats: Optional[Dict[str, Tuple[float, float]]] = None) -> Tuple[np.ndarray, np.ndarray]:
     """
     Identify problematic breath cycles using outlier detection and failure detection.
 
@@ -125,6 +135,8 @@ def identify_problematic_breaths(t: np.ndarray,
         metrics_dict: Dictionary of computed metrics (from metrics.METRICS)
         outlier_threshold: Number of standard deviations for outlier detection
         outlier_metrics: List of metric keys to check (default: all numeric metrics)
+        global_stats: Dict[metric_key, (mean, std)] - Pre-computed global statistics across all sweeps
+                     If None, compute statistics from current sweep only (per-sweep mode)
 
     Returns:
         Tuple of (outlier_mask, failure_mask):
@@ -142,7 +154,8 @@ def identify_problematic_breaths(t: np.ndarray,
     if outlier_metrics is None:
         outlier_metrics = ["if", "amp_insp", "amp_exp", "ti", "te", "area_insp", "area_exp"]
 
-    print(f"\n=== Breath Outlier Detection ===")
+    mode = "cross-sweep" if global_stats is not None else "per-sweep"
+    print(f"\n=== Breath Outlier Detection ({mode}) ===")
     print(f"Analyzing {len(onsets)} breath cycles")
 
     # Check each metric for outliers and failures
@@ -152,8 +165,17 @@ def identify_problematic_breaths(t: np.ndarray,
 
         metric_array = metrics_dict[metric_key]
 
+        # Get global statistics for this metric (if available)
+        global_mean = None
+        global_std = None
+        if global_stats and metric_key in global_stats:
+            global_mean, global_std = global_stats[metric_key]
+
         # Detect outliers (orange)
-        metric_outlier_mask = detect_metric_outliers(metric_array, onsets, n_std=outlier_threshold)
+        metric_outlier_mask = detect_metric_outliers(
+            metric_array, onsets, n_std=outlier_threshold,
+            global_mean=global_mean, global_std=global_std
+        )
         outlier_count = np.sum(metric_outlier_mask)
 
         # Detect calculation failures (red)
@@ -202,3 +224,59 @@ def get_problematic_cycle_details(onsets: np.ndarray,
         })
 
     return cycle_details
+
+
+def compute_global_metric_statistics(all_metrics_by_sweep: Dict[int, Dict[str, np.ndarray]],
+                                     all_onsets_by_sweep: Dict[int, np.ndarray],
+                                     outlier_metrics: List[str]) -> Dict[str, Tuple[float, float]]:
+    """
+    Compute global statistics (mean, std) for each metric across ALL sweeps.
+
+    Args:
+        all_metrics_by_sweep: Dict[sweep_idx, Dict[metric_key, metric_array]]
+        all_onsets_by_sweep: Dict[sweep_idx, onsets_array]
+        outlier_metrics: List of metric keys to compute statistics for
+
+    Returns:
+        Dict[metric_key, (mean, std)] - Global statistics for each metric
+    """
+    global_stats = {}
+
+    for metric_key in outlier_metrics:
+        # Collect all cycle values for this metric across all sweeps
+        all_cycle_values = []
+
+        for sweep_idx in all_metrics_by_sweep:
+            if sweep_idx not in all_onsets_by_sweep:
+                continue
+
+            metrics_dict = all_metrics_by_sweep[sweep_idx]
+            onsets = all_onsets_by_sweep[sweep_idx]
+
+            if metric_key not in metrics_dict:
+                continue
+
+            metric_array = metrics_dict[metric_key]
+            N = len(metric_array)
+
+            # Extract per-cycle values for this sweep
+            for i in range(len(onsets)):
+                start = int(onsets[i])
+                end = int(onsets[i + 1]) if i + 1 < len(onsets) else N
+
+                cycle_segment = metric_array[start:end]
+                valid_vals = cycle_segment[~np.isnan(cycle_segment)]
+
+                if len(valid_vals) > 0:
+                    cycle_value = valid_vals[0]
+                    all_cycle_values.append(cycle_value)
+
+        # Compute global statistics from all collected cycle values
+        if len(all_cycle_values) >= 3:
+            all_cycle_values = np.array(all_cycle_values)
+            mean_val = np.mean(all_cycle_values)
+            std_val = np.std(all_cycle_values)
+            global_stats[metric_key] = (mean_val, std_val)
+            print(f"[global-stats] {metric_key}: mean={mean_val:.3f}, std={std_val:.3f} ({len(all_cycle_values)} cycles)")
+
+    return global_stats
