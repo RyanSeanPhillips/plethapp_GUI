@@ -33,7 +33,7 @@ def is_important_comment(line):
     return False
 
 
-def clean_commented_blocks(file_path, min_block_size=5, dry_run=False):
+def clean_commented_blocks(file_path, min_block_size=2, dry_run=False):
     """Remove blocks of consecutive commented lines that look like old code."""
 
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -133,7 +133,7 @@ def main():
     print("-" * 60)
     for file_path in files_to_clean:
         if file_path.exists():
-            clean_commented_blocks(file_path, min_block_size=5, dry_run=True)
+            clean_commented_blocks(file_path, min_block_size=2, dry_run=True)
         else:
             print(f"\n{file_path}: File not found")
 

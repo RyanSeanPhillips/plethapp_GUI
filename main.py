@@ -31,6 +31,7 @@ from core import stim as stimdet   # stim detection
 from core import peaks as peakdet   # peak detection
 from core import metrics  # calculation of breath metrics
 from core.navigation_manager import NavigationManager
+from plotting import PlotManager
 
 
 # Import editing modes
@@ -154,6 +155,8 @@ class MainWindow(QMainWindow):
         self.navigation_manager = NavigationManager(self)
         self.WindowRangeValue.setText("20")  # Default window length
 
+        # --- Initialize Plot Manager (BEFORE signal connections that may trigger plotting) ---
+        self.plot_manager = PlotManager(self)
 
         # --- Peak-detect UI wiring ---
         self.ApplyPeakFindPushButton.setEnabled(False)  # stays disabled until threshold typed
@@ -731,45 +734,8 @@ class MainWindow(QMainWindow):
         return global_mean, global_std
 
     def plot_all_channels(self):
-        """Plot the current sweep for every channel, one panel per channel."""
-        st = self.state
-        if not st.channel_names or st.t is None:
-            return
-        s = max(0, min(st.sweep_idx, next(iter(st.sweeps.values())).shape[1] - 1))
-
-        traces = []
-        for ch_name in st.channel_names:
-            Y = st.sweeps[ch_name]           # (n_samples, n_sweeps)
-            y = Y[:, s]                      # current sweep (1D)
-            # No filtering in preview - show raw data to avoid distorting stimulus channels
-            traces.append((st.t, y, ch_name))
-
-        # Build title with sweep and file info
-        title_parts = ["All channels"]
-        title_parts.append(f"sweep {s+1}")
-
-        # Add file info if multiple files loaded
-        if len(st.file_info) > 1:
-            # Find which file this sweep belongs to
-            for i, info in enumerate(st.file_info):
-                if info['sweep_start'] <= s <= info['sweep_end']:
-                    file_num = i + 1
-                    total_files = len(st.file_info)
-                    title_parts.append(f"file {file_num}/{total_files} ({info['path'].name})")
-                    break
-
-        title = " | ".join(title_parts)
-
-        # Adaptive downsampling: only for very long traces
-        # No downsampling for recordings < 100k samples (~100 seconds at 1kHz)
-        # Use 50k points for longer recordings to maintain good visual quality
-        max_pts = None if len(st.t) < 100000 else 50000
-
-        self.plot_host.show_multi_grid(
-            traces,
-            title=title,
-            max_points_per_trace=max_pts
-        )
+        """Delegate to PlotManager."""
+        self.plot_manager.plot_all_channels()
 
     def on_analyze_channel_changed(self, idx: int):
         """Apply analyze channel selection immediately."""
@@ -1015,265 +981,8 @@ class MainWindow(QMainWindow):
         return st.t, y2
 
     def redraw_main_plot(self):
-        st = self.state
-        if st.t is None:
-            return
-
-        if self.single_panel_mode:
-            t, y = self._current_trace()
-            if t is None:
-                return
-            s = max(0, min(st.sweep_idx, next(iter(st.sweeps.values())).shape[1] - 1))
-            spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
-
-            # Normalize time to first stim onset if available
-            if st.stim_chan and spans:
-                t0 = spans[0][0]
-                t_plot = t - t0
-                spans_plot = [(a - t0, b - t0) for (a, b) in spans]
-            else:
-                t0 = 0.0
-                t_plot = t
-                spans_plot = spans
-
-            # Build title with file info for multi-file loading
-            title_parts = [st.analyze_chan or '']
-
-            # Add sweep number
-            title_parts.append(f"sweep {s+1}")
-
-            # Add file info if multiple files loaded
-            if len(st.file_info) > 1:
-                # Find which file this sweep belongs to
-                for i, info in enumerate(st.file_info):
-                    if info['sweep_start'] <= s <= info['sweep_end']:
-                        file_num = i + 1
-                        total_files = len(st.file_info)
-                        title_parts.append(f"file {file_num}/{total_files} ({info['path'].name})")
-                        break
-
-            title = " | ".join(title_parts)
-
-            # base trace
-            self.plot_host.show_trace_with_spans(
-                t_plot, y, spans_plot,
-                title=title,
-                max_points=None,
-                ylabel=st.analyze_chan or "Signal"
-            )
-
-            # Clear any existing region overlays (will be recomputed if needed)
-            self.plot_host.clear_region_overlays()
-
-            # Overlay peaks for the current sweep (if computed)
-            pks = getattr(st, "peaks_by_sweep", {}).get(s, None)
-            if pks is not None and len(pks):
-                t_peaks = t_plot[pks]
-                y_peaks = y[pks]
-                self.plot_host.update_peaks(t_peaks, y_peaks, size=24)
-            else:
-                self.plot_host.clear_peaks()
-
-            # ---- Sigh markers (stars) tied to PEAK indices ----
-            sigh_idx = getattr(st, "sigh_by_sweep", {}).get(s, None)
-            if sigh_idx is not None and len(sigh_idx):
-                import numpy as np
-                t_sigh = t_plot[sigh_idx]
-
-                # add a small vertical offset (default 3% of current y-span)
-                offset_frac = float(getattr(self, "_sigh_offset_frac", 0.07))
-                try:
-                    y_span = float(np.nanmax(y) - np.nanmin(y))
-                    y_off  = offset_frac * (y_span if np.isfinite(y_span) and y_span > 0 else 1.0)
-                except Exception:
-                    y_off = offset_frac
-                y_sigh = y[sigh_idx] + y_off
-
-                # filled orange star, a hair bigger so it pops
-                self.plot_host.update_sighs(
-                    t_sigh, y_sigh,
-                    size=110,
-                    color="#ff9f1a",   # warm orange fill
-                    edge="#a35400",    # slightly darker edge
-                    filled=True
-                )
-            else:
-                self.plot_host.clear_sighs()
-
-
-
-            # Overlay breath markers (if computed)
-            br = getattr(st, "breath_by_sweep", {}).get(s, None)
-            if br:
-                on_idx  = br.get("onsets",  [])
-                off_idx = br.get("offsets", [])
-                ex_idx  = br.get("expmins", [])
-                exoff_idx= br.get("expoffs", [])
-
-                t_on  = t_plot[on_idx]  if len(on_idx)  else None
-                y_on  = y[on_idx]       if len(on_idx)  else None
-                t_off = t_plot[off_idx] if len(off_idx) else None
-                y_off = y[off_idx]      if len(off_idx) else None
-                t_exp = t_plot[ex_idx]  if len(ex_idx)  else None
-                y_exp = y[ex_idx]       if len(ex_idx)  else None
-                t_exof = t_plot[exoff_idx] if len(exoff_idx) else None
-                y_exof = y[exoff_idx]      if len(exoff_idx) else None
-
-                self.plot_host.update_breath_markers(
-                    t_on=t_on, y_on=y_on,
-                    t_off=t_off, y_off=y_off,
-                    t_exp=t_exp, y_exp=y_exp,
-                    t_exoff=t_exof, y_exoff=y_exof,
-                    size=36
-                )
-            else:
-                self.plot_host.clear_breath_markers()
-
-            # update sigh markers (if any)
-            # self._update_sigh_artists(t_plot, y, s)
-
-            # Update sniff region overlays
-            self.editing_modes.update_sniff_artists(t_plot, s)
-
-            # ---- Y2 metric (if selected and available for this sweep) ----
-            key = getattr(st, "y2_metric_key", None)
-            if key:
-                arr = st.y2_values_by_sweep.get(s, None)
-                if arr is not None and len(arr) == len(t):
-                    # Use the same time axis (t_plot) you've just plotted
-                    # label = "IF (breaths/min)" if key == "if" else key
-                    label = "IF (Hz)" if key == "if" else key
-                    # self.plot_host.add_or_update_y2(t_plot, arr, label=label, max_points=None)
-                    self.plot_host.add_or_update_y2(t_plot, arr, label=label, color="#39FF14", max_points=None)
-                    self.plot_host.fig.tight_layout()
-                else:
-                    self.plot_host.clear_y2()
-                    self.plot_host.fig.tight_layout()
-            else:
-                self.plot_host.clear_y2()
-                self.plot_host.fig.tight_layout()
-
-            # ---- Automatic Region Overlays (Eupnea & Apnea) ----
-            try:
-                # Compute eupnea and apnea masks for this sweep
-                br = getattr(st, "breath_by_sweep", {}).get(s, None)
-                if br and len(t) > 100:  # Only if we have breath data and sufficient points
-                    # Extract breath events
-                    pks = getattr(st, "peaks_by_sweep", {}).get(s, None)
-                    on_idx = br.get("onsets", [])
-                    off_idx = br.get("offsets", [])
-                    ex_idx = br.get("expmins", [])
-                    exoff_idx = br.get("expoffs", [])
-
-                    # Get eupnea and apnea thresholds (with defaults)
-                    eupnea_thresh = self.eupnea_freq_threshold
-                    apnea_thresh = self._parse_float(self.ApneaThresh) or 0.5    # seconds
-
-                    # Compute eupnea regions based on selected mode
-                    if self.eupnea_detection_mode == "gmm":
-                        # GMM-based: Eupnea = breaths NOT classified as sniffing
-                        eupnea_mask = self._compute_eupnea_from_gmm(s, len(y))
-                    else:
-                        # Frequency-based (legacy): Use threshold method
-                        sniff_regions = self.state.sniff_regions_by_sweep.get(s, [])
-                        eupnea_mask = metrics.detect_eupnic_regions(
-                            t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx,
-                            freq_threshold_hz=eupnea_thresh,
-                            min_duration_sec=self.eupnea_min_duration,
-                            sniff_regions=sniff_regions
-                        )
-
-                    # Compute apnea regions using UI threshold
-                    apnea_mask = metrics.detect_apneas(
-                        t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx,
-                        min_apnea_duration_sec=apnea_thresh
-                    )
-
-                    # Identify problematic breaths using outlier detection
-                    outlier_mask = None
-                    failure_mask = None
-                    try:
-                        from core.breath_outliers import identify_problematic_breaths, compute_global_metric_statistics
-                        import numpy as np
-
-                        # Convert indices to arrays (handle both lists and arrays)
-                        peaks_arr = np.array(pks) if pks is not None and len(pks) > 0 else np.array([])
-                        onsets_arr = np.array(on_idx) if on_idx is not None and len(on_idx) > 0 else np.array([])
-                        offsets_arr = np.array(off_idx) if off_idx is not None and len(off_idx) > 0 else np.array([])
-                        expmins_arr = np.array(ex_idx) if ex_idx is not None and len(ex_idx) > 0 else np.array([])
-                        expoffs_arr = np.array(exoff_idx) if exoff_idx is not None and len(exoff_idx) > 0 else np.array([])
-
-                        # Get all computed metrics for this sweep
-                        metrics_dict = {}
-                        for metric_key in ["if", "amp_insp", "amp_exp", "ti", "te", "area_insp", "area_exp"]:
-                            if metric_key in metrics.METRICS:
-                                metric_arr = metrics.METRICS[metric_key](
-                                    t, y, st.sr_hz, peaks_arr, onsets_arr, offsets_arr, expmins_arr, expoffs_arr
-                                )
-                                metrics_dict[metric_key] = metric_arr
-
-                        # Store metrics and onsets for this sweep (for cross-sweep outlier detection)
-                        current_sweep_idx = st.sweep_idx
-                        self.metrics_by_sweep[current_sweep_idx] = metrics_dict
-                        self.onsets_by_sweep[current_sweep_idx] = onsets_arr
-
-                        # Compute global statistics across all sweeps (if we have multiple sweeps analyzed)
-                        if len(self.metrics_by_sweep) >= 2:
-                            # Recompute global stats each time (to account for new/changed sweeps)
-                            self.global_outlier_stats = compute_global_metric_statistics(
-                                self.metrics_by_sweep,
-                                self.onsets_by_sweep,
-                                self.outlier_metrics
-                            )
-                        else:
-                            # Single sweep or first sweep - use per-sweep mode
-                            self.global_outlier_stats = None
-
-                        # Get outlier threshold from UI (with default)
-                        outlier_sd = self._parse_float(self.OutlierSD) or 3.0  # SD
-
-                        # Identify problematic breaths (returns separate masks for outliers and failures)
-                        # Pass global_stats if available for cross-sweep detection
-                        outlier_mask, failure_mask = identify_problematic_breaths(
-                            t, y, st.sr_hz, peaks_arr, onsets_arr, offsets_arr,
-                            expmins_arr, expoffs_arr, metrics_dict, outlier_threshold=outlier_sd,
-                            outlier_metrics=self.outlier_metrics,
-                            global_stats=self.global_outlier_stats
-                        )
-
-                    except Exception as outlier_error:
-                        print(f"Warning: Could not detect breath outliers: {outlier_error}")
-                        import traceback
-                        traceback.print_exc()
-
-                    # Apply the overlays using plot time (with stim normalization if applicable)
-                    # outlier_mask = orange highlighting for statistical outliers
-                    # failure_mask = red highlighting for calculation failures (NaN values)
-                    self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask, outlier_mask, failure_mask)
-                else:
-                    self.plot_host.clear_region_overlays()
-            except Exception as e:
-                # Graceful fallback if overlay computation fails
-                print(f"Warning: Could not compute region overlays: {e}")
-                self.plot_host.clear_region_overlays()
-
-            self._refresh_threshold_lines()
-
-            # If this sweep is omitted, dim the plot and hide markers
-            if s in st.omitted_sweeps:
-                fig = self.plot_host.fig
-                if fig and fig.axes:
-                    ax = fig.axes[0]
-                    # hide detail markers so the dimming reads clearly
-                    self.plot_host.clear_peaks()
-                    self.plot_host.clear_breath_markers()
-                    self._dim_axes_for_omitted(ax, label=True)
-                    self.plot_host.fig.tight_layout()
-                    self.plot_host.canvas.draw_idle()
-
-        else:
-            # Multi-channel grid mode - show all channels for current sweep
-            self.plot_all_channels()
+        """Delegate to PlotManager."""
+        self.plot_manager.redraw_main_plot()
 
 
     def _maybe_enable_peak_apply(self):
@@ -1312,54 +1021,8 @@ class MainWindow(QMainWindow):
         self.redraw_main_plot()
 
     def _refresh_threshold_lines(self):
-        """
-        (Re)draw the dashed threshold line on the current visible axes.
-        Called after typing in ThreshVal and after redraws that clear the axes.
-        """
-        fig = getattr(self.plot_host, "fig", None)
-        canvas = getattr(self.plot_host, "canvas", None)
-        if fig is None or canvas is None or not fig.axes:
-            return
-
-        # Remove previous lines if they exist
-        for ln in getattr(self, "_thresh_line_artists", []):
-            try:
-                ln.remove()
-            except Exception:
-                pass
-        self._thresh_line_artists = []
-
-        y = getattr(self, "_threshold_value", None)
-        if y is None:
-            # Nothing to draw
-            canvas.draw_idle()
-            return
-
-        # Decide which axes to draw on:
-        # - In single-panel mode, draw only on the first axes (main plot).
-        # - In grid mode, you can choose all axes or just the first; here we do first only.
-        axes = fig.axes[:1] if getattr(self, "single_panel_mode", False) else fig.axes[:1]
-
-        for ax in axes:
-            #     y,
-            #     linestyle=(0, (5, 5)),  # dashed
-            #     linewidth=1.2,
-            #     alpha=0.9,
-            #     zorder=5,
-            # )
-            # line = ax.axhline(
-            line = ax.axhline(
-                y,
-                color="red",              # make it red
-                linewidth=1.0,            # a touch thinner (optional)
-                linestyle=(0, (2, 2)),    # smaller dash pattern: 2 on, 2 off
-                alpha=0.95,
-                zorder=5,
-            )
-
-            self._thresh_line_artists.append(line)
-
-        canvas.draw_idle()
+        """Delegate to PlotManager."""
+        self.plot_manager.refresh_threshold_lines()
 
 
 
@@ -2176,13 +1839,8 @@ class MainWindow(QMainWindow):
         self.redraw_main_plot()
 
     def _dim_axes_for_omitted(self, ax, label=True):
-        """Grey overlay + 'OMITTED' watermark on given axes."""
-        x0, x1 = ax.get_xlim()
-        ax.axvspan(x0, x1, ymin=0.0, ymax=1.0, color="#6c7382", alpha=0.22, zorder=50)
-        if label:
-            ax.text(0.5, 0.5, "OMITTED",
-                    transform=ax.transAxes, ha="center", va="center",
-                    fontsize=22, weight="bold", color="#d7dce7", alpha=0.65, zorder=60)
+        """Delegate to PlotManager."""
+        self.plot_manager.dim_axes_for_omitted(ax, label)
 
 
     ##################################################
