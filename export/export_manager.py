@@ -33,6 +33,29 @@ class ExportManager:
         """
         self.window = main_window
 
+    def _get_export_strategy(self, experiment_type: str):
+        """
+        Get the appropriate export strategy based on experiment type.
+
+        Args:
+            experiment_type: One of "30hz_stim", "hargreaves", "licking"
+
+        Returns:
+            ExportStrategy instance for the specified experiment type
+        """
+        from export.strategies import Stim30HzStrategy, HargreavesStrategy, LickingStrategy
+
+        if experiment_type == "30hz_stim":
+            return Stim30HzStrategy(self.window)
+        elif experiment_type == "hargreaves":
+            return HargreavesStrategy(self.window)
+        elif experiment_type == "licking":
+            return LickingStrategy(self.window)
+        else:
+            # Default to 30Hz
+            print(f"[export] Unknown experiment type '{experiment_type}', using default (30Hz)")
+            return Stim30HzStrategy(self.window)
+
     def _load_save_dialog_history(self) -> dict:
         """Load autocomplete history for the Save Data dialog from QSettings."""
         history = {
@@ -471,6 +494,11 @@ class ExportManager:
             self.window._save_base = suggested
             self.window._save_meta = vals
 
+            # Get export strategy based on experiment type
+            experiment_type = vals.get("experiment_type", "30hz_stim")
+            export_strategy = self._get_export_strategy(experiment_type)
+            print(f"[export] Using strategy: {export_strategy.get_strategy_name()}")
+
             # Check for duplicate files before saving
             existing_files = []
             expected_suffixes = ["_bundle.npz", "_means_by_time.csv", "_breaths.csv", "_events.csv", "_summary.pdf"]
@@ -622,6 +650,19 @@ class ExportManager:
                 # Convert to numpy array of shape (N_regions, 2) for start/end times
                 sniff_obj[col] = np.array(regions, dtype=float).reshape(-1, 2) if regions else np.empty((0, 2), dtype=float)
 
+            # Pack bout annotations (event channel markings) - aligned with kept_sweeps
+            bout_obj = np.empty(S, dtype=object)
+            for col, s in enumerate(kept_sweeps):
+                bouts = st.bout_annotations.get(s, [])
+                # Convert list of dicts to structured format for NPZ
+                if bouts:
+                    bout_obj[col] = np.array([
+                        (b['start_time'], b['end_time'], b['id'])
+                        for b in bouts
+                    ], dtype=[('start_time', float), ('end_time', float), ('id', int)])
+                else:
+                    bout_obj[col] = np.array([], dtype=[('start_time', float), ('end_time', float), ('id', int)])
+
             y2_kwargs_ds = {f"y2_{k}_ds": y2_ds_by_key[k] for k in all_keys}
     
             meta = {
@@ -654,6 +695,7 @@ class ExportManager:
                 # Channel info (for reopening)
                 "channel_names": list(st.channel_names) if st.channel_names else [],
                 "stim_chan": str(st.stim_chan) if st.stim_chan else None,
+                "event_channel": str(st.event_channel) if st.event_channel else None,
                 # Navigation state
                 "window_dur_s": float(st.window_dur_s),
             }
@@ -670,6 +712,7 @@ class ExportManager:
                 'expoffs_by_sweep': exo_obj,
                 'sigh_idx_by_sweep': sigh_obj,
                 'sniff_regions_by_sweep': sniff_obj,
+                'bout_annotations_by_sweep': bout_obj,
                 'stim_spans_by_sweep': stim_obj,
                 'meta_json': json.dumps(meta),
                 **y2_kwargs_ds,
@@ -900,8 +943,9 @@ class ExportManager:
             t_elapsed = time.time() - t_start
             print(f"[CSV] ✓ Time-series data written in {t_elapsed:.2f}s")
 
-            # Save enhanced NPZ version 2 with timeseries data (for fast consolidation)
-            _npz_timeseries_data['npz_version'] = 2
+            # Save enhanced NPZ version 3 with timeseries data (for fast consolidation)
+            # Version 3: Added bout_annotations_by_sweep and event_channel
+            _npz_timeseries_data['npz_version'] = 3
             _npz_timeseries_data['timeseries_t'] = t_ds_csv
             _npz_timeseries_data['timeseries_keys'] = list(keys_for_csv)
             # Save raw, norm, and eupnea-norm metric matrices

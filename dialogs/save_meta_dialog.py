@@ -97,6 +97,21 @@ class SaveMetaDialog(QDialog):
         lay.addRow("ABF file:", self.lbl_abf)
         lay.addRow("Channel:", self.lbl_chn)
 
+        # Experiment type selection
+        self.cb_experiment_type = QComboBox(self)
+        self.cb_experiment_type.addItems([
+            "30Hz Stimulus (default)",
+            "Hargreaves Thermal Sensitivity",
+            "Licking Behavior"
+        ])
+        self.cb_experiment_type.setToolTip(
+            "Select experiment type to determine export format:\n"
+            "• 30Hz Stimulus: Standard time series aligned to stim onset\n"
+            "• Hargreaves: Metrics aligned to heat onset/withdrawal\n"
+            "• Licking: Comparison of during vs outside licking bouts"
+        )
+        lay.addRow("Experiment Type:", self.cb_experiment_type)
+
         # NEW: choose location checkbox
         self.cb_choose_dir = QCheckBox("Let me choose where to save", self)
         self.cb_choose_dir.setToolTip("If unchecked, files go to a 'Pleth_App_Analysis' folder automatically.")
@@ -174,6 +189,14 @@ class SaveMetaDialog(QDialog):
         self.lbl_preview.setText(preview)
 
     def values(self) -> dict:
+        # Map friendly names to internal experiment type codes
+        exp_type_map = {
+            "30Hz Stimulus (default)": "30hz_stim",
+            "Hargreaves Thermal Sensitivity": "hargreaves",
+            "Licking Behavior": "licking"
+        }
+        experiment_type = exp_type_map.get(self.cb_experiment_type.currentText(), "30hz_stim")
+
         return {
             "strain": self.le_strain.text().strip(),
             "virus":  self.le_virus.text().strip(),
@@ -186,4 +209,5 @@ class SaveMetaDialog(QDialog):
             "chan":   self._channel,
             "preview": self.lbl_preview.text().strip(),
             "choose_dir": bool(self.cb_choose_dir.isChecked()),
+            "experiment_type": experiment_type,
         }
