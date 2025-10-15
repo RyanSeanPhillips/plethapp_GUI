@@ -1278,7 +1278,35 @@ class ExportManager:
                     rows_all_E.append(row_allE)
 
                     if have_global_stim:
-                        region = "Baseline" if t_rel < 0 else ("Stim" if t_rel <= global_dur else "Post")
+                        # Determine region based on experiment type
+                        if experiment_type == "licking":
+                            # Check if breath occurred during a licking bout
+                            t_abs = st.t[int(idx)]
+                            bout_list = st.bout_annotations.get(s, [])
+                            in_bout = any(b['start_time'] <= t_abs <= b['end_time'] for b in bout_list)
+                            region = "licking" if in_bout else "not_licking"
+                        elif experiment_type == "hargreaves":
+                            # Check if breath occurred during a heat trial
+                            t_abs = st.t[int(idx)]
+                            bout_list = st.bout_annotations.get(s, [])
+                            # Find which bout (if any) this breath belongs to
+                            in_bout_during = False
+                            in_bout_post = False
+                            for b in bout_list:
+                                if b['start_time'] <= t_abs <= b['end_time']:
+                                    in_bout_during = True
+                                    break
+                                elif b['end_time'] < t_abs <= b['end_time'] + 10.0:  # Post-withdrawal window (10s)
+                                    in_bout_post = True
+                            if in_bout_during:
+                                region = "during_heat"
+                            elif in_bout_post:
+                                region = "post_withdrawal"
+                            else:
+                                region = "baseline"
+                        else:
+                            # Default: 30Hz stim behavior (baseline/stim/post)
+                            region = "Baseline" if t_rel < 0 else ("Stim" if t_rel <= global_dur else "Post")
 
                         # RAW regional row
                         row_reg = [str(s + 1), str(i), f"{t_rel:.9g}", region, sigh_flag, sniff_flag, eupnea_flag, apnea_flag]
