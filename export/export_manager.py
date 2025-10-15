@@ -1615,15 +1615,29 @@ class ExportManager:
 
         if preview_only:
             # Show interactive preview dialog instead of saving
+            # Check if event channel data exists to determine which preview to show
+            has_event_data = (st.event_channel and st.bout_annotations and
+                             any(st.bout_annotations.get(s, []) for s in kept_sweeps))
+
             try:
-                self._show_summary_preview_dialog(
-                    t_ds_csv=t_ds_csv,
-                    y2_ds_by_key=y2_ds_by_key,
-                    keys_for_csv=keys_for_timeplots,
-                    label_by_key=label_by_key,
-                    stim_zero=(global_s0 if have_global_stim else None),
-                    stim_dur=(global_dur if have_global_stim else None),
-                )
+                if has_event_data:
+                    # Show event-aligned CTA preview
+                    self._show_event_cta_preview_dialog(
+                        kept_sweeps=kept_sweeps,
+                        cached_traces_by_sweep=cached_traces_by_sweep,
+                        keys_for_csv=keys_for_timeplots,
+                        label_by_key=label_by_key,
+                    )
+                else:
+                    # Show standard summary preview
+                    self._show_summary_preview_dialog(
+                        t_ds_csv=t_ds_csv,
+                        y2_ds_by_key=y2_ds_by_key,
+                        keys_for_csv=keys_for_timeplots,
+                        label_by_key=label_by_key,
+                        stim_zero=(global_s0 if have_global_stim else None),
+                        stim_dur=(global_dur if have_global_stim else None),
+                    )
             except Exception as e:
                 QMessageBox.critical(self.window, "View Summary", f"Error generating preview:\n{e}")
                 import traceback
@@ -2292,10 +2306,8 @@ class ExportManager:
             keys_for_csv: List of metric keys to plot
             label_by_key: Dict of {metric: display_label}
         """
-        import numpy as np
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_pdf import PdfPages
-        from scipy import stats
 
         st = self.window.state
 
@@ -2306,15 +2318,83 @@ class ExportManager:
 
         print(f"[CTA PDF] Generating event-aligned CTA PDF for {len(kept_sweeps)} sweeps...")
 
+        # Generate figure using shared helper
+        fig = self._generate_event_cta_figure(kept_sweeps, cached_traces_by_sweep, keys_for_csv, label_by_key)
+
+        # Save to PDF
+        with PdfPages(out_path) as pdf:
+            pdf.savefig(fig, dpi=150)
+        plt.close(fig)
+
+        print(f"[CTA PDF] ✓ Event-aligned CTA PDF saved to {out_path.name}")
+
+    def _show_event_cta_preview_dialog(self, kept_sweeps, cached_traces_by_sweep, keys_for_csv, label_by_key):
+        """Display interactive preview dialog with event-aligned CTA figure."""
+        import matplotlib.pyplot as plt
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QScrollArea, QSizePolicy
+        from PyQt6.QtCore import Qt
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+
+        st = self.window.state
+
+        # Generate the CTA figure using similar logic to _save_event_aligned_cta_pdf
+        # (but return the figure instead of saving)
+        print("[CTA Preview] Generating event-aligned CTA figure...")
+
+        fig = self._generate_event_cta_figure(kept_sweeps, cached_traces_by_sweep, keys_for_csv, label_by_key)
+
+        # -------------------- Display in dialog --------------------
+        dialog = QDialog(self.window)
+        dialog.setWindowTitle("Event-Aligned CTA Preview")
+        dialog.resize(1400, 900)
+
+        main_layout = QVBoxLayout(dialog)
+
+        # Close button at top
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        main_layout.addWidget(close_btn)
+
+        # Create scroll area for the canvas
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
+
+        # Canvas for displaying matplotlib figure
+        canvas = FigureCanvas(fig)
+        canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        canvas.setMinimumWidth(1300)
+        canvas.setMinimumHeight(800)
+
+        scroll_area.setWidget(canvas)
+        main_layout.addWidget(scroll_area)
+
+        # Show dialog modally
+        dialog.exec()
+
+        # Clean up
+        plt.close(fig)
+
+    def _generate_event_cta_figure(self, kept_sweeps, cached_traces_by_sweep, keys_for_csv, label_by_key):
+        """
+        Generate the event-aligned CTA figure (shared by save and preview).
+        Returns the matplotlib figure object.
+        """
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from scipy import stats
+
+        st = self.window.state
+
         # Parameters
         WINDOW_BEFORE = 2.0  # seconds before event
         WINDOW_AFTER = 2.0   # seconds after event
 
         # Collect all event-aligned windows
-        onset_windows = {k: [] for k in keys_for_csv}  # List of (time, values) tuples
+        onset_windows = {k: [] for k in keys_for_csv}
         offset_windows = {k: [] for k in keys_for_csv}
-
-        # Collect breath values for histogram comparison
         during_event_vals = {k: [] for k in keys_for_csv}
         outside_event_vals = {k: [] for k in keys_for_csv}
 
@@ -2325,13 +2405,11 @@ class ExportManager:
             if not bout_list or not traces:
                 continue
 
-            # For each metric
             for k in keys_for_csv:
                 trace = traces.get(k, None)
                 if trace is None or len(trace) != len(st.t):
                     continue
 
-                # Extract breath events for this sweep
                 br = st.breath_by_sweep.get(s, None)
                 if br is None:
                     continue
@@ -2339,29 +2417,27 @@ class ExportManager:
                 if on.size < 2:
                     continue
 
-                mids = (on[:-1] + on[1:]) // 2  # Breath midpoints
+                mids = (on[:-1] + on[1:]) // 2
 
-                # For each event bout
                 for bout in bout_list:
                     onset_time = bout['start_time']
                     offset_time = bout['end_time']
 
-                    # === CTA around ONSET ===
-                    # Find time indices in window [onset-WINDOW_BEFORE, onset+WINDOW_AFTER]
+                    # CTA around ONSET
                     mask_onset = (st.t >= onset_time - WINDOW_BEFORE) & (st.t <= onset_time + WINDOW_AFTER)
                     if np.any(mask_onset):
-                        t_window = st.t[mask_onset] - onset_time  # Align to t=0 at onset
+                        t_window = st.t[mask_onset] - onset_time
                         vals_window = trace[mask_onset]
                         onset_windows[k].append((t_window, vals_window))
 
-                    # === CTA around OFFSET ===
+                    # CTA around OFFSET
                     mask_offset = (st.t >= offset_time - WINDOW_BEFORE) & (st.t <= offset_time + WINDOW_AFTER)
                     if np.any(mask_offset):
-                        t_window = st.t[mask_offset] - offset_time  # Align to t=0 at offset
+                        t_window = st.t[mask_offset] - offset_time
                         vals_window = trace[mask_offset]
                         offset_windows[k].append((t_window, vals_window))
 
-                    # === Histogram: Collect breath values during vs outside events ===
+                    # Histogram data
                     for i, mid_idx in enumerate(mids):
                         t_mid = st.t[int(mid_idx)]
                         val = trace[int(mid_idx)]
@@ -2374,24 +2450,20 @@ class ExportManager:
                         else:
                             outside_event_vals[k].append(val)
 
-        # === Create PDF ===
+        # Create figure
         n_metrics = len(keys_for_csv)
-        fig_height = 3 * n_metrics  # 3 inches per metric row
+        fig_height = 3 * n_metrics
         fig = plt.figure(figsize=(15, fig_height))
 
         for idx, k in enumerate(keys_for_csv):
             label = label_by_key.get(k, k)
 
-            # === Column 1: CTA around ONSETS ===
+            # Column 1: Onset CTA
             ax1 = plt.subplot(n_metrics, 3, idx*3 + 1)
-
             if onset_windows[k]:
-                # Overlay all trials (faint lines)
                 for t_win, vals_win in onset_windows[k]:
                     ax1.plot(t_win, vals_win, 'b-', alpha=0.15, linewidth=0.5)
 
-                # Compute mean ± SEM
-                # Interpolate all trials to common time grid
                 t_common = np.linspace(-WINDOW_BEFORE, WINDOW_AFTER, 200)
                 interp_traces = []
                 for t_win, vals_win in onset_windows[k]:
@@ -2400,7 +2472,7 @@ class ExportManager:
                         interp_traces.append(interp_vals)
 
                 if interp_traces:
-                    trace_matrix = np.array(interp_traces)  # (n_trials, n_timepoints)
+                    trace_matrix = np.array(interp_traces)
                     mean_trace = np.nanmean(trace_matrix, axis=0)
                     sem_trace = stats.sem(trace_matrix, axis=0, nan_policy='omit')
 
@@ -2418,15 +2490,12 @@ class ExportManager:
                 ax1.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax1.transAxes)
                 ax1.set_title(f'{label} - Event Onset CTA')
 
-            # === Column 2: CTA around OFFSETS ===
+            # Column 2: Offset CTA
             ax2 = plt.subplot(n_metrics, 3, idx*3 + 2)
-
             if offset_windows[k]:
-                # Overlay all trials
                 for t_win, vals_win in offset_windows[k]:
                     ax2.plot(t_win, vals_win, 'g-', alpha=0.15, linewidth=0.5)
 
-                # Compute mean ± SEM
                 t_common = np.linspace(-WINDOW_BEFORE, WINDOW_AFTER, 200)
                 interp_traces = []
                 for t_win, vals_win in offset_windows[k]:
@@ -2453,21 +2522,18 @@ class ExportManager:
                 ax2.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax2.transAxes)
                 ax2.set_title(f'{label} - Event Offset CTA')
 
-            # === Column 3: Histograms (During vs Outside Events) ===
+            # Column 3: Histograms
             ax3 = plt.subplot(n_metrics, 3, idx*3 + 3)
-
             during = np.array(during_event_vals[k])
             outside = np.array(outside_event_vals[k])
 
             if during.size > 0 and outside.size > 0:
-                # Compute bins covering both datasets
                 all_vals = np.concatenate([during, outside])
                 bins = np.histogram_bin_edges(all_vals[np.isfinite(all_vals)], bins=30)
 
                 ax3.hist(outside, bins=bins, alpha=0.6, color='blue', label=f'Outside Events (n={len(outside)})', density=True)
                 ax3.hist(during, bins=bins, alpha=0.6, color='orange', label=f'During Events (n={len(during)})', density=True)
 
-                # Compute stats
                 if len(during) > 1 and len(outside) > 1:
                     t_stat, p_val = stats.ttest_ind(during, outside, nan_policy='omit')
                     mean_during = np.nanmean(during)
@@ -2492,13 +2558,7 @@ class ExportManager:
                 ax3.set_title(f'{label} - During vs Outside Events')
 
         plt.tight_layout()
-
-        # Save to PDF
-        with PdfPages(out_path) as pdf:
-            pdf.savefig(fig, dpi=150)
-        plt.close(fig)
-
-        print(f"[CTA PDF] ✓ Event-aligned CTA PDF saved to {out_path.name}")
+        return fig
 
 
     def _show_summary_preview_dialog(self, t_ds_csv, y2_ds_by_key, keys_for_csv, label_by_key, stim_zero, stim_dur):
