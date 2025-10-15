@@ -2477,10 +2477,11 @@ class ExportManager:
                         else:
                             outside_event_vals[k].append(val)
 
-        # Create figure
+        # Create figure (match standard PDF dimensions)
         n_metrics = len(keys_for_csv)
-        fig_height = 5 * n_metrics  # 5 inches per metric row for better visibility
-        fig = plt.figure(figsize=(15, fig_height))
+        fig_w = 13
+        fig_h = max(4.0, 2.6 * n_metrics)  # 2.6 inches per row (same as standard PDF)
+        fig = plt.figure(figsize=(fig_w, fig_h))
 
         for idx, k in enumerate(keys_for_csv):
             label = label_by_key.get(k, k)
@@ -2556,7 +2557,7 @@ class ExportManager:
 
             if during.size > 0 and outside.size > 0:
                 all_vals = np.concatenate([during, outside])
-                bins = np.histogram_bin_edges(all_vals[np.isfinite(all_vals)], bins=30)
+                bins = np.histogram_bin_edges(all_vals[np.isfinite(all_vals)], bins=100)
 
                 ax3.hist(outside, bins=bins, alpha=0.6, color='blue', label=f'Outside Events (n={len(outside)})', density=True)
                 ax3.hist(during, bins=bins, alpha=0.6, color='orange', label=f'During Events (n={len(during)})', density=True)
