@@ -624,6 +624,34 @@ class ExportManager:
             progress_dialog.setValue(15)
             QApplication.processEvents()
 
+        # -------------------- Build cached traces (needed for preview and save) --------------------
+        # For event-aligned CTA, we need metric traces. Build them here if needed.
+        def _build_cached_traces_if_needed():
+            """Build cached metric traces for CTA preview/export if not already cached."""
+            cached = {}
+            need_keys = ["if", "amp_insp", "amp_exp", "area_insp", "area_exp", "ti", "te", "vent_proxy"]
+
+            for s in kept_sweeps:
+                y_proc = self.window._get_processed_for(st.analyze_chan, s)
+                pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+                br = st.breath_by_sweep.get(s, None)
+                if br is None and pks.size:
+                    br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
+                    st.breath_by_sweep[s] = br
+                if br is None:
+                    continue
+
+                traces_for_sweep = {}
+                for k in need_keys:
+                    if k in metrics.METRICS:
+                        traces_for_sweep[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
+                cached[s] = traces_for_sweep
+
+            return cached
+
+        # Build cached traces for CTA (used by both preview and save)
+        cached_traces_by_sweep = _build_cached_traces_if_needed()
+
         # -------------------- Save files (skip if preview_only) --------------------
         if not preview_only:
             # -------------------- (1) NPZ bundle (downsampled) --------------------
@@ -1040,12 +1068,10 @@ class ExportManager:
             print(f"[CSV] Computing eupnea baselines and caching traces for {len(need_keys)} metrics...")
             eupnea_baseline_breaths = {k: [] for k in need_keys}
 
-            # Export metric cache: Stores computed metric traces (sweep -> {metric: trace})
+            # Use pre-computed cached traces (already built before save/preview split)
             # This cache is reused in PDF generation to avoid recomputing expensive metrics.
-            # Note: This is separate from st.proc_cache which stores filtered raw traces.
             if not hasattr(self.window, '_export_metric_cache'):
                 self.window._export_metric_cache = {}
-            cached_traces_by_sweep = {}  # Cache traces to avoid recomputing
 
             for s in kept_sweeps:
                 # Keep UI responsive during long computation
@@ -1069,15 +1095,10 @@ class ExportManager:
                 mids = (on[:-1] + on[1:]) // 2
                 t_rel_all = (st.t[mids] - (global_s0 if have_global_stim else 0.0)).astype(float)
 
-                # Compute traces once for this sweep and CACHE them (both locally and globally)
-                traces_for_sweep = {}
-                for k in need_keys:
-                    if k in metrics.METRICS:
-                        traces_for_sweep[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
+                # Get pre-computed traces from cache
+                traces_for_sweep = cached_traces_by_sweep.get(s, {})
 
-                # Store in cache for reuse in main loop
-                cached_traces_by_sweep[s] = traces_for_sweep
-                # Also store globally for PDF reuse
+                # Store globally for PDF reuse
                 self.window._export_metric_cache[s] = traces_for_sweep
 
                 # Collect baseline eupneic breath values
@@ -1643,48 +1664,50 @@ class ExportManager:
                 import traceback
                 traceback.print_exc()
         else:
-            # Save PDF to disk
-            pdf_path = base.with_name(base.name + "_summary.pdf")
-            try:
-                self._save_metrics_summary_pdf(
-                    out_path=pdf_path,
-                    t_ds_csv=t_ds_csv,
-                    y2_ds_by_key=y2_ds_by_key,
-                    keys_for_csv=keys_for_timeplots,
-                    label_by_key=label_by_key,
-                    stim_zero=(global_s0 if have_global_stim else None),
-                    stim_dur=(global_dur if have_global_stim else None),
-                )
-            except Exception as e:
-                print(f"[save][summary-pdf] skipped: {e}")
+            # -------------------- PDF Generation --------------------
+            # Check if event channel has data - if yes, ONLY generate CTA PDF
+            has_event_data = (st.event_channel and st.bout_annotations and
+                             any(st.bout_annotations.get(s, []) for s in kept_sweeps))
+
+            pdf_path = None
+            event_cta_pdf_path = None
+
+            if has_event_data:
+                # Event-aligned CTA PDF only (skip standard PDF)
+                print("[PDF] Event channel detected, generating CTA PDF only...")
+                event_cta_pdf_path = base.with_name(base.name + "_event_cta.pdf")
+                try:
+                    self._save_event_aligned_cta_pdf(
+                        out_path=event_cta_pdf_path,
+                        kept_sweeps=kept_sweeps,
+                        cached_traces_by_sweep=cached_traces_by_sweep,
+                        keys_for_csv=keys_for_timeplots,
+                        label_by_key=label_by_key,
+                    )
+                except Exception as e:
+                    print(f"[save][event-cta-pdf] skipped: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    event_cta_pdf_path = None
+            else:
+                # Standard summary PDF (no event data)
+                print("[PDF] No event channel, generating standard summary PDF...")
+                pdf_path = base.with_name(base.name + "_summary.pdf")
+                try:
+                    self._save_metrics_summary_pdf(
+                        out_path=pdf_path,
+                        t_ds_csv=t_ds_csv,
+                        y2_ds_by_key=y2_ds_by_key,
+                        keys_for_csv=keys_for_timeplots,
+                        label_by_key=label_by_key,
+                        stim_zero=(global_s0 if have_global_stim else None),
+                        stim_dur=(global_dur if have_global_stim else None),
+                    )
+                except Exception as e:
+                    print(f"[save][summary-pdf] skipped: {e}")
 
             t_elapsed = time.time() - t_start
-            if preview_only:
-                print(f"[PDF] ✓ Preview generated in {t_elapsed:.2f}s")
-            else:
-                print(f"[PDF] ✓ PDF saved in {t_elapsed:.2f}s")
-
-            # -------------------- Event-aligned CTA PDF (if event channel selected) --------------------
-            event_cta_pdf_path = None
-            if not preview_only and st.event_channel and st.bout_annotations:
-                # Check if any sweeps actually have event annotations
-                has_events = any(st.bout_annotations.get(s, []) for s in kept_sweeps)
-
-                if has_events:
-                    event_cta_pdf_path = base.with_name(base.name + "_event_cta.pdf")
-                    try:
-                        self._save_event_aligned_cta_pdf(
-                            out_path=event_cta_pdf_path,
-                            kept_sweeps=kept_sweeps,
-                            cached_traces_by_sweep=cached_traces_by_sweep,
-                            keys_for_csv=keys_for_timeplots,
-                            label_by_key=label_by_key,
-                        )
-                    except Exception as e:
-                        print(f"[save][event-cta-pdf] skipped: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        event_cta_pdf_path = None
+            print(f"[PDF] ✓ PDF saved in {t_elapsed:.2f}s")
 
             # -------------------- done --------------------
             if progress_dialog:
@@ -1692,7 +1715,9 @@ class ExportManager:
                 QApplication.processEvents()
 
             # Build success message
-            file_list = [npz_path.name, csv_time_path.name, breaths_path.name, events_path.name, pdf_path.name]
+            file_list = [npz_path.name, csv_time_path.name, breaths_path.name, events_path.name]
+            if pdf_path:
+                file_list.append(pdf_path.name)
             if event_cta_pdf_path:
                 file_list.append(event_cta_pdf_path.name)
             msg = "Saved:\n" + "\n".join(f"- {name}" for name in file_list)
