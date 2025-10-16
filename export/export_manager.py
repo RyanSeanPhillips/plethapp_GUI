@@ -33,6 +33,30 @@ class ExportManager:
         """
         self.window = main_window
 
+    def _show_message_box(self, icon, title, text, parent=None):
+        """
+        Show a message box with selectable text for easy copying.
+
+        Args:
+            icon: QMessageBox.Icon (Information, Warning, Critical, Question)
+            title: Dialog title
+            text: Message text
+            parent: Parent widget (defaults to self.window)
+
+        Returns:
+            QMessageBox result
+        """
+        if parent is None:
+            parent = self.window
+
+        msg_box = QMessageBox(parent)
+        msg_box.setIcon(icon)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(text)
+        msg_box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        return msg_box.exec()
+
     def _get_export_strategy(self, experiment_type: str):
         """
         Get the appropriate export strategy based on experiment type.
@@ -382,10 +406,10 @@ class ExportManager:
 
         st = self.window.state
         if not getattr(st, "in_path", None):
-            QMessageBox.information(self.window, "View Summary" if preview_only else "Save analyzed data", "Open an ABF first.")
+            self._show_message_box(QMessageBox.Icon.Information, "View Summary" if preview_only else "Save analyzed data", "Open an ABF first.")
             return
         if st.t is None or not st.analyze_chan or st.analyze_chan not in st.sweeps:
-            QMessageBox.warning(self.window, "View Summary" if preview_only else "Save analyzed data", "No analyzed data available.")
+            self._show_message_box(QMessageBox.Icon.Warning, "View Summary" if preview_only else "Save analyzed data", "No analyzed data available.")
             return
 
         # -------------------- Prompt for save location (skip if preview_only) --------------------
@@ -472,7 +496,7 @@ class ExportManager:
                         try:
                             final_dir.mkdir(parents=True, exist_ok=True)
                         except Exception as e:
-                            QMessageBox.critical(self.window, "Save analyzed data", f"Could not create folder:\n{final_dir}\n\n{e}")
+                            self._show_message_box(QMessageBox.Icon.Critical, "Save analyzed data", f"Could not create folder:\n{final_dir}\n\n{e}")
                             return
 
                 # Remember the last *picker* root only when the picker is used
@@ -485,7 +509,7 @@ class ExportManager:
                 try:
                     final_dir.mkdir(parents=True, exist_ok=True)
                 except Exception as e:
-                    QMessageBox.critical(self.window, "Save analyzed data", f"Could not create folder:\n{final_dir}\n\n{e}")
+                    self._show_message_box(QMessageBox.Icon.Critical, "Save analyzed data", f"Could not create folder:\n{final_dir}\n\n{e}")
                     return
                 # IMPORTANT: Do NOT overwrite 'save_root' here — we don't want to "remember" anything for the unchecked case.
 
@@ -548,7 +572,7 @@ class ExportManager:
         kept_sweeps = [s for s in range(n_sweeps) if s not in getattr(st, "omitted_sweeps", set())]
         S = len(kept_sweeps)
         if S == 0:
-            QMessageBox.warning(self.window, "Save analyzed data", "All sweeps are omitted. Nothing to save.")
+            self._show_message_box(QMessageBox.Icon.Warning, "Save analyzed data", "All sweeps are omitted. Nothing to save.")
             return
 
         # Downsample index used for NPZ + time CSV
@@ -1662,7 +1686,7 @@ class ExportManager:
                         stim_dur=(global_dur if have_global_stim else None),
                     )
             except Exception as e:
-                QMessageBox.critical(self.window, "View Summary", f"Error generating preview:\n{e}")
+                self._show_message_box(QMessageBox.Icon.Critical, "View Summary", f"Error generating preview:\n{e}")
                 import traceback
                 traceback.print_exc()
         else:
@@ -1730,8 +1754,8 @@ class ExportManager:
                 pass
 
             # Show success dialog
-            QMessageBox.information(
-                self.window,
+            self._show_message_box(
+                QMessageBox.Icon.Information,
                 "Save Successful",
                 f"Files saved successfully to:\n{self.window._save_dir}\n\n{msg}"
             )
@@ -2359,7 +2383,7 @@ class ExportManager:
         """Display interactive preview dialog with event-aligned CTA figure."""
         import matplotlib.pyplot as plt
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QScrollArea, QSizePolicy
-        from PyQt6.QtCore import Qt
+        from PyQt6.QtCore import Qt, QObject, QEvent
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
         st = self.window.state
