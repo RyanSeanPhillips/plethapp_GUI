@@ -2373,7 +2373,7 @@ class ExportManager:
         # -------------------- Display in dialog --------------------
         dialog = QDialog(self.window)
         dialog.setWindowTitle("Event-Aligned CTA Preview")
-        dialog.resize(1400, 900)
+        dialog.resize(1300, 900)
 
         main_layout = QVBoxLayout(dialog)
 
@@ -2382,18 +2382,45 @@ class ExportManager:
         close_btn.clicked.connect(dialog.accept)
         main_layout.addWidget(close_btn)
 
-        # Create scroll area for the canvas
+        # Create scroll area for the canvas with mouse wheel support (match default preview)
         scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidgetResizable(True)  # Allow canvas to resize to fit width
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll_area.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
 
         # Canvas for displaying matplotlib figure
         canvas = FigureCanvas(fig)
-        canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        canvas.setMinimumWidth(1300)
-        canvas.setMinimumHeight(800)
+
+        # Set size policy to allow width scaling but keep height fixed (match default preview)
+        canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        canvas.setMinimumWidth(800)  # Minimum width only
+
+        # Install event filter to forward wheel events to scroll area (match default preview)
+        class WheelEventFilter:
+            def __init__(self, scroll_area):
+                self.scroll_area = scroll_area
+
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.Type.Wheel:
+                    # Forward wheel event to scroll area's viewport
+                    scrollbar = self.scroll_area.verticalScrollBar()
+                    scrollbar.setValue(scrollbar.value() - event.angleDelta().y())
+                    return True  # Event handled
+                return False  # Let other events pass through
+
+        wheel_filter = WheelEventFilter(scroll_area)
+
+        class EventFilterObject(QObject):
+            def __init__(self, filter_func):
+                super().__init__()
+                self.filter_func = filter_func
+
+            def eventFilter(self, obj, event):
+                return self.filter_func(obj, event)
+
+        filter_obj = EventFilterObject(wheel_filter.eventFilter)
+        canvas.installEventFilter(filter_obj)
 
         scroll_area.setWidget(canvas)
         main_layout.addWidget(scroll_area)
@@ -2477,10 +2504,10 @@ class ExportManager:
                         else:
                             outside_event_vals[k].append(val)
 
-        # Create figure (match standard PDF dimensions)
+        # Create figure (2.5x taller than standard PDF for better detail)
         n_metrics = len(keys_for_csv)
         fig_w = 13
-        fig_h = max(4.0, 2.6 * n_metrics)  # 2.6 inches per row (same as standard PDF)
+        fig_h = max(10.0, 6.5 * n_metrics)  # 6.5 inches per row (2.5x standard PDF)
         fig = plt.figure(figsize=(fig_w, fig_h))
 
         for idx, k in enumerate(keys_for_csv):
