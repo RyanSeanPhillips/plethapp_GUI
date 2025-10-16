@@ -124,6 +124,7 @@ class MainWindow(QMainWindow):
         # --- Wire channel selection (immediate application) ---
         self.AnalyzeChanSelect.currentIndexChanged.connect(self.on_analyze_channel_changed)
         self.StimChanSelect.currentIndexChanged.connect(self.on_stim_channel_changed)
+        self.EventsChanSelect.currentIndexChanged.connect(self.on_events_channel_changed)
 
 
         # --- Wire filter controls ---
@@ -208,6 +209,9 @@ class MainWindow(QMainWindow):
 
         # Initialize editing modes manager
         self.editing_modes = EditingModes(self)
+
+        # --- Mark Events button (event detection settings) ---
+        self.MarkEventsButton.clicked.connect(self.on_mark_events_clicked)
 
         # --- Sigh overlay artists ---
         self._sigh_artists = []         # matplotlib artists for sigh overlay
@@ -371,7 +375,7 @@ class MainWindow(QMainWindow):
             last_dir = str(Path.home())
 
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Select File(s)", last_dir, "Data Files (*.abf *.smrx);;ABF Files (*.abf);;SMRX Files (*.smrx);;All Files (*.*)"
+            self, "Select File(s)", last_dir, "Data Files (*.abf *.smrx *.edf);;ABF Files (*.abf);;SMRX Files (*.smrx);;EDF Files (*.edf);;All Files (*.*)"
         )
         if not paths:
             return
@@ -468,6 +472,10 @@ class MainWindow(QMainWindow):
         self.zscore_global_mean = None
         self.zscore_global_std = None
 
+        # Clear event markers (bout annotations)
+        if hasattr(st, 'bout_annotations'):
+            st.bout_annotations.clear()
+
 
 
 
@@ -493,6 +501,19 @@ class MainWindow(QMainWindow):
         self.StimChanSelect.addItems(ch_names)
         self.StimChanSelect.setCurrentIndex(0)     # select "None"
         self.StimChanSelect.blockSignals(False)
+
+        # Populate Events Channel dropdown
+        self.EventsChanSelect.blockSignals(True)
+        self.EventsChanSelect.clear()
+        self.EventsChanSelect.addItem("None")      # default - no event channel
+        self.EventsChanSelect.addItems(ch_names)
+        # Restore previous selection if it exists
+        if st.event_channel and st.event_channel in ch_names:
+            idx = ch_names.index(st.event_channel) + 1  # +1 because "None" is at index 0
+            self.EventsChanSelect.setCurrentIndex(idx)
+        else:
+            self.EventsChanSelect.setCurrentIndex(0)  # select "None"
+        self.EventsChanSelect.blockSignals(False)
 
         #Clear peaks
         self.state.peaks_by_sweep.clear()
@@ -624,6 +645,19 @@ class MainWindow(QMainWindow):
         self.StimChanSelect.addItems(ch_names)
         self.StimChanSelect.setCurrentIndex(0)     # select "None"
         self.StimChanSelect.blockSignals(False)
+
+        # Populate Events Channel dropdown
+        self.EventsChanSelect.blockSignals(True)
+        self.EventsChanSelect.clear()
+        self.EventsChanSelect.addItem("None")      # default - no event channel
+        self.EventsChanSelect.addItems(ch_names)
+        # Restore previous selection if it exists
+        if st.event_channel and st.event_channel in ch_names:
+            idx = ch_names.index(st.event_channel) + 1  # +1 because "None" is at index 0
+            self.EventsChanSelect.setCurrentIndex(idx)
+        else:
+            self.EventsChanSelect.setCurrentIndex(0)  # select "None"
+        self.EventsChanSelect.blockSignals(False)
 
         #Clear peaks
         self.state.peaks_by_sweep.clear()
@@ -767,6 +801,10 @@ class MainWindow(QMainWindow):
                 st.stim_spans_by_sweep.clear()
                 st.stim_metrics_by_sweep.clear()
 
+                # Clear event markers (bout annotations)
+                if hasattr(st, 'bout_annotations'):
+                    st.bout_annotations.clear()
+
                 st.proc_cache.clear()
 
                 # Clear Y2 plot data
@@ -801,6 +839,10 @@ class MainWindow(QMainWindow):
                 # Clear sniffing regions
                 if hasattr(st, 'sniff_regions_by_sweep'):
                     st.sniff_regions_by_sweep.clear()
+
+                # Clear event markers (bout annotations)
+                if hasattr(st, 'bout_annotations'):
+                    st.bout_annotations.clear()
 
                 # Clear Y2 plot data
                 st.y2_metric_key = None
@@ -857,6 +899,43 @@ class MainWindow(QMainWindow):
 
             st.proc_cache.clear()
             self.redraw_main_plot()
+
+    def on_events_channel_changed(self, idx: int):
+        """Apply event channel selection immediately."""
+        st = self.state
+        if not st.channel_names:
+            return
+
+        # idx 0 = "None", idx 1+ = channel names
+        new_event = None if idx == 0 else st.channel_names[idx - 1]
+        if new_event != st.event_channel:
+            st.event_channel = new_event
+            self.redraw_main_plot()
+
+    def on_mark_events_clicked(self):
+        """Open Event Detection Settings dialog."""
+        # Check if event channel is selected
+        st = self.state
+        if st.event_channel is None:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "No Event Channel",
+                "Please select an event channel from the 'Events Chan Select' dropdown first."
+            )
+            return
+
+        # Check if dialog already exists and is visible
+        if hasattr(self, '_event_detection_dialog') and self._event_detection_dialog.isVisible():
+            # Bring existing dialog to front
+            self._event_detection_dialog.raise_()
+            self._event_detection_dialog.activateWindow()
+            return
+
+        # Create and show dialog (non-modal so plot can be interacted with)
+        from dialogs.event_detection_dialog import EventDetectionDialog
+        self._event_detection_dialog = EventDetectionDialog(parent=self, main_window=self)
+        self._event_detection_dialog.show()  # Non-modal dialog
 
 
     def _compute_stim_for_current_sweep(self, thresh: float = 1.0):
@@ -1294,7 +1373,7 @@ class MainWindow(QMainWindow):
     def _run_automatic_gmm_clustering(self):
         """
         Automatically run GMM clustering after peak detection to identify sniffing breaths.
-        Uses default features (if, ti, te, amp_insp, amp_exp, max_dinsp, max_dexp) and 2 clusters.
+        Uses streamlined default features (if, ti, amp_insp, max_dinsp) and 2 clusters.
         Silently marks identified sniffing breaths with purple background.
         """
         from sklearn.mixture import GaussianMixture
@@ -1309,8 +1388,8 @@ class MainWindow(QMainWindow):
             print("[auto-gmm] No breath data available, skipping automatic GMM clustering")
             return
 
-        # Default features for eupnea/sniffing separation (including derivative peaks)
-        feature_keys = ["if", "ti", "te", "amp_insp", "amp_exp", "max_dinsp", "max_dexp"]
+        # Streamlined default features for eupnea/sniffing separation
+        feature_keys = ["if", "ti", "amp_insp", "max_dinsp"]
         n_clusters = 2
 
         print(f"\n[auto-gmm] Running automatic GMM clustering with {n_clusters} clusters...")
@@ -1348,12 +1427,15 @@ class MainWindow(QMainWindow):
                 print("[auto-gmm] Could not identify sniffing cluster, skipping")
                 return
 
-            # Apply sniffing regions to plot with probabilities
-            n_sniffing_breaths = self._apply_gmm_sniffing_regions(
-                breath_cycles, cluster_labels, cluster_probabilities, sniffing_cluster_id
+            # Store GMM probabilities but DO NOT apply sniffing regions automatically
+            # User must enable "Apply Sniffing Detection" checkbox in GMM dialog to see markings
+            self._store_gmm_probabilities_only(
+                breath_cycles, cluster_probabilities, sniffing_cluster_id
             )
 
-            print(f"[auto-gmm] ✓ Marked {n_sniffing_breaths} sniffing breaths across sweeps")
+            n_sniffing_breaths = np.sum(cluster_labels == sniffing_cluster_id)
+            print(f"[auto-gmm] ✓ Identified {n_sniffing_breaths} sniffing breaths (not applied to plot)")
+            print(f"[auto-gmm]   Open 'Eupnea/Sniffing Detection' dialog and enable 'Apply Sniffing Detection' to mark regions")
 
             # Cache results for fast dialog loading
             self._cached_gmm_results = {
@@ -1651,6 +1733,51 @@ class MainWindow(QMainWindow):
 
         return n_sniffing
 
+    def _store_gmm_probabilities_only(self, breath_cycles, cluster_probabilities, sniffing_cluster_id):
+        """Store GMM sniffing probabilities without applying regions to plot.
+
+        This is used by automatic GMM clustering to store results without
+        immediately marking sniffing regions. User must manually enable
+        "Apply Sniffing Detection" in GMM dialog to see markings.
+
+        Args:
+            breath_cycles: List of (sweep_idx, breath_idx) tuples
+            cluster_probabilities: Probability matrix (n_breaths, n_clusters)
+            sniffing_cluster_id: Which cluster is sniffing
+        """
+        import numpy as np
+
+        # Store probabilities by (sweep_idx, breath_idx)
+        if not hasattr(self.state, 'gmm_sniff_probabilities'):
+            self.state.gmm_sniff_probabilities = {}
+        self.state.gmm_sniff_probabilities.clear()
+
+        for i, (sweep_idx, breath_idx) in enumerate(breath_cycles):
+            if sweep_idx not in self.state.gmm_sniff_probabilities:
+                self.state.gmm_sniff_probabilities[sweep_idx] = {}
+
+            # Get probability of this breath being sniffing
+            sniff_prob = cluster_probabilities[i, sniffing_cluster_id]
+            self.state.gmm_sniff_probabilities[sweep_idx][breath_idx] = sniff_prob
+
+        # Calculate probability statistics
+        all_sniff_probs = []
+        for sweep_idx in self.state.gmm_sniff_probabilities:
+            for breath_idx in self.state.gmm_sniff_probabilities[sweep_idx]:
+                prob = self.state.gmm_sniff_probabilities[sweep_idx][breath_idx]
+                all_sniff_probs.append(prob)
+
+        if all_sniff_probs:
+            all_sniff_probs = np.array(all_sniff_probs)
+            sniff_probs_of_sniff_breaths = all_sniff_probs[all_sniff_probs >= 0.5]  # Breaths classified as sniffing
+            if len(sniff_probs_of_sniff_breaths) > 0:
+                mean_conf = np.mean(sniff_probs_of_sniff_breaths)
+                min_conf = np.min(sniff_probs_of_sniff_breaths)
+                uncertain_count = np.sum((sniff_probs_of_sniff_breaths >= 0.5) & (sniff_probs_of_sniff_breaths < 0.7))
+                print(f"[auto-gmm]   Sniffing probability: mean={mean_conf:.3f}, min={min_conf:.3f}")
+                if uncertain_count > 0:
+                    print(f"[auto-gmm]   ⚠️ {uncertain_count} breaths have uncertain classification (50-70% sniffing probability)")
+
     ##################################################
     ##y2 plotting                                   ##
     ##################################################
@@ -1711,10 +1838,8 @@ class MainWindow(QMainWindow):
     ##################################################
     ## Turn Off All Edit Modes ##
     ##################################################
-
-        # Clear click callback and reset cursor
-        self.plot_host.clear_click_callback()
-        self.plot_host.setCursor(Qt.CursorShape.ArrowCursor)
+    # Note: These lines were orphaned code that was being executed as part of on_y2_metric_changed
+    # They have been removed because they were clearing the callback after we restored it
 
     
 
@@ -1723,14 +1848,33 @@ class MainWindow(QMainWindow):
 
 
     def on_auto_update_gmm_toggled(self, checked: bool):
-        """Handle Auto-Update GMM checkbox toggle - run GMM when enabled."""
+        """Handle Auto-Update GMM checkbox toggle - run GMM when enabled and apply sniffing regions."""
         if checked:
             # User just enabled auto-update - run GMM clustering if we have peaks
             st = self.state
             if st.peaks_by_sweep and len(st.peaks_by_sweep) > 0:
-                print("[auto-update-gmm] Auto-update enabled - recalculating sniffing/eupnea regions...")
+                print("[auto-update-gmm] Auto-update enabled - running GMM and applying sniffing regions...")
                 self._run_automatic_gmm_clustering()
+
+                # Now apply the sniffing regions if GMM was successful
+                if self._cached_gmm_results is not None:
+                    print("[auto-update-gmm] Applying sniffing regions to plot...")
+                    breath_cycles = self._cached_gmm_results['breath_cycles']
+                    cluster_labels = self._cached_gmm_results['cluster_labels']
+                    cluster_probabilities = self._cached_gmm_results['cluster_probabilities']
+                    sniffing_cluster_id = self._cached_gmm_results['sniffing_cluster_id']
+
+                    # Apply sniffing regions
+                    n_sniffing = self._apply_gmm_sniffing_regions(
+                        breath_cycles, cluster_labels, cluster_probabilities, sniffing_cluster_id
+                    )
+                    print(f"[auto-update-gmm] Applied {n_sniffing} sniffing breaths to plot")
+
                 self.redraw_main_plot()
+        else:
+            # User disabled auto-update - optionally clear sniffing regions
+            # (Currently we leave them as-is, user can manually clear via GMM dialog)
+            print("[auto-update-gmm] Auto-update disabled")
 
     def on_spectral_analysis_clicked(self):
         """Open spectral analysis dialog and optionally apply notch filter."""
