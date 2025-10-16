@@ -2618,6 +2618,15 @@ class ExportManager:
                 ax2.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax2.transAxes)
                 ax2.set_title(f'{label} - Event Offset CTA')
 
+            # Match y-axis limits between onset and offset plots
+            if onset_windows[k] and offset_windows[k]:
+                ylim1 = ax1.get_ylim()
+                ylim2 = ax2.get_ylim()
+                combined_min = min(ylim1[0], ylim2[0])
+                combined_max = max(ylim1[1], ylim2[1])
+                ax1.set_ylim(combined_min, combined_max)
+                ax2.set_ylim(combined_min, combined_max)
+
             # Column 3: Histograms
             ax3 = plt.subplot(n_metrics, 3, idx*3 + 3)
             during = np.array(during_event_vals[k])
