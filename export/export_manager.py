@@ -265,20 +265,37 @@ class ExportManager:
         return [key for (_, key) in metrics.METRIC_SPECS]
 
 
-    def _compute_metric_trace(self, key, t, y, sr_hz, peaks, breaths):
+    def _compute_metric_trace(self, key, t, y, sr_hz, peaks, breaths, sweep=None):
         """
         Call the metric function, passing expoffs if it exists.
         Falls back to legacy signature when needed.
+
+        Args:
+            sweep: Optional sweep index for setting GMM probabilities (needed for sniff_conf/eupnea_conf)
         """
+        st = self.window.state
         fn = metrics.METRICS[key]
         on  = breaths.get("onsets")   if breaths else None
         off = breaths.get("offsets")  if breaths else None
         exm = breaths.get("expmins")  if breaths else None
         exo = breaths.get("expoffs")  if breaths else None
+
+        # Set GMM probabilities if computing sniff_conf or eupnea_conf
+        gmm_probs = None
+        if sweep is not None and hasattr(st, 'gmm_sniff_probabilities') and sweep in st.gmm_sniff_probabilities:
+            gmm_probs = st.gmm_sniff_probabilities[sweep]
+            metrics.set_gmm_probabilities(gmm_probs)
+
         try:
-            return fn(t, y, sr_hz, peaks, on, off, exm, exo)  # new signature
+            result = fn(t, y, sr_hz, peaks, on, off, exm, exo)  # new signature
         except TypeError:
-            return fn(t, y, sr_hz, peaks, on, off, exm)       # legacy signature
+            result = fn(t, y, sr_hz, peaks, on, off, exm)       # legacy signature
+        finally:
+            # Clear GMM probabilities after computation
+            if gmm_probs is not None:
+                metrics.set_gmm_probabilities(None)
+
+        return result
 
 
     def _get_stim_masks(self, s: int):
@@ -639,7 +656,7 @@ class ExportManager:
             sigh_by_sweep.append(sighs)
 
             for k in all_keys:
-                y2 = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
+                y2 = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
                 if y2 is not None and len(y2) == N:
                     y2_ds_by_key[k][:, col] = y2[ds_idx]
 
@@ -670,7 +687,7 @@ class ExportManager:
                 traces_for_sweep = {}
                 for k in keys_for_cta:
                     if k in metrics.METRICS:
-                        traces_for_sweep[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
+                        traces_for_sweep[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
                 cached[s] = traces_for_sweep
 
             return cached
@@ -1205,7 +1222,7 @@ class ExportManager:
                     traces = {}
                     for k in need_keys:
                         if k in metrics.METRICS:
-                            traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
+                            traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
                         else:
                             traces[k] = None
                 else:
@@ -1934,7 +1951,7 @@ class ExportManager:
                     traces = {}
                     for k in keys_for_csv:
                         try:
-                            traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br)
+                            traces[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
                         except TypeError:
                             traces[k] = None
 
