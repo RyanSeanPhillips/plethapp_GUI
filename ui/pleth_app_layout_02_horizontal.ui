@@ -531,7 +531,7 @@ QPushButton#BrowseButton:disabled {
               </property>
               <property name="minimumSize">
                <size>
-                <width>161</width>
+                <width>300</width>
                 <height>71</height>
                </size>
               </property>
@@ -564,132 +564,229 @@ QPushButton#BrowseButton:disabled {
               <property name="title">
                <string>Channel Selection</string>
               </property>
-              <widget class="QWidget" name="layoutWidget">
+              <widget class="QWidget" name="">
                <property name="geometry">
                 <rect>
-                 <x>10</x>
+                 <x>11</x>
                  <y>20</y>
-                 <width>144</width>
-                 <height>44</height>
+                 <width>285</width>
+                 <height>50</height>
                 </rect>
                </property>
-               <layout class="QFormLayout" name="formLayout">
-                <item row="0" column="0">
-                 <widget class="QLabel" name="AnalyzeLabel">
-                  <property name="sizePolicy">
-                   <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                    <horstretch>0</horstretch>
-                    <verstretch>0</verstretch>
-                   </sizepolicy>
-                  </property>
-                  <property name="maximumSize">
-                   <size>
-                    <width>60</width>
-                    <height>16777215</height>
-                   </size>
-                  </property>
-                  <property name="font">
-                   <font>
-                    <pointsize>9</pointsize>
-                    <bold>false</bold>
-                   </font>
-                  </property>
-                  <property name="text">
-                   <string>Analyze:</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="0" column="1">
-                 <widget class="QComboBox" name="AnalyzeChanSelect">
-                  <property name="sizePolicy">
-                   <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                    <horstretch>0</horstretch>
-                    <verstretch>0</verstretch>
-                   </sizepolicy>
-                  </property>
-                  <property name="minimumSize">
-                   <size>
-                    <width>88</width>
-                    <height>16</height>
-                   </size>
-                  </property>
-                  <property name="maximumSize">
-                   <size>
-                    <width>225</width>
-                    <height>18</height>
-                   </size>
-                  </property>
-                  <property name="font">
-                   <font>
-                    <pointsize>8</pointsize>
-                   </font>
-                  </property>
-                  <property name="styleSheet">
-                   <string notr="true"/>
-                  </property>
+               <layout class="QVBoxLayout" name="verticalLayout_16">
+                <property name="spacing">
+                 <number>0</number>
+                </property>
+                <item>
+                 <layout class="QHBoxLayout" name="horizontalLayout_15">
                   <item>
-                   <property name="text">
-                    <string>None</string>
-                   </property>
+                   <widget class="QLabel" name="AnalyzeLabel">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                    <property name="maximumSize">
+                     <size>
+                      <width>60</width>
+                      <height>16777215</height>
+                     </size>
+                    </property>
+                    <property name="font">
+                     <font>
+                      <pointsize>9</pointsize>
+                      <bold>false</bold>
+                     </font>
+                    </property>
+                    <property name="text">
+                     <string>Analyze:</string>
+                    </property>
+                   </widget>
                   </item>
-                 </widget>
-                </item>
-                <item row="1" column="0">
-                 <widget class="QLabel" name="StimChanSelectLabel">
-                  <property name="sizePolicy">
-                   <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
-                    <horstretch>0</horstretch>
-                    <verstretch>0</verstretch>
-                   </sizepolicy>
-                  </property>
-                  <property name="maximumSize">
-                   <size>
-                    <width>65</width>
-                    <height>16777215</height>
-                   </size>
-                  </property>
-                  <property name="font">
-                   <font>
-                    <pointsize>9</pointsize>
-                    <bold>false</bold>
-                   </font>
-                  </property>
-                  <property name="text">
-                   <string>Stimulus:</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="1" column="1">
-                 <widget class="QComboBox" name="StimChanSelect">
-                  <property name="sizePolicy">
-                   <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                    <horstretch>0</horstretch>
-                    <verstretch>0</verstretch>
-                   </sizepolicy>
-                  </property>
-                  <property name="minimumSize">
-                   <size>
-                    <width>88</width>
-                    <height>0</height>
-                   </size>
-                  </property>
-                  <property name="maximumSize">
-                   <size>
-                    <width>225</width>
-                    <height>18</height>
-                   </size>
-                  </property>
-                  <property name="font">
-                   <font>
-                    <pointsize>8</pointsize>
-                   </font>
-                  </property>
                   <item>
-                   <property name="text">
-                    <string>None</string>
-                   </property>
+                   <widget class="QComboBox" name="AnalyzeChanSelect">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                    <property name="minimumSize">
+                     <size>
+                      <width>88</width>
+                      <height>16</height>
+                     </size>
+                    </property>
+                    <property name="maximumSize">
+                     <size>
+                      <width>88</width>
+                      <height>18</height>
+                     </size>
+                    </property>
+                    <property name="font">
+                     <font>
+                      <pointsize>8</pointsize>
+                     </font>
+                    </property>
+                    <property name="styleSheet">
+                     <string notr="true"/>
+                    </property>
+                    <item>
+                     <property name="text">
+                      <string>None</string>
+                     </property>
+                    </item>
+                   </widget>
                   </item>
-                 </widget>
+                  <item>
+                   <spacer name="horizontalSpacer_7">
+                    <property name="orientation">
+                     <enum>Qt::Horizontal</enum>
+                    </property>
+                    <property name="sizeHint" stdset="0">
+                     <size>
+                      <width>40</width>
+                      <height>20</height>
+                     </size>
+                    </property>
+                   </spacer>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="eventslabel">
+                    <property name="text">
+                     <string>Events:</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QComboBox" name="EventsChanSelect">
+                    <property name="minimumSize">
+                     <size>
+                      <width>88</width>
+                      <height>18</height>
+                     </size>
+                    </property>
+                    <property name="maximumSize">
+                     <size>
+                      <width>88</width>
+                      <height>18</height>
+                     </size>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="horizontalLayout_16">
+                  <item>
+                   <widget class="QLabel" name="StimChanSelectLabel">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                    <property name="maximumSize">
+                     <size>
+                      <width>65</width>
+                      <height>16777215</height>
+                     </size>
+                    </property>
+                    <property name="font">
+                     <font>
+                      <pointsize>9</pointsize>
+                      <bold>false</bold>
+                     </font>
+                    </property>
+                    <property name="text">
+                     <string>Stimulus:</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QComboBox" name="StimChanSelect">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                    <property name="minimumSize">
+                     <size>
+                      <width>88</width>
+                      <height>0</height>
+                     </size>
+                    </property>
+                    <property name="maximumSize">
+                     <size>
+                      <width>88</width>
+                      <height>18</height>
+                     </size>
+                    </property>
+                    <property name="font">
+                     <font>
+                      <pointsize>8</pointsize>
+                     </font>
+                    </property>
+                    <item>
+                     <property name="text">
+                      <string>None</string>
+                     </property>
+                    </item>
+                   </widget>
+                  </item>
+                  <item>
+                   <spacer name="horizontalSpacer_4">
+                    <property name="orientation">
+                     <enum>Qt::Horizontal</enum>
+                    </property>
+                    <property name="sizeHint" stdset="0">
+                     <size>
+                      <width>40</width>
+                      <height>20</height>
+                     </size>
+                    </property>
+                   </spacer>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="MarkEventsButton">
+                    <property name="minimumSize">
+                     <size>
+                      <width>88</width>
+                      <height>20</height>
+                     </size>
+                    </property>
+                    <property name="maximumSize">
+                     <size>
+                      <width>88</width>
+                      <height>20</height>
+                     </size>
+                    </property>
+                    <property name="font">
+                     <font>
+                      <pointsize>8</pointsize>
+                      <underline>true</underline>
+                     </font>
+                    </property>
+                    <property name="styleSheet">
+                     <string notr="true">QPushButton {
+    text-align: left;
+    border: none;
+    background: transparent;
+    text-decoration: underline;
+    color: #4A9EFF;
+}
+QPushButton:hover {
+    color: #6BB6FF;
+}</string>
+                    </property>
+                    <property name="text">
+                     <string>Mark Events</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
                 </item>
                </layout>
               </widget>
@@ -1017,7 +1114,7 @@ Options</string>
               </property>
               <property name="minimumSize">
                <size>
-                <width>261</width>
+                <width>239</width>
                 <height>71</height>
                </size>
               </property>
@@ -1192,7 +1289,7 @@ QPushButton:disabled {
                </property>
                <property name="minimumSize">
                 <size>
-                 <width>0</width>
+                 <width>30</width>
                  <height>18</height>
                 </size>
                </property>
@@ -1247,7 +1344,7 @@ QPushButton:disabled {
                 <rect>
                  <x>200</x>
                  <y>20</y>
-                 <width>50</width>
+                 <width>30</width>
                  <height>18</height>
                 </rect>
                </property>
@@ -1259,13 +1356,13 @@ QPushButton:disabled {
                </property>
                <property name="minimumSize">
                 <size>
-                 <width>0</width>
+                 <width>30</width>
                  <height>18</height>
                 </size>
                </property>
                <property name="maximumSize">
                 <size>
-                 <width>50</width>
+                 <width>30</width>
                  <height>16</height>
                 </size>
                </property>
@@ -1404,15 +1501,34 @@ QPushButton:hover {
                   </widget>
                  </item>
                  <item>
-                  <widget class="QCheckBox" name="AutoUpdateGMMCheckbox">
+                  <widget class="QPushButton" name="UpdateEupneaSniffingButton">
+                   <property name="minimumSize">
+                    <size>
+                     <width>120</width>
+                     <height>0</height>
+                    </size>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">QPushButton {
+    background-color: #0d6efd;
+    color: white;
+    font-weight: bold;
+    border: 1px solid #0b5ed7;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+QPushButton:hover {
+    background-color: #0b5ed7;
+}
+QPushButton:pressed {
+    background-color: #0a58ca;
+}</string>
+                   </property>
                    <property name="toolTip">
-                    <string>Automatically re-run eupnea/sniffing detection when peaks are added or deleted</string>
+                    <string>Manually update eupnea/sniffing detection (rerun GMM clustering and apply results to plot)</string>
                    </property>
                    <property name="text">
-                    <string>Auto-Update</string>
-                   </property>
-                   <property name="checked">
-                    <bool>true</bool>
+                    <string>Update Eup./Sniff</string>
                    </property>
                   </widget>
                  </item>
@@ -2431,6 +2547,17 @@ QPushButton:pressed {
                       <pointsize>10</pointsize>
                       <bold>true</bold>
                      </font>
+                    </property>
+                    <property name="styleSheet">
+                     <string notr="true">QPushButton {
+    border: 2px solid #1976d2;
+    border-radius: 6px;
+    padding: 3px;
+}
+QPushButton:hover {
+    border: 2px solid #4A9EFF;
+    background-color: rgba(25, 118, 210, 0.1);
+}</string>
                     </property>
                     <property name="toolTip">
                      <string>Preview the PDF summary of analyzed metrics</string>

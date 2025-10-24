@@ -12,6 +12,7 @@ class AppState:
     channel_names: List[str] = field(default_factory=list)
     analyze_chan: Optional[str] = None
     stim_chan: Optional[str] = None
+    event_channel: Optional[str] = None  # Channel for event trace (e.g., lick detector)
     # core/state.py  (inside AppState dataclass)
     stim_onsets_by_sweep: dict[int, np.ndarray] = field(default_factory=dict)
     stim_offsets_by_sweep: dict[int, np.ndarray] = field(default_factory=dict)
@@ -46,6 +47,7 @@ class AppState:
     omitted_ranges: Dict[int, List[Tuple[int,int]]] = field(default_factory=dict)  # sweep -> [(i0,i1), ...]
     omitted_sweeps: set = field(default_factory=set)  # set of sweep indices to exclude
     sniff_regions_by_sweep: Dict[int, List[Tuple[float, float]]] = field(default_factory=dict)  # sweep -> [(start_time, end_time), ...]
+    bout_annotations: Dict[int, List[Dict]] = field(default_factory=dict)  # sweep -> [{'start_time': float, 'end_time': float, 'id': int}, ...]
 
     # Y2 axis metrics
     y2_metric_key: Optional[str] = None  # e.g., "if", "ti", "te", etc.

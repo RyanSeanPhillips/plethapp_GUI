@@ -28,14 +28,131 @@ from core import metrics, filters
 
 class GMMClusteringDialog(QDialog):
     def __init__(self, parent=None, main_window=None):
-        from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QPushButton, QCheckBox, QTableWidget, QTableWidgetItem, QGroupBox
+        from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QSpinBox, QPushButton, QCheckBox, QTableWidget, QTableWidgetItem, QGroupBox, QRadioButton, QButtonGroup, QDoubleSpinBox
         from PyQt6.QtCore import Qt
         from PyQt6.QtWidgets import QSizePolicy
         import numpy as np
 
         super().__init__(parent)
         self.setWindowTitle("Eupnea/Sniffing Detection")
-        self.resize(1200, 800)
+        self.resize(1200, 800)  # Adjusted to fit laptop screens comfortably
+
+        # Apply VS Code Dark+ theme to match main window
+        self.setStyleSheet("""
+            /* VS Code Dark+ Theme */
+            QDialog {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+            }
+            QWidget {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+            }
+            QLabel {
+                color: #d4d4d4;
+            }
+            QGroupBox {
+                color: #d4d4d4;
+                border: 1px solid white;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 2px 5px;
+                color: #4A9EFF;
+            }
+            QCheckBox {
+                color: #cccccc;
+            }
+            QCheckBox::indicator {
+                width: 14px;
+                height: 14px;
+                border: 1px solid white;
+                border-radius: 2px;
+                background-color: #252526;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #4A9EFF;
+                border: 1px solid white;
+            }
+            QCheckBox::indicator:hover {
+                border: 1px solid #6BB6FF;
+            }
+            QCheckBox:disabled {
+                color: #6a6a6a;
+            }
+            QCheckBox::indicator:disabled {
+                border: 1px solid #6a6a6a;
+                background-color: #1e1e1e;
+            }
+            QRadioButton {
+                color: #cccccc;
+            }
+            QSpinBox, QDoubleSpinBox {
+                background-color: #252526;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
+                padding: 3px;
+            }
+            QPushButton {
+                background-color: #2d2d30;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                padding: 5px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #3e3e42;
+            }
+            QPushButton:pressed {
+                background-color: #094771;
+            }
+            QTableWidget {
+                background-color: #252526;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                gridline-color: #3e3e42;
+            }
+            QTableWidget::item {
+                color: #cccccc;
+                padding: 5px;
+            }
+            QTableWidget::item:selected {
+                background-color: #094771;
+            }
+            QHeaderView::section {
+                background-color: #2d2d30;
+                color: #cccccc;
+                border: 1px solid #3e3e42;
+                padding: 5px;
+                font-weight: bold;
+            }
+            QScrollArea {
+                background-color: #1e1e1e;
+                border: none;
+            }
+            QScrollBar:vertical {
+                background-color: #1e1e1e;
+                width: 14px;
+                border: none;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #3e3e42;
+                border-radius: 7px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #4e4e52;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
 
         self.main_window = main_window
         self.cluster_labels = None  # Will store cluster assignments
@@ -45,13 +162,14 @@ class GMMClusteringDialog(QDialog):
         self.sniffing_cluster_id = None  # Which cluster represents sniffing
         self.cluster_colors = {}  # Map cluster_id -> color (purple for sniffing, green for eupnea)
         self.had_quality_warning = False  # Track if clustering quality was questionable
+        self.cluster_custom_labels = {}  # Store user-customized cluster labels (cluster_id -> custom_label)
 
         # Main layout
         main_layout = QHBoxLayout(self)
 
-        # Left panel: Controls
+        # Left panel: Controls - compact spacing
         left_panel = QVBoxLayout()
-        left_panel.setSpacing(10)
+        left_panel.setSpacing(6)  # Reduced from 10 to 6
 
         # Help/Info button at top
         help_layout = QHBoxLayout()
@@ -77,36 +195,62 @@ class GMMClusteringDialog(QDialog):
 
         # Feature selection group
         feature_group = QGroupBox("Select Features for Clustering")
-        feature_layout = QVBoxLayout()
+        feature_layout = QGridLayout()  # Changed from QVBoxLayout to QGridLayout for multi-column layout
 
         self.feature_checkboxes = {}
         available_features = ["if", "ti", "te", "amp_insp", "amp_exp", "area_insp", "area_exp", "max_dinsp", "max_dexp"]
-        default_features = ["if", "ti", "te", "amp_insp", "amp_exp", "max_dinsp", "max_dexp"]  # Good defaults for eupnea/sniffing separation
+        default_features = ["if", "ti", "amp_insp", "max_dinsp"]  # Streamlined defaults for eupnea/sniffing separation
 
-        for feature in available_features:
+        # Arrange features in 3 columns
+        num_cols = 3
+        for idx, feature in enumerate(available_features):
             cb = QCheckBox(feature)
             cb.setChecked(feature in default_features)
             self.feature_checkboxes[feature] = cb
-            feature_layout.addWidget(cb)
+            row = idx // num_cols
+            col = idx % num_cols
+            feature_layout.addWidget(cb, row, col)
 
         feature_group.setLayout(feature_layout)
         left_panel.addWidget(feature_group)
 
-        # Number of clusters
-        cluster_layout = QHBoxLayout()
-        cluster_layout.addWidget(QLabel("Number of Clusters:"))
+        # Clustering controls - compact layout with button on same row
+        cluster_controls_layout = QHBoxLayout()
+        cluster_controls_layout.addWidget(QLabel("Clusters:"))
         self.n_clusters_spin = QSpinBox()
         self.n_clusters_spin.setRange(2, 10)
         self.n_clusters_spin.setValue(2)  # Start with 2 for eupnea/sniffing
-        cluster_layout.addWidget(self.n_clusters_spin)
-        cluster_layout.addStretch()
-        left_panel.addLayout(cluster_layout)
+        self.n_clusters_spin.setMaximumWidth(60)
+        cluster_controls_layout.addWidget(self.n_clusters_spin)
 
-        # Run GMM button
-        self.run_gmm_btn = QPushButton("Run GMM Clustering")
+        cluster_controls_layout.addSpacing(10)
+
+        # Run GMM button - compact, on same row
+        self.run_gmm_btn = QPushButton("Run GMM")
         self.run_gmm_btn.clicked.connect(self.on_run_gmm)
-        self.run_gmm_btn.setMinimumHeight(40)
-        left_panel.addWidget(self.run_gmm_btn)
+        self.run_gmm_btn.setMinimumHeight(30)
+        # Override theme style for this button with blue highlight
+        self.run_gmm_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4A9EFF;
+                color: white;
+                font-weight: bold;
+                border-radius: 3px;
+                border: 1px solid #3A8EEF;
+                padding: 5px 15px;
+            }
+            QPushButton:hover {
+                background-color: #6BB6FF;
+                border: 1px solid #4A9EFF;
+            }
+            QPushButton:pressed {
+                background-color: #3A8EEF;
+                border: 1px solid #2A7EDF;
+            }
+        """)
+        cluster_controls_layout.addWidget(self.run_gmm_btn)
+        cluster_controls_layout.addStretch()
+        left_panel.addLayout(cluster_controls_layout)
 
         # Results table
         results_label = QLabel("Cluster Statistics:")
@@ -116,8 +260,81 @@ class GMMClusteringDialog(QDialog):
         self.results_table = QTableWidget()
         self.results_table.setColumnCount(4)
         self.results_table.setHorizontalHeaderLabels(["Cluster", "Count", "Percentage", "Avg Confidence"])
+
+        # Configure table to fit content without horizontal scrolling
+        from PyQt6.QtWidgets import QHeaderView
+        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.results_table.horizontalHeader().setStretchLastSection(True)
+        self.results_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # Set initial height for empty table (will be adjusted dynamically)
+        self.results_table.setMaximumHeight(150)
+
+        # Connect signal to capture user edits to cluster labels
+        self.results_table.itemChanged.connect(self._on_table_item_changed)
+
         left_panel.addWidget(self.results_table)
+
+        # Quality Metrics Display - compact 2-column layout
+        quality_group = QGroupBox("Quality Metrics")
+        quality_layout = QGridLayout()
+
+        # Row 0: Silhouette and Cohen's d side by side
+        self.silhouette_label = QLabel("Silhouette: —")
+        self.silhouette_label.setToolTip(
+            "Cluster separation (-1 to +1)\n"
+            ">0.5=Excellent, 0.25-0.5=Good\n"
+            "0.15-0.25=Warning, <0.15=Reject"
+        )
+        quality_layout.addWidget(self.silhouette_label, 0, 0)
+
+        self.cohens_d_label = QLabel("Cohen's d: —")
+        self.cohens_d_label.setToolTip(
+            "Effect size (0 to ∞)\n"
+            ">0.8=Large, 0.5-0.8=Medium\n"
+            "<0.5=Small"
+        )
+        quality_layout.addWidget(self.cohens_d_label, 0, 1)
+
+        # Row 1: Verdict spans both columns
+        self.quality_verdict_label = QLabel("Verdict: —")
+        self.quality_verdict_label.setWordWrap(True)
+        quality_layout.addWidget(self.quality_verdict_label, 1, 0, 1, 2)  # Span 2 columns
+
+        quality_group.setLayout(quality_layout)
+        left_panel.addWidget(quality_group)
+
+        # Confidence Threshold Control - compact
+        confidence_group = QGroupBox("Confidence Threshold")
+        confidence_layout = QHBoxLayout()
+
+        confidence_layout.addWidget(QLabel("Min prob:"))
+
+        self.confidence_threshold_slider = QDoubleSpinBox()
+        self.confidence_threshold_slider.setRange(0.50, 0.95)
+        self.confidence_threshold_slider.setValue(0.50)  # Default: >50% probability = sniffing
+        self.confidence_threshold_slider.setSingleStep(0.05)
+        self.confidence_threshold_slider.setDecimals(2)
+        self.confidence_threshold_slider.setMaximumWidth(70)
+        self.confidence_threshold_slider.setToolTip(
+            "Minimum probability to mark breath as sniffing\n"
+            "Higher = more conservative\n"
+            "Lower = more liberal"
+        )
+        confidence_layout.addWidget(self.confidence_threshold_slider)
+
+        self.confidence_threshold_label = QLabel("(50%)")
+        self.confidence_threshold_label.setStyleSheet("color: #4A9EFF; font-weight: bold;")
+        confidence_layout.addWidget(self.confidence_threshold_label)
+
+        # Connect slider to update label
+        self.confidence_threshold_slider.valueChanged.connect(
+            lambda val: self.confidence_threshold_label.setText(f"({int(val*100)}%)")
+        )
+
+        confidence_layout.addStretch()
+        confidence_group.setLayout(confidence_layout)
+        left_panel.addWidget(confidence_group)
 
         # Status label
         self.status_label = QLabel("Select features and click 'Run GMM Clustering' to begin.")
@@ -137,7 +354,7 @@ class GMMClusteringDialog(QDialog):
 
         self.plot_waveforms_cb = QCheckBox("Plot Mean Waveforms")
         self.plot_waveforms_cb.setChecked(True)  # Enabled by default
-        self.plot_waveforms_cb.setToolTip("Enable to plot mean ± SEM waveforms (can be slow with many breaths)")
+        self.plot_waveforms_cb.setToolTip("Enable to plot mean waveforms with variability bands")
         waveform_layout.addWidget(self.plot_waveforms_cb)
 
         n_breaths_layout = QHBoxLayout()
@@ -150,11 +367,73 @@ class GMMClusteringDialog(QDialog):
         n_breaths_layout.addStretch()
         waveform_layout.addLayout(n_breaths_layout)
 
+        # Variability display mode
+        variability_label = QLabel("Variability bands:")
+        waveform_layout.addWidget(variability_label)
+
+        self.variability_button_group = QButtonGroup(self)
+        self.sem_radio = QRadioButton("SEM (Standard Error)")
+        self.sem_radio.setChecked(True)  # Default
+        self.sem_radio.setToolTip("Show mean ± standard error (measures precision of mean estimate)")
+        self.std_radio = QRadioButton("STD (Standard Deviation)")
+        self.std_radio.setToolTip("Show mean ± standard deviation (measures data spread)")
+        self.minmax_radio = QRadioButton("Min/Max Range")
+        self.minmax_radio.setToolTip("Show full range of variation (min to max values)")
+
+        self.variability_button_group.addButton(self.sem_radio, 0)
+        self.variability_button_group.addButton(self.std_radio, 1)
+        self.variability_button_group.addButton(self.minmax_radio, 2)
+
+        # Arrange radio buttons in horizontal layout
+        variability_radios_layout = QHBoxLayout()
+        variability_radios_layout.addWidget(self.sem_radio)
+        variability_radios_layout.addWidget(self.std_radio)
+        variability_radios_layout.addWidget(self.minmax_radio)
+        variability_radios_layout.addStretch()
+        waveform_layout.addLayout(variability_radios_layout)
+
+        # Apply button to re-plot without re-running GMM
+        self.apply_variability_btn = QPushButton("Apply")
+        self.apply_variability_btn.setToolTip("Re-plot waveforms with current settings (variability mode and number of breaths)")
+        self.apply_variability_btn.clicked.connect(self._on_apply_variability)
+        waveform_layout.addWidget(self.apply_variability_btn)
+
+        # Connect n_breaths spinner to trigger re-plot via Apply button logic
+        # (User can change value and click Apply to see updated plot)
+        # Note: We don't auto-update on every spinner change to avoid performance issues
+
         waveform_group.setLayout(waveform_layout)
         left_panel.addWidget(waveform_group)
 
+        # Sniffing Application Controls
+        sniff_app_group = QGroupBox("Sniffing Region Application")
+        sniff_app_layout = QVBoxLayout()
+
+        # Checkbox to enable/disable sniffing detection application
+        self.apply_sniffing_cb = QCheckBox("Apply Sniffing Detection to Plot")
+        self.apply_sniffing_cb.setChecked(False)  # Default to OFF
+        self.apply_sniffing_cb.setToolTip("When enabled, detected sniffing regions will be marked on the main plot.\n"
+                                          "Turn off if baseline respiratory rate is high or plot is too cluttered.")
+        sniff_app_layout.addWidget(self.apply_sniffing_cb)
+
+        # Checkbox to enable/disable automatic GMM update when peaks are manually edited
+        self.auto_update_gmm_cb = QCheckBox("Auto-Update GMM on Peak Edits")
+        self.auto_update_gmm_cb.setChecked(False)  # Default to OFF for performance
+        self.auto_update_gmm_cb.setToolTip("When enabled, GMM clustering will automatically rerun and apply sniffing regions\n"
+                                           "whenever you manually add or delete peaks.\n"
+                                           "Disable for faster editing with large files.")
+        sniff_app_layout.addWidget(self.auto_update_gmm_cb)
+
+        # Button to clear existing sniffing regions
+        self.clear_sniffing_btn = QPushButton("Clear All Sniffing Regions")
+        self.clear_sniffing_btn.setToolTip("Remove all sniffing region markings from the main plot")
+        self.clear_sniffing_btn.clicked.connect(self._on_clear_sniffing_regions)
+        sniff_app_layout.addWidget(self.clear_sniffing_btn)
+
+        sniff_app_group.setLayout(sniff_app_layout)
+        left_panel.addWidget(sniff_app_group)
+
         # Eupnea detection mode selection (moved to bottom)
-        from PyQt6.QtWidgets import QRadioButton, QButtonGroup, QDoubleSpinBox
         mode_group = QGroupBox("Eupnea Detection Method")
         mode_layout = QVBoxLayout()
 
@@ -223,21 +502,64 @@ class GMMClusteringDialog(QDialog):
         self.freq_threshold_spin.valueChanged.connect(self._on_frequency_params_changed)
         self.min_duration_spin.valueChanged.connect(self._on_frequency_params_changed)
 
-        # Close button
+        # Connect sniffing application checkbox to apply/remove sniffing immediately
+        self.apply_sniffing_cb.toggled.connect(self._on_sniffing_application_toggled)
+
+        # Connect auto-update GMM checkbox to main window state
+        self.auto_update_gmm_cb.toggled.connect(self._on_auto_update_gmm_toggled)
+
+        # Load current auto-update state from main window
+        if hasattr(self.main_window, 'auto_gmm_enabled'):
+            self.auto_update_gmm_cb.setChecked(self.main_window.auto_gmm_enabled)
+
+        # Close button - styled for visibility
         button_layout = QHBoxLayout()
         close_btn = QPushButton("Close")
         close_btn.setMinimumHeight(35)
         close_btn.clicked.connect(self.accept)
+        # Style to make it stand out
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2d2d30;
+                color: #ffffff;
+                font-weight: bold;
+                border: 2px solid #4A9EFF;
+                border-radius: 3px;
+                padding: 5px 15px;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #3e3e42;
+                border: 2px solid #6BB6FF;
+            }
+            QPushButton:pressed {
+                background-color: #094771;
+                border: 2px solid #4A9EFF;
+            }
+        """)
         button_layout.addWidget(close_btn)
         left_panel.addLayout(button_layout)
 
         left_panel.addStretch()
-        main_layout.addLayout(left_panel, 1)
+
+        # Wrap left panel in a scroll area
+        left_scroll_area = QScrollArea()
+        left_scroll_area.setWidgetResizable(True)
+        left_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        left_scroll_area.setMinimumWidth(380)  # Minimum width to fit content
+        left_scroll_area.setMaximumWidth(400)  # Maximum width, plots get more space
+
+        # Container widget for left panel controls
+        left_container = QWidget()
+        left_container.setLayout(left_panel)
+        left_container.setMaximumWidth(380)  # Match scroll area to prevent overflow
+        left_scroll_area.setWidget(left_container)
+
+        main_layout.addWidget(left_scroll_area, 1)
 
         # Right panel: Scrollable Visualizations
-        from PyQt6.QtWidgets import QScrollArea, QWidget
-        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-        from matplotlib.figure import Figure
+        # Note: QScrollArea, QWidget, FigureCanvasQTAgg, Figure already imported at top
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
@@ -296,6 +618,16 @@ class GMMClusteringDialog(QDialog):
                         self.cluster_colors[cluster_id] = 'purple'
                     else:
                         self.cluster_colors[cluster_id] = 'green'
+
+                # Calculate and display quality metrics
+                from sklearn.preprocessing import StandardScaler
+                scaler = StandardScaler()
+                feature_matrix_scaled = scaler.fit_transform(self.feature_data)
+
+                quality_status, silhouette, cohens_d, quality_warning = self._check_clustering_quality(
+                    feature_matrix_scaled, selected_features
+                )
+                self._update_quality_metrics_display(quality_status, silhouette, cohens_d)
 
                 # Update results table
                 self._update_results_table()
@@ -359,6 +691,209 @@ class GMMClusteringDialog(QDialog):
             # Redraw to apply new parameters
             self.main_window.redraw_main_plot()
 
+    def _on_clear_sniffing_regions(self):
+        """Clear all sniffing regions from the main plot."""
+        if not hasattr(self.main_window.state, 'sniff_regions_by_sweep'):
+            print("[gmm-dialog] No sniffing regions to clear")
+            return
+
+        # Clear all sniffing regions
+        self.main_window.state.sniff_regions_by_sweep.clear()
+
+        # Clear GMM probabilities as well
+        if hasattr(self.main_window.state, 'gmm_sniff_probabilities'):
+            self.main_window.state.gmm_sniff_probabilities.clear()
+
+        print("[gmm-dialog] Cleared all sniffing regions")
+
+        # Redraw main plot to remove purple markings
+        self.main_window.redraw_main_plot()
+
+    def _on_sniffing_application_toggled(self, checked):
+        """Handle toggling of the Apply Sniffing checkbox.
+
+        When checked: Apply sniffing detection to main plot immediately
+        When unchecked: Clear all sniffing regions from main plot
+        """
+        if checked:
+            # User wants to apply sniffing detection
+            # Only apply if we have GMM results
+            if self.cluster_labels is not None and self.sniffing_cluster_id is not None:
+                print("[gmm-dialog] Sniffing application enabled - applying to plot")
+                self._apply_sniffing_to_plot()
+            else:
+                print("[gmm-dialog] Sniffing application enabled, but no GMM results available yet")
+        else:
+            # User wants to remove sniffing detection
+            print("[gmm-dialog] Sniffing application disabled - clearing sniffing regions")
+            self._on_clear_sniffing_regions()
+
+    def _on_auto_update_gmm_toggled(self, checked):
+        """Handle toggling of the Auto-Update GMM checkbox.
+
+        Synchronizes the state with the main window so editing_modes can check it.
+        """
+        if hasattr(self.main_window, 'auto_gmm_enabled'):
+            self.main_window.auto_gmm_enabled = checked
+            status = "enabled" if checked else "disabled"
+            print(f"[gmm-dialog] Auto-Update GMM {status}")
+            self.main_window.statusBar().showMessage(f"Auto-Update GMM {status}", 2000)
+
+    def _apply_sniffing_to_plot(self):
+        """Apply sniffing regions to main plot (helper method called by toggle and auto-apply).
+
+        Uses the confidence threshold slider to determine which breaths to mark as sniffing.
+        """
+        import numpy as np
+
+        if self.sniffing_cluster_id is None:
+            print("[gmm-dialog] Cannot apply: no sniffing cluster identified")
+            return
+
+        # Get confidence threshold from slider
+        confidence_threshold = self.confidence_threshold_slider.value()
+        print(f"[gmm-dialog] Using confidence threshold: {confidence_threshold:.2f}")
+
+        # Store GMM probabilities for each breath (needed for GMM-based eupnea detection)
+        # Format: {sweep_idx: {breath_idx: sniffing_probability}}
+        if not hasattr(self.main_window.state, 'gmm_sniff_probabilities'):
+            self.main_window.state.gmm_sniff_probabilities = {}
+
+        for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
+            if sweep_idx not in self.main_window.state.gmm_sniff_probabilities:
+                self.main_window.state.gmm_sniff_probabilities[sweep_idx] = {}
+
+            # Get probability of being in sniffing cluster
+            sniff_prob = self.cluster_probabilities[i, self.sniffing_cluster_id]
+            self.main_window.state.gmm_sniff_probabilities[sweep_idx][breath_idx] = sniff_prob
+
+        # Collect sniffing breaths that meet confidence threshold
+        sniffing_breaths_by_sweep = {}  # sweep_idx -> list of breath indices
+        n_confident_sniffs = 0
+
+        for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
+            # Get sniffing probability for this breath
+            sniff_prob = self.cluster_probabilities[i, self.sniffing_cluster_id]
+
+            # Only classify as sniffing if probability exceeds threshold
+            if sniff_prob >= confidence_threshold:
+                n_confident_sniffs += 1
+
+                # Store the breath index (we'll convert to time ranges after merging)
+                if sweep_idx not in sniffing_breaths_by_sweep:
+                    sniffing_breaths_by_sweep[sweep_idx] = []
+                sniffing_breaths_by_sweep[sweep_idx].append(breath_idx)
+
+        # Clear existing sniffing regions first
+        if not hasattr(self.main_window.state, 'sniff_regions_by_sweep'):
+            self.main_window.state.sniff_regions_by_sweep = {}
+        self.main_window.state.sniff_regions_by_sweep.clear()
+
+        # Convert breath indices to merged time ranges
+        total_regions = 0
+        for sweep_idx, breath_indices in sniffing_breaths_by_sweep.items():
+            if not breath_indices:
+                continue
+
+            # Sort breath indices
+            breath_indices = sorted(breath_indices)
+
+            # Group consecutive breath indices into runs
+            # Example: [1, 2, 3, 7, 8, 12] -> [[1,2,3], [7,8], [12]]
+            runs = []
+            current_run = [breath_indices[0]]
+
+            for idx in breath_indices[1:]:
+                if idx == current_run[-1] + 1:  # Consecutive breath
+                    current_run.append(idx)
+                else:  # Gap in breath indices
+                    runs.append(current_run)
+                    current_run = [idx]
+            runs.append(current_run)  # Add the last run
+
+            # Convert each run to a time range
+            breath_data = self.main_window.state.breath_by_sweep.get(sweep_idx)
+            if breath_data is None:
+                continue
+
+            onsets = breath_data.get('onsets', np.array([]))
+            offsets = breath_data.get('offsets', np.array([]))
+            t = self.main_window.state.t
+
+            if sweep_idx not in self.main_window.state.sniff_regions_by_sweep:
+                self.main_window.state.sniff_regions_by_sweep[sweep_idx] = []
+
+            for run in runs:
+                # Start time = onset of first breath in run
+                first_breath = run[0]
+                last_breath = run[-1]
+
+                if first_breath >= len(onsets):
+                    continue
+
+                start_time = t[int(onsets[first_breath])]
+
+                # End time = offset of last breath in run
+                if last_breath < len(offsets):
+                    end_idx = int(offsets[last_breath])
+                else:
+                    # Fallback: use next onset or end of trace
+                    if last_breath + 1 < len(onsets):
+                        end_idx = int(onsets[last_breath + 1])
+                    else:
+                        end_idx = len(t) - 1
+
+                end_time = t[end_idx]
+
+                # Add merged region
+                self.main_window.state.sniff_regions_by_sweep[sweep_idx].append((start_time, end_time))
+                print(f"[gmm-dialog] Created merged region from breaths {run[0]}-{run[-1]}: {start_time:.3f} - {end_time:.3f} s")
+
+            total_regions += len(self.main_window.state.sniff_regions_by_sweep[sweep_idx])
+
+        # Redraw main plot to show sniffing regions
+        self.main_window.redraw_main_plot()
+
+        # Log results
+        n_total_sniff_cluster = np.sum(self.cluster_labels == self.sniffing_cluster_id)
+        print(f"[gmm-dialog] Total breaths in sniffing cluster: {n_total_sniff_cluster}")
+        print(f"[gmm-dialog] Breaths meeting confidence threshold ({confidence_threshold:.2f}): {n_confident_sniffs}")
+        print(f"[gmm-dialog] Applied {n_confident_sniffs} sniffing breaths across {len(sniffing_breaths_by_sweep)} sweep(s)")
+        print(f"[gmm-dialog] Created {total_regions} merged sniffing regions")
+
+    def _on_apply_variability(self):
+        """Re-plot waveforms with new variability mode and number of breaths without re-running GMM."""
+        import numpy as np
+
+        # Check if we have clustering results to plot
+        if self.cluster_labels is None or self.feature_data is None:
+            print("[gmm-dialog] No clustering results to re-plot")
+            return
+
+        # Get selected features from previous GMM run
+        # We need to reconstruct the feature list from cached results
+        if hasattr(self.main_window, '_cached_gmm_results') and self.main_window._cached_gmm_results is not None:
+            selected_features = self.main_window._cached_gmm_results['feature_keys']
+        else:
+            # Fallback: use currently selected features (may not match)
+            selected_features = [f for f, cb in self.feature_checkboxes.items() if cb.isChecked()]
+
+        # Determine which variability mode is selected
+        if self.minmax_radio.isChecked():
+            mode_name = "Min/Max"
+        elif self.std_radio.isChecked():
+            mode_name = "STD"
+        else:
+            mode_name = "SEM"
+
+        print(f"[gmm-dialog] Re-plotting with variability mode: {mode_name}, max breaths: {self.n_breaths_spin.value()}")
+
+        # Re-plot with current variability settings and number of breaths
+        self._plot_clusters(self.feature_data, self.cluster_labels, selected_features)
+
+        # Scroll to top after re-plotting
+        self.scroll_area.verticalScrollBar().setValue(0)
+
     def on_run_gmm(self):
         """Run GMM clustering on breath metrics."""
         from sklearn.mixture import GaussianMixture
@@ -398,11 +933,47 @@ class GMMClusteringDialog(QDialog):
             self.feature_data = feature_matrix
             self.breath_cycles = breath_cycles
 
-            # Check clustering quality
-            quality_warning = self._check_clustering_quality(feature_matrix_scaled, selected_features)
+            # Identify sniffing cluster (must be done before quality check to compute Cohen's d)
+            self._identify_sniffing_cluster(feature_matrix, selected_features, None)
 
-            # Identify sniffing cluster and assign colors
-            self._identify_sniffing_cluster(feature_matrix, selected_features, quality_warning)
+            # Check clustering quality and get metrics
+            quality_status, silhouette, cohens_d, quality_warning = self._check_clustering_quality(
+                feature_matrix_scaled, selected_features
+            )
+
+            # Update quality metrics display
+            self._update_quality_metrics_display(quality_status, silhouette, cohens_d)
+
+            # Handle quality status
+            if quality_status == "REJECT":
+                # Show rejection message
+                QMessageBox.critical(
+                    self,
+                    "Clustering Rejected - No Clear Separation",
+                    quality_warning
+                )
+                self.status_label.setText("❌ Clustering rejected - no clear sniffing pattern detected")
+                self.status_label.setStyleSheet("color: red; font-weight: bold;")
+
+                # Still show plots for inspection, but don't apply
+                self._update_results_table()
+                self._plot_clusters(feature_matrix, self.cluster_labels, selected_features)
+                self.scroll_area.verticalScrollBar().setValue(0)
+                return  # Don't auto-apply
+
+            elif quality_status == "WARNING":
+                # Show warning
+                self.had_quality_warning = True
+                from PyQt6.QtWidgets import QMessageBox
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Clustering Quality Warning")
+                msg.setIcon(QMessageBox.Icon.Warning)
+                msg.setText(quality_warning)
+                msg.setInformativeText("You can still explore the results, but be cautious about applying them to the plot.")
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg.exec()
+            else:
+                self.had_quality_warning = False
 
             # Update results table
             self._update_results_table()
@@ -413,7 +984,7 @@ class GMMClusteringDialog(QDialog):
             self.status_label.setText(f"✓ Clustering complete: {len(feature_matrix)} breaths classified into {n_clusters} clusters.")
             self.status_label.setStyleSheet("color: green; font-weight: bold;")
 
-            # Auto-apply results to main plot
+            # Auto-apply results to main plot (only if quality is good or user accepted warning)
             self._auto_apply_gmm_results()
 
             # Scroll to top after plotting
@@ -428,7 +999,11 @@ class GMMClusteringDialog(QDialog):
     def _check_clustering_quality(self, feature_matrix_scaled, feature_keys):
         """Check if clustering is meaningful (not just splitting homogeneous data).
 
-        Returns warning message if clustering quality is poor, None otherwise.
+        Returns: (status, silhouette, cohens_d, warning_message)
+            status: "REJECT", "WARNING", or "GOOD"
+            silhouette: float (-1 to 1)
+            cohens_d: float (0 to infinity)
+            warning_message: str or None
         """
         import numpy as np
         from sklearn.metrics import silhouette_score
@@ -440,20 +1015,100 @@ class GMMClusteringDialog(QDialog):
         else:
             silhouette = -1
 
-        print(f"[gmm-clustering] Silhouette score: {silhouette:.3f}")
+        # Calculate Cohen's d (effect size) for IF separation
+        cohens_d = 0.0
+        if_idx = feature_keys.index('if') if 'if' in feature_keys else None
 
-        # Warn if clusters are poorly separated
-        if silhouette < 0.25:
-            return (
-                f"⚠️ Low cluster separation (silhouette={silhouette:.3f}).\n\n"
-                "This suggests the breathing patterns are very similar.\n"
-                "The identified 'sniffing' cluster may just be normal variation,\n"
-                "not distinct sniffing behavior.\n\n"
-                "Consider: (1) using fewer clusters, or (2) this data may not\n"
-                "contain distinct sniffing bouts."
+        if if_idx is not None and self.sniffing_cluster_id is not None:
+            sniff_mask = self.cluster_labels == self.sniffing_cluster_id
+            eupnea_mask = ~sniff_mask
+
+            sniff_if = feature_matrix_scaled[sniff_mask, if_idx]
+            eupnea_if = feature_matrix_scaled[eupnea_mask, if_idx]
+
+            if len(sniff_if) > 0 and len(eupnea_if) > 0:
+                mean_diff = abs(np.mean(sniff_if) - np.mean(eupnea_if))
+                pooled_std = np.sqrt((np.var(sniff_if) + np.var(eupnea_if)) / 2)
+                cohens_d = mean_diff / pooled_std if pooled_std > 0 else 0
+
+        print(f"[gmm-clustering] Silhouette score: {silhouette:.3f}, Cohen's d: {cohens_d:.3f}")
+
+        # Quality decision logic
+        if silhouette < 0.15 and cohens_d < 0.5:
+            # REJECT: No clear separation
+            status = "REJECT"
+            warning = (
+                f"⚠️ **CLUSTERING REJECTED** ⚠️\n\n"
+                f"Silhouette score: {silhouette:.3f} (< 0.15)\n"
+                f"Effect size (Cohen's d): {cohens_d:.3f} (< 0.5)\n\n"
+                f"This suggests there is NO clear sniffing pattern in this data.\n"
+                f"GMM is forcing a split where none exists.\n\n"
+                f"**Possible reasons:**\n"
+                f"• This recording has no sniffing bouts\n"
+                f"• Baseline respiratory rate is too high to distinguish sniffing\n"
+                f"• All breathing is of similar pattern\n\n"
+                f"**Recommendation:** Do not apply these results to the plot."
             )
+        elif silhouette < 0.25 or cohens_d < 0.8:
+            # WARNING: Borderline separation
+            status = "WARNING"
+            warning = (
+                f"⚠️ Low cluster separation detected\n\n"
+                f"Silhouette score: {silhouette:.3f}\n"
+                f"Effect size (Cohen's d): {cohens_d:.3f}\n\n"
+                f"The breathing patterns are somewhat similar.\n"
+                f"The identified 'sniffing' cluster may just be normal variation,\n"
+                f"not distinct sniffing behavior.\n\n"
+                f"Consider reviewing the results carefully before applying."
+            )
+        else:
+            # GOOD: Clear separation
+            status = "GOOD"
+            warning = None
 
-        return None
+        return (status, silhouette, cohens_d, warning)
+
+    def _update_quality_metrics_display(self, quality_status, silhouette, cohens_d):
+        """Update the quality metrics display panel with current values."""
+        # Update silhouette label with color coding
+        silhouette_text = f"Silhouette: {silhouette:.3f}"
+        if silhouette >= 0.5:
+            silhouette_color = "#4CAF50"  # Green - excellent
+        elif silhouette >= 0.25:
+            silhouette_color = "#8BC34A"  # Light green - good
+        elif silhouette >= 0.15:
+            silhouette_color = "#FFC107"  # Orange - warning
+        else:
+            silhouette_color = "#F44336"  # Red - reject
+
+        self.silhouette_label.setText(silhouette_text)
+        self.silhouette_label.setStyleSheet(f"color: {silhouette_color}; font-weight: bold;")
+
+        # Update Cohen's d label with color coding
+        cohens_d_text = f"Cohen's d: {cohens_d:.3f}"
+        if cohens_d >= 0.8:
+            cohens_d_color = "#4CAF50"  # Green - large effect
+        elif cohens_d >= 0.5:
+            cohens_d_color = "#FFC107"  # Orange - medium effect
+        else:
+            cohens_d_color = "#F44336"  # Red - small effect
+
+        self.cohens_d_label.setText(cohens_d_text)
+        self.cohens_d_label.setStyleSheet(f"color: {cohens_d_color}; font-weight: bold;")
+
+        # Update quality verdict (compact)
+        if quality_status == "GOOD":
+            verdict_text = "✓ GOOD"
+            verdict_color = "#4CAF50"
+        elif quality_status == "WARNING":
+            verdict_text = "⚠ WARNING"
+            verdict_color = "#FFC107"
+        else:  # REJECT
+            verdict_text = "✗ REJECTED"
+            verdict_color = "#F44336"
+
+        self.quality_verdict_label.setText(verdict_text)
+        self.quality_verdict_label.setStyleSheet(f"color: {verdict_color}; font-weight: bold; font-size: 11pt;")
 
     def _identify_sniffing_cluster(self, feature_matrix, feature_keys, quality_warning=None):
         """Identify which cluster represents sniffing and assign colors.
@@ -571,19 +1226,7 @@ class GMMClusteringDialog(QDialog):
             stats_str = ", ".join([f"{k}={v:.3f}" for k, v in cluster_stats[cluster_id].items()])
             print(f"  Cluster {cluster_id}: {stats_str}, color={self.cluster_colors[cluster_id]}")
 
-        # Show warning if clustering quality is questionable
-        if quality_warning:
-            self.had_quality_warning = True
-            from PyQt6.QtWidgets import QMessageBox
-            msg = QMessageBox(self)
-            msg.setWindowTitle("Clustering Quality Warning")
-            msg.setIcon(QMessageBox.Icon.Warning)
-            msg.setText(quality_warning)
-            msg.setInformativeText("You can still explore the results, but be cautious about applying them to the plot.")
-            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-            msg.exec()
-        else:
-            self.had_quality_warning = False
+        # Note: Warning dialogs now handled in on_run_gmm() after quality check
 
     def _collect_breath_features(self, feature_keys):
         """Collect per-breath features from all analyzed sweeps."""
@@ -686,8 +1329,12 @@ class GMMClusteringDialog(QDialog):
         import numpy as np
         from PyQt6.QtWidgets import QTableWidgetItem
         from PyQt6.QtGui import QColor
+        from PyQt6.QtCore import Qt
 
         unique_clusters = np.unique(self.cluster_labels)
+
+        # Block signals while updating to prevent triggering itemChanged
+        self.results_table.blockSignals(True)
         self.results_table.setRowCount(len(unique_clusters))
 
         for i, cluster_id in enumerate(unique_clusters):
@@ -701,16 +1348,32 @@ class GMMClusteringDialog(QDialog):
             else:
                 avg_confidence = 1.0  # Perfect confidence if no probabilities
 
-            # Label with pattern type if identified
-            if cluster_id == self.sniffing_cluster_id:
+            # Determine label: custom label > default labeling
+            if cluster_id in self.cluster_custom_labels:
+                # Use custom label if user has edited it
+                label = self.cluster_custom_labels[cluster_id]
+            elif cluster_id == self.sniffing_cluster_id:
+                # Sniffing cluster
                 label = f"Cluster {cluster_id} (Sniffing)"
+            elif cluster_id == 0:
+                # Cluster 0 defaults to "Eupnea" (unless it's the sniffing cluster)
+                label = f"Cluster {cluster_id} (Eupnea)"
             else:
+                # Other clusters get generic label
                 label = f"Cluster {cluster_id}"
 
             cluster_item = QTableWidgetItem(label)
+            # Make cluster label editable
+            cluster_item.setFlags(cluster_item.flags() | Qt.ItemFlag.ItemIsEditable)
+
             count_item = QTableWidgetItem(str(count))
             pct_item = QTableWidgetItem(f"{percentage:.1f}%")
             conf_item = QTableWidgetItem(f"{avg_confidence:.3f}")
+
+            # Make other columns non-editable
+            count_item.setFlags(count_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            pct_item.setFlags(pct_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            conf_item.setFlags(conf_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
             # Color-code the row
             if cluster_id in self.cluster_colors:
@@ -732,6 +1395,44 @@ class GMMClusteringDialog(QDialog):
             self.results_table.setItem(i, 1, count_item)
             self.results_table.setItem(i, 2, pct_item)
             self.results_table.setItem(i, 3, conf_item)
+
+        # Re-enable signals after table is populated
+        self.results_table.blockSignals(False)
+
+        # Dynamically adjust table height to fit number of clusters (no scrolling needed)
+        # Calculate height: header + rows + some padding
+        row_height = self.results_table.rowHeight(0) if len(unique_clusters) > 0 else 30
+        header_height = self.results_table.horizontalHeader().height()
+        total_height = header_height + (row_height * len(unique_clusters)) + 5  # +5 for padding
+        self.results_table.setMaximumHeight(total_height)
+        self.results_table.setMinimumHeight(total_height)
+
+    def _on_table_item_changed(self, item):
+        """Handle user edits to cluster labels in the table."""
+        import numpy as np
+
+        # Only process edits to the first column (cluster labels)
+        if item.column() != 0:
+            return
+
+        # Get the cluster_id from the row index
+        row = item.row()
+        unique_clusters = np.unique(self.cluster_labels)
+
+        if row < len(unique_clusters):
+            cluster_id = unique_clusters[row]
+            new_label = item.text().strip()
+
+            if new_label:
+                # Store custom label
+                self.cluster_custom_labels[cluster_id] = new_label
+                print(f"[gmm-dialog] User set custom label for cluster {cluster_id}: '{new_label}'")
+            else:
+                # If user clears the label, remove custom label and revert to default
+                if cluster_id in self.cluster_custom_labels:
+                    del self.cluster_custom_labels[cluster_id]
+                # Refresh table to restore default label
+                self._update_results_table()
 
     def _plot_waveform_overlays(self, total_rows, max_cols, labels, colors):
         """Plot waveform overlays: Column 1 = mean +/- SEM waveforms, Column 2 = mean trajectory line plot."""
@@ -783,6 +1484,7 @@ class GMMClusteringDialog(QDialog):
 
                 onsets = breath_data.get('onsets', None)
                 expoffs = breath_data.get('expoffs', None)
+                expmins = breath_data.get('expmins', None)
                 if onsets is None or expoffs is None or len(onsets) == 0 or len(expoffs) == 0:
                     continue
 
@@ -819,31 +1521,94 @@ class GMMClusteringDialog(QDialog):
 
                 t = st.t
 
-                # Extract waveform from inspiratory onset to expiratory offset
-                start_idx = int(onsets[breath_i])
-                end_idx = int(expoffs[breath_i])
+                # Extract indices for breath cycle
+                onset_idx = int(onsets[breath_i])
+                expoff_idx = int(expoffs[breath_i])
 
+                # For waveform plot: onset -> expiratory offset
                 # Validate indices
-                if start_idx < 0 or end_idx >= len(y) or start_idx >= end_idx:
+                if onset_idx < 0 or expoff_idx >= len(y) or onset_idx >= expoff_idx:
                     continue
 
-                # Extract waveform segment (onset -> expoff)
-                waveform_t = t[start_idx:end_idx+1] - t[start_idx]  # Time relative to onset
-                waveform_y = y[start_idx:end_idx+1]
+                # Extract waveform segment (onset -> expoff) with t=0 at onset
+                waveform_t = t[onset_idx:expoff_idx+1] - t[onset_idx]  # Time relative to onset
+                waveform_y = y[onset_idx:expoff_idx+1]
 
-                # Compute first derivative for this segment
-                dt = 1.0 / st.sr_hz
-                waveform_dy = np.gradient(waveform_y, dt)
+                # Downsample waveform for faster computation (reduce to ~1/3rd of original sampling rate)
+                downsample_factor = 3
+                if len(waveform_y) > downsample_factor * 2:  # Only downsample if enough samples
+                    from scipy import signal
+                    waveform_y = signal.decimate(waveform_y, downsample_factor, zero_phase=True)
+                    waveform_t = waveform_t[::downsample_factor]  # Downsample time axis to match
+
+                # For trajectory plot: Find first derivative zero-crossing before onset, then extend to expoff
+                # Start by searching backwards from onset for derivative zero-crossing
+                trajectory_start_idx = onset_idx  # Default fallback
+
+                # Search backwards from onset (up to 100 samples or beginning of trace)
+                search_window = min(100, onset_idx)  # Don't search beyond trace start
+                if search_window > 10:  # Only search if we have enough samples
+                    # Compute derivative in the region before onset
+                    search_start = onset_idx - search_window
+                    y_before_onset = y[search_start:onset_idx]
+
+                    if len(y_before_onset) > 1:
+                        # Compute derivative using np.gradient
+                        dt_search = (t[onset_idx] - t[search_start]) / len(y_before_onset) if len(y_before_onset) > 1 else (1.0 / st.sr_hz)
+                        dy_before_onset = np.gradient(y_before_onset, dt_search)
+
+                        # Find zero-crossings: where derivative changes sign
+                        sign_changes = np.where(np.diff(np.sign(dy_before_onset)))[0]
+
+                        if len(sign_changes) > 0:
+                            # Use the LAST (most recent) zero-crossing before onset
+                            # sign_changes[-1] gives the index where sign changes, meaning zero is between i and i+1
+                            # Find which of these two points is closer to zero
+                            zero_crossing_idx = sign_changes[-1]
+
+                            # Check both points around the sign change
+                            if zero_crossing_idx + 1 < len(dy_before_onset):
+                                val_before = abs(dy_before_onset[zero_crossing_idx])
+                                val_after = abs(dy_before_onset[zero_crossing_idx + 1])
+                                # Use whichever is closer to zero
+                                if val_after < val_before:
+                                    zero_crossing_idx += 1
+
+                            # Convert to global index
+                            trajectory_start_idx = search_start + zero_crossing_idx
+
+                # End at current expiratory offset
+                trajectory_end_idx = expoff_idx
+
+                # Validate trajectory indices
+                if trajectory_start_idx < 0 or trajectory_end_idx >= len(y) or trajectory_start_idx >= trajectory_end_idx:
+                    # Fallback to onset -> expoff if invalid
+                    trajectory_start_idx = onset_idx
+                    trajectory_end_idx = expoff_idx
+
+                # Extract trajectory segment (derivative zero-crossing -> current expoff) with t=0 at current onset
+                trajectory_t = t[trajectory_start_idx:trajectory_end_idx+1] - t[onset_idx]
+                trajectory_y = y[trajectory_start_idx:trajectory_end_idx+1]
+
+                # Downsample trajectory for performance
+                if len(trajectory_y) > downsample_factor * 2:
+                    from scipy import signal
+                    trajectory_y = signal.decimate(trajectory_y, downsample_factor, zero_phase=True)
+                    trajectory_t = trajectory_t[::downsample_factor]
+
+                # Compute first derivative for trajectory (using downsampled data)
+                dt = trajectory_t[1] - trajectory_t[0] if len(trajectory_t) > 1 else (1.0 / st.sr_hz)
+                trajectory_dy = np.gradient(trajectory_y, dt)
 
                 # Add to appropriate cluster (limit to max_breaths)
                 if cluster_id == self.sniffing_cluster_id:
                     if len(sniffing_waveforms) < max_breaths:
                         sniffing_waveforms.append((waveform_t, waveform_y))
-                        sniffing_trajectories.append((waveform_y, waveform_dy))
+                        sniffing_trajectories.append((trajectory_y, trajectory_dy))
                 else:
                     if len(eupnea_waveforms) < max_breaths:
                         eupnea_waveforms.append((waveform_t, waveform_y))
-                        eupnea_trajectories.append((waveform_y, waveform_dy))
+                        eupnea_trajectories.append((trajectory_y, trajectory_dy))
 
         # ========================================
         # Column 1: Mean +/- SEM Waveforms (optional)
@@ -851,14 +1616,30 @@ class GMMClusteringDialog(QDialog):
         if plot_waveforms:
             ax1 = self.figure.add_subplot(total_rows, max_cols, 1)
 
-            # Helper function to pad waveforms to longest duration
-            def align_and_compute_stats(waveforms):
-                """Pad waveforms to longest duration, then compute mean +/- SEM."""
-                if len(waveforms) == 0:
-                    return None, None, None
+            # Helper function to pad waveforms to longest duration (preserving time alignment)
+            def align_and_compute_stats(waveforms, variability_mode='sem'):
+                """Pad waveforms to longest duration, then compute mean +/- variability.
+                Preserves time alignment where t=0 is at breath onset.
 
-                # Find longest duration
-                max_len = max(len(wf_t) for wf_t, wf_y in waveforms)
+                Args:
+                    waveforms: List of (time, signal) tuples
+                    variability_mode: One of 'sem', 'std', 'minmax'
+
+                Returns:
+                    t_common: Common time axis
+                    mean_wf: Mean waveform
+                    var_lower: Lower variability bound
+                    var_upper: Upper variability bound
+                """
+                if len(waveforms) == 0:
+                    return None, None, None, None
+
+                # Find the waveform with the longest duration
+                longest_wf_t, longest_wf_y = max(waveforms, key=lambda x: len(x[0]))
+                max_len = len(longest_wf_t)
+
+                # Use the time axis from the longest waveform (preserves t=0 alignment)
+                t_common = longest_wf_t
 
                 # Pad all waveforms to max_len with NaN
                 padded_signals = []
@@ -874,35 +1655,56 @@ class GMMClusteringDialog(QDialog):
                 # Stack and compute statistics (ignoring NaN)
                 wf_matrix = np.vstack(padded_signals)
                 mean_wf = np.nanmean(wf_matrix, axis=0)
-                sem_wf = np.nanstd(wf_matrix, axis=0) / np.sqrt(np.sum(~np.isnan(wf_matrix), axis=0))
 
-                # Create time axis matching the longest breath
-                dt = 1.0 / st.sr_hz
-                t_common = np.arange(max_len) * dt
+                if variability_mode == 'minmax':
+                    # Compute min and max across all waveforms
+                    var_lower = np.nanmin(wf_matrix, axis=0)
+                    var_upper = np.nanmax(wf_matrix, axis=0)
+                elif variability_mode == 'std':
+                    # Compute standard deviation
+                    std_wf = np.nanstd(wf_matrix, axis=0)
+                    var_lower = mean_wf - std_wf
+                    var_upper = mean_wf + std_wf
+                else:  # 'sem' (default)
+                    # Compute SEM
+                    sem_wf = np.nanstd(wf_matrix, axis=0) / np.sqrt(np.sum(~np.isnan(wf_matrix), axis=0))
+                    var_lower = mean_wf - sem_wf
+                    var_upper = mean_wf + sem_wf
 
-                return t_common, mean_wf, sem_wf
+                return t_common, mean_wf, var_lower, var_upper
 
-            # Plot eupnea mean +/- SEM (green)
+            # Check which variability mode is selected
+            if self.minmax_radio.isChecked():
+                variability_mode = 'minmax'
+                variability_label = "Min/Max"
+            elif self.std_radio.isChecked():
+                variability_mode = 'std'
+                variability_label = "STD"
+            else:
+                variability_mode = 'sem'
+                variability_label = "SEM"
+
+            # Plot eupnea mean +/- variability (green)
             if eupnea_waveforms:
-                t_eup, mean_eup, sem_eup = align_and_compute_stats(eupnea_waveforms)
+                t_eup, mean_eup, var_lower_eup, var_upper_eup = align_and_compute_stats(eupnea_waveforms, variability_mode=variability_mode)
                 if t_eup is not None:
                     ax1.plot(t_eup, mean_eup, color='green', linewidth=2.5,
                             label=f'Eupnea (n={len(eupnea_waveforms)})', alpha=0.9)
-                    ax1.fill_between(t_eup, mean_eup - sem_eup, mean_eup + sem_eup,
+                    ax1.fill_between(t_eup, var_lower_eup, var_upper_eup,
                                     color='green', alpha=0.25, linewidth=0)
 
-            # Plot sniffing mean +/- SEM (purple)
+            # Plot sniffing mean +/- variability (purple)
             if sniffing_waveforms:
-                t_snf, mean_snf, sem_snf = align_and_compute_stats(sniffing_waveforms)
+                t_snf, mean_snf, var_lower_snf, var_upper_snf = align_and_compute_stats(sniffing_waveforms, variability_mode=variability_mode)
                 if t_snf is not None:
                     ax1.plot(t_snf, mean_snf, color='purple', linewidth=2.5,
                             label=f'Sniffing (n={len(sniffing_waveforms)})', alpha=0.9)
-                    ax1.fill_between(t_snf, mean_snf - sem_snf, mean_snf + sem_snf,
+                    ax1.fill_between(t_snf, var_lower_snf, var_upper_snf,
                                     color='purple', alpha=0.25, linewidth=0)
 
             ax1.set_xlabel('Time from Onset (s)', fontsize=11, fontweight='bold')
             ax1.set_ylabel('Signal Amplitude', fontsize=11, fontweight='bold')
-            ax1.set_title('Mean +/- SEM Breath Waveforms', fontsize=12, fontweight='bold')
+            ax1.set_title(f'Mean +/- {variability_label} Breath Waveforms', fontsize=12, fontweight='bold')
             ax1.legend(loc='best', fontsize=10)
             ax1.grid(True, alpha=0.3)
             ax1.axhline(0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
@@ -921,11 +1723,21 @@ class GMMClusteringDialog(QDialog):
         if plot_waveforms:
             ax2 = self.figure.add_subplot(total_rows, max_cols, 2)
 
-            # Helper function to compute mean trajectory with SEM
-            def compute_mean_trajectory_with_sem(trajectories):
-                """Pad trajectories to longest, then compute mean +/- SEM."""
+            # Helper function to compute mean trajectory with variability
+            def compute_mean_trajectory_with_variability(trajectories, variability_mode='sem'):
+                """Pad trajectories to longest, then compute mean +/- variability.
+
+                Args:
+                    trajectories: List of (signal, derivative) tuples
+                    variability_mode: One of 'sem', 'std', 'minmax'
+
+                Returns:
+                    mean_sig, mean_deriv: Mean signal and derivative
+                    var_sig_lower, var_sig_upper: Lower and upper bounds for signal
+                    var_deriv_lower, var_deriv_upper: Lower and upper bounds for derivative
+                """
                 if len(trajectories) == 0:
-                    return None, None, None, None
+                    return None, None, None, None, None, None
 
                 # Find longest trajectory
                 max_len = max(len(sig) for sig, deriv in trajectories)
@@ -945,49 +1757,223 @@ class GMMClusteringDialog(QDialog):
                         padded_sigs.append(sig)
                         padded_derivs.append(deriv)
 
-                # Stack and compute mean +/- SEM (ignoring NaN)
+                # Stack and compute mean (ignoring NaN)
                 sig_matrix = np.vstack(padded_sigs)
                 deriv_matrix = np.vstack(padded_derivs)
                 mean_sig = np.nanmean(sig_matrix, axis=0)
                 mean_deriv = np.nanmean(deriv_matrix, axis=0)
-                sem_sig = np.nanstd(sig_matrix, axis=0) / np.sqrt(np.sum(~np.isnan(sig_matrix), axis=0))
-                sem_deriv = np.nanstd(deriv_matrix, axis=0) / np.sqrt(np.sum(~np.isnan(deriv_matrix), axis=0))
 
-                return mean_sig, mean_deriv, sem_sig, sem_deriv
+                if variability_mode == 'minmax':
+                    # Compute min/max
+                    var_sig_lower = np.nanmin(sig_matrix, axis=0)
+                    var_sig_upper = np.nanmax(sig_matrix, axis=0)
+                    var_deriv_lower = np.nanmin(deriv_matrix, axis=0)
+                    var_deriv_upper = np.nanmax(deriv_matrix, axis=0)
+                elif variability_mode == 'std':
+                    # Compute standard deviation
+                    std_sig = np.nanstd(sig_matrix, axis=0)
+                    std_deriv = np.nanstd(deriv_matrix, axis=0)
+                    var_sig_lower = mean_sig - std_sig
+                    var_sig_upper = mean_sig + std_sig
+                    var_deriv_lower = mean_deriv - std_deriv
+                    var_deriv_upper = mean_deriv + std_deriv
+                else:  # 'sem' (default)
+                    # Compute SEM
+                    sem_sig = np.nanstd(sig_matrix, axis=0) / np.sqrt(np.sum(~np.isnan(sig_matrix), axis=0))
+                    sem_deriv = np.nanstd(deriv_matrix, axis=0) / np.sqrt(np.sum(~np.isnan(deriv_matrix), axis=0))
+                    var_sig_lower = mean_sig - sem_sig
+                    var_sig_upper = mean_sig + sem_sig
+                    var_deriv_lower = mean_deriv - sem_deriv
+                    var_deriv_upper = mean_deriv + sem_deriv
 
-            # Plot mean trajectories as lines with SEM shading
+                return mean_sig, mean_deriv, var_sig_lower, var_sig_upper, var_deriv_lower, var_deriv_upper
+
+            # Helper function to calculate perpendicular box intersections with neighbor-aware clipping
+            def calculate_perpendicular_intersections(mean_sig, mean_deriv, sig_lower, sig_upper, deriv_lower, deriv_upper):
+                """Calculate boundary using perpendicular lines clipped by neighbors and box edges.
+
+                When neighboring perpendicular lines intersect before reaching their boxes,
+                use the intersection point instead to prevent crossing boundaries.
+
+                Args:
+                    mean_sig, mean_deriv: Mean trajectory coordinates
+                    sig_lower, sig_upper: X-axis (signal) error bounds
+                    deriv_lower, deriv_upper: Y-axis (derivative) error bounds
+
+                Returns:
+                    upper_points, lower_points: Lists of (x, y) tuples forming the boundary
+                """
+                # First pass: calculate perpendicular lines for all points
+                perp_lines = []  # List of dicts or None
+
+                for i in range(len(mean_sig)):
+                    # Skip NaN values
+                    if (np.isnan(mean_sig[i]) or np.isnan(mean_deriv[i]) or
+                        np.isnan(sig_lower[i]) or np.isnan(sig_upper[i]) or
+                        np.isnan(deriv_lower[i]) or np.isnan(deriv_upper[i])):
+                        perp_lines.append(None)
+                        continue
+
+                    # Calculate tangent vector
+                    if i < len(mean_sig) - 1:
+                        dx = mean_sig[i+1] - mean_sig[i]
+                        dy = mean_deriv[i+1] - mean_deriv[i]
+                    elif i > 0:
+                        dx = mean_sig[i] - mean_sig[i-1]
+                        dy = mean_deriv[i] - mean_deriv[i-1]
+                    else:
+                        perp_lines.append(None)
+                        continue
+
+                    # Normalize tangent
+                    length = np.sqrt(dx**2 + dy**2)
+                    if length < 1e-10:
+                        perp_lines.append(None)
+                        continue
+
+                    dx /= length
+                    dy /= length
+
+                    # Perpendicular vector (rotate 90 degrees)
+                    perp_x = -dy
+                    perp_y = dx
+
+                    perp_lines.append({
+                        'point': (mean_sig[i], mean_deriv[i]),
+                        'direction': (perp_x, perp_y),
+                        'box': (sig_lower[i], sig_upper[i], deriv_lower[i], deriv_upper[i])
+                    })
+
+                # Helper: find intersection between two perpendicular lines
+                def line_intersection(p1, d1, p2, d2):
+                    """Find intersection of two lines."""
+                    det = d1[0] * d2[1] - d1[1] * d2[0]
+                    if abs(det) < 1e-10:
+                        return None
+                    dp = (p2[0] - p1[0], p2[1] - p1[1])
+                    s = (dp[0] * d2[1] - dp[1] * d2[0]) / det
+                    return (p1[0] + s * d1[0], p1[1] + s * d1[1])
+
+                # Helper: find box intersections
+                def box_intersections(point, direction, box):
+                    box_left, box_right, box_bottom, box_top = box
+                    intersections = []
+                    perp_x, perp_y = direction
+                    px, py = point
+
+                    if abs(perp_x) > 1e-10:
+                        for x_edge in [box_left, box_right]:
+                            t = (x_edge - px) / perp_x
+                            y = py + t * perp_y
+                            if box_bottom <= y <= box_top:
+                                intersections.append((t, x_edge, y))
+
+                    if abs(perp_y) > 1e-10:
+                        for y_edge in [box_bottom, box_top]:
+                            t = (y_edge - py) / perp_y
+                            x = px + t * perp_x
+                            if box_left <= x <= box_right:
+                                intersections.append((t, x, y_edge))
+
+                    intersections.sort(key=lambda item: item[0])
+                    return intersections
+
+                # Second pass: calculate boundary points considering neighbors
+                upper_points = []
+                lower_points = []
+
+                for i, line_info in enumerate(perp_lines):
+                    if line_info is None:
+                        continue
+
+                    point = line_info['point']
+                    direction = line_info['direction']
+                    box = line_info['box']
+
+                    # Find box intersections
+                    box_ints = box_intersections(point, direction, box)
+                    if len(box_ints) < 2:
+                        upper_points.append((box[1], box[3]))
+                        lower_points.append((box[0], box[2]))
+                        continue
+
+                    lower_candidate = (box_ints[0][1], box_ints[0][2])
+                    upper_candidate = (box_ints[-1][1], box_ints[-1][2])
+
+                    # Check neighboring perpendiculars
+                    for neighbor_idx in [i-1, i+1]:
+                        if 0 <= neighbor_idx < len(perp_lines) and perp_lines[neighbor_idx] is not None:
+                            neighbor = perp_lines[neighbor_idx]
+                            isect = line_intersection(point, direction,
+                                                     neighbor['point'], neighbor['direction'])
+                            if isect is not None:
+                                # Use neighbor intersection if closer than box edge
+                                dist_isect = np.sqrt((isect[0]-point[0])**2 + (isect[1]-point[1])**2)
+                                dist_lower = np.sqrt((lower_candidate[0]-point[0])**2 + (lower_candidate[1]-point[1])**2)
+                                dist_upper = np.sqrt((upper_candidate[0]-point[0])**2 + (upper_candidate[1]-point[1])**2)
+
+                                if dist_isect < dist_lower:
+                                    lower_candidate = isect
+                                if dist_isect < dist_upper:
+                                    upper_candidate = isect
+
+                    lower_points.append(lower_candidate)
+                    upper_points.append(upper_candidate)
+
+                return upper_points, lower_points
+
+            # Plot mean trajectories as lines with variability shading (no markers)
             if eupnea_trajectories:
-                mean_sig_eup, mean_deriv_eup, sem_sig_eup, sem_deriv_eup = compute_mean_trajectory_with_sem(eupnea_trajectories)
-                if mean_sig_eup is not None:
-                    # Plot mean trajectory line
+                result = compute_mean_trajectory_with_variability(eupnea_trajectories, variability_mode=variability_mode)
+                if result[0] is not None:
+                    mean_sig_eup, mean_deriv_eup, sig_lower_eup, sig_upper_eup, deriv_lower_eup, deriv_upper_eup = result
+
+                    # Calculate perpendicular intersections
+                    upper_pts, lower_pts = calculate_perpendicular_intersections(
+                        mean_sig_eup, mean_deriv_eup, sig_lower_eup, sig_upper_eup, deriv_lower_eup, deriv_upper_eup
+                    )
+
+                    if len(upper_pts) > 0 and len(lower_pts) > 0:
+                        # Create polygon from upper points forward + lower points backward
+                        upper_x = [pt[0] for pt in upper_pts]
+                        upper_y = [pt[1] for pt in upper_pts]
+                        lower_x = [pt[0] for pt in lower_pts]
+                        lower_y = [pt[1] for pt in lower_pts]
+
+                        poly_x = upper_x + lower_x[::-1]
+                        poly_y = upper_y + lower_y[::-1]
+
+                        ax2.fill(poly_x, poly_y, color='green', alpha=0.15, linewidth=0)
+
+                    # Plot mean trajectory line (no markers, just line) - on top
                     ax2.plot(mean_sig_eup, mean_deriv_eup, color='green', linewidth=2.5,
-                            label=f'Eupnea Mean Trajectory', alpha=0.9, marker='o', markersize=2, markevery=5)
-                    # Add SEM as error bounds (create polygon for shaded region)
-                    # Upper bound: (sig + sem_sig, deriv + sem_deriv)
-                    # Lower bound: (sig - sem_sig, deriv - sem_deriv)
-                    sig_upper = mean_sig_eup + sem_sig_eup
-                    sig_lower = mean_sig_eup - sem_sig_eup
-                    deriv_upper = mean_deriv_eup + sem_deriv_eup
-                    deriv_lower = mean_deriv_eup - sem_deriv_eup
-                    # Create polygon vertices (forward path on upper, backward on lower)
-                    verts_x = np.concatenate([sig_upper, sig_lower[::-1]])
-                    verts_y = np.concatenate([deriv_upper, deriv_lower[::-1]])
-                    ax2.fill(verts_x, verts_y, color='green', alpha=0.15, linewidth=0)
+                            label=f'Eupnea Mean Trajectory', alpha=0.9, zorder=10)
 
             if sniffing_trajectories:
-                mean_sig_snf, mean_deriv_snf, sem_sig_snf, sem_deriv_snf = compute_mean_trajectory_with_sem(sniffing_trajectories)
-                if mean_sig_snf is not None:
-                    # Plot mean trajectory line
+                result = compute_mean_trajectory_with_variability(sniffing_trajectories, variability_mode=variability_mode)
+                if result[0] is not None:
+                    mean_sig_snf, mean_deriv_snf, sig_lower_snf, sig_upper_snf, deriv_lower_snf, deriv_upper_snf = result
+
+                    # Calculate perpendicular intersections
+                    upper_pts, lower_pts = calculate_perpendicular_intersections(
+                        mean_sig_snf, mean_deriv_snf, sig_lower_snf, sig_upper_snf, deriv_lower_snf, deriv_upper_snf
+                    )
+
+                    if len(upper_pts) > 0 and len(lower_pts) > 0:
+                        # Create polygon
+                        upper_x = [pt[0] for pt in upper_pts]
+                        upper_y = [pt[1] for pt in upper_pts]
+                        lower_x = [pt[0] for pt in lower_pts]
+                        lower_y = [pt[1] for pt in lower_pts]
+
+                        poly_x = upper_x + lower_x[::-1]
+                        poly_y = upper_y + lower_y[::-1]
+
+                        ax2.fill(poly_x, poly_y, color='purple', alpha=0.15, linewidth=0)
+
+                    # Plot mean trajectory line on top
                     ax2.plot(mean_sig_snf, mean_deriv_snf, color='purple', linewidth=2.5,
-                            label=f'Sniffing Mean Trajectory', alpha=0.9, marker='o', markersize=2, markevery=5)
-                    # Add SEM shading
-                    sig_upper = mean_sig_snf + sem_sig_snf
-                    sig_lower = mean_sig_snf - sem_sig_snf
-                    deriv_upper = mean_deriv_snf + sem_deriv_snf
-                    deriv_lower = mean_deriv_snf - sem_deriv_snf
-                    verts_x = np.concatenate([sig_upper, sig_lower[::-1]])
-                    verts_y = np.concatenate([deriv_upper, deriv_lower[::-1]])
-                    ax2.fill(verts_x, verts_y, color='purple', alpha=0.15, linewidth=0)
+                            label=f'Sniffing Mean Trajectory', alpha=0.9, zorder=10)
 
             ax2.set_xlabel('Signal Amplitude', fontsize=11, fontweight='bold')
             ax2.set_ylabel('First Derivative (dy/dt)', fontsize=11, fontweight='bold')
@@ -1173,7 +2159,11 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         msg.exec()
 
     def _auto_apply_gmm_results(self):
-        """Automatically apply GMM clustering results to main plot (called after successful GMM run)."""
+        """Automatically apply GMM clustering results to main plot (called after successful GMM run).
+
+        NOTE: This now only applies if the user has the "Apply Sniffing Detection" checkbox enabled.
+        If the checkbox is checked when GMM completes, sniffing regions will be applied automatically.
+        """
         import numpy as np
 
         if self.sniffing_cluster_id is None:
@@ -1190,84 +2180,17 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         self.main_window.eupnea_freq_threshold = self.freq_threshold_spin.value()
         self.main_window.eupnea_min_duration = self.min_duration_spin.value()
 
-        print(f"[gmm-dialog] Auto-applied eupnea detection mode: {selected_mode}")
-        print(f"[gmm-dialog] Frequency threshold: {self.main_window.eupnea_freq_threshold} Hz, Min duration: {self.main_window.eupnea_min_duration} s")
+        print(f"[gmm-dialog] Auto-apply: Eupnea detection mode: {selected_mode}")
+        print(f"[gmm-dialog] Auto-apply: Frequency threshold: {self.main_window.eupnea_freq_threshold} Hz, Min duration: {self.main_window.eupnea_min_duration} s")
 
-        # Store GMM probabilities for each breath (needed for GMM-based eupnea detection)
-        # Format: {sweep_idx: {breath_idx: sniffing_probability}}
-        if not hasattr(self.main_window.state, 'gmm_sniff_probabilities'):
-            self.main_window.state.gmm_sniff_probabilities = {}
-
-        for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
-            if sweep_idx not in self.main_window.state.gmm_sniff_probabilities:
-                self.main_window.state.gmm_sniff_probabilities[sweep_idx] = {}
-
-            # Get probability of being in sniffing cluster
-            sniff_prob = self.cluster_probabilities[i, self.sniffing_cluster_id]
-            self.main_window.state.gmm_sniff_probabilities[sweep_idx][breath_idx] = sniff_prob
-
-        # Collect all sniffing breaths
-        sniffing_regions_by_sweep = {}  # sweep_idx -> list of (start_time, end_time)
-
-        for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
-            cluster_id = self.cluster_labels[i]
-
-            if cluster_id == self.sniffing_cluster_id:
-                # This breath is sniffing - get its time range
-                breath_data = self.main_window.state.breath_by_sweep.get(sweep_idx)
-                if breath_data is None:
-                    continue
-
-                onsets = breath_data.get('onsets', np.array([]))
-                offsets = breath_data.get('offsets', np.array([]))
-
-                if breath_idx >= len(onsets):
-                    continue
-
-                # Get time range for this breath
-                t = self.main_window.state.t
-                start_time = t[int(onsets[breath_idx])]
-
-                # Offset for this breath (use expiratory offset if available)
-                if breath_idx < len(offsets):
-                    end_idx = int(offsets[breath_idx])
-                else:
-                    # Fallback: use next onset or end of trace
-                    if breath_idx + 1 < len(onsets):
-                        end_idx = int(onsets[breath_idx + 1])
-                    else:
-                        end_idx = len(t) - 1
-
-                end_time = t[end_idx]
-
-                # Add to sniffing regions for this sweep
-                if sweep_idx not in sniffing_regions_by_sweep:
-                    sniffing_regions_by_sweep[sweep_idx] = []
-                sniffing_regions_by_sweep[sweep_idx].append((start_time, end_time))
-
-        # Apply sniffing regions to main window state
-        total_regions = 0
-        for sweep_idx, regions in sniffing_regions_by_sweep.items():
-            if sweep_idx not in self.main_window.state.sniff_regions_by_sweep:
-                self.main_window.state.sniff_regions_by_sweep[sweep_idx] = []
-
-            # Add all regions
-            self.main_window.state.sniff_regions_by_sweep[sweep_idx].extend(regions)
-
-            # Merge overlapping/adjacent regions
-            self.main_window._merge_sniff_regions(sweep_idx)
-
-            total_regions += len(self.main_window.state.sniff_regions_by_sweep[sweep_idx])
-
-        # Redraw main plot to show sniffing regions AND eupnea (based on selected mode)
-        self.main_window.redraw_main_plot()
-
-        # Log results
-        n_sniffing_breaths = np.sum(self.cluster_labels == self.sniffing_cluster_id)
-        mode_msg = "GMM-based" if selected_mode == "gmm" else "Frequency-based"
-        print(f"[gmm-dialog] Auto-applied {n_sniffing_breaths} sniffing breaths across {len(sniffing_regions_by_sweep)} sweep(s)")
-        print(f"[gmm-dialog] Created {total_regions} merged sniffing regions")
-        print(f"[gmm-dialog] Eupnea detection mode: {mode_msg}")
+        # Only apply sniffing regions if the checkbox is enabled
+        if self.apply_sniffing_cb.isChecked():
+            print("[gmm-dialog] Auto-apply: Checkbox is enabled, applying sniffing regions")
+            self._apply_sniffing_to_plot()
+        else:
+            print("[gmm-dialog] Auto-apply: Checkbox is disabled, NOT applying sniffing regions")
+            # Just update eupnea mode, but don't apply sniffing
+            self.main_window.redraw_main_plot()
 
     def on_apply_to_plot(self):
         """Apply GMM clustering results to main plot by marking sniffing breaths."""
@@ -1323,56 +2246,76 @@ GMM is an unsupervised machine learning technique that automatically identifies 
             sniff_prob = self.cluster_probabilities[i, self.sniffing_cluster_id]
             self.main_window.state.gmm_sniff_probabilities[sweep_idx][breath_idx] = sniff_prob
 
-        # Collect all sniffing breaths
-        sniffing_regions_by_sweep = {}  # sweep_idx -> list of (start_time, end_time)
+        # Collect all sniffing breaths (just breath indices, not time ranges yet)
+        sniffing_breaths_by_sweep = {}  # sweep_idx -> list of breath indices
 
         for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
             cluster_id = self.cluster_labels[i]
 
             if cluster_id == self.sniffing_cluster_id:
-                # This breath is sniffing - get its time range
-                breath_data = self.main_window.state.breath_by_sweep.get(sweep_idx)
-                if breath_data is None:
+                # Store the breath index
+                if sweep_idx not in sniffing_breaths_by_sweep:
+                    sniffing_breaths_by_sweep[sweep_idx] = []
+                sniffing_breaths_by_sweep[sweep_idx].append(breath_idx)
+
+        # Convert breath indices to merged time ranges (merge consecutive breaths)
+        total_regions = 0
+        for sweep_idx, breath_indices in sniffing_breaths_by_sweep.items():
+            if not breath_indices:
+                continue
+
+            # Sort breath indices
+            breath_indices = sorted(breath_indices)
+
+            # Group consecutive breath indices into runs
+            runs = []
+            current_run = [breath_indices[0]]
+
+            for idx in breath_indices[1:]:
+                if idx == current_run[-1] + 1:  # Consecutive breath
+                    current_run.append(idx)
+                else:  # Gap in breath indices
+                    runs.append(current_run)
+                    current_run = [idx]
+            runs.append(current_run)  # Add the last run
+
+            # Convert each run to a time range
+            breath_data = self.main_window.state.breath_by_sweep.get(sweep_idx)
+            if breath_data is None:
+                continue
+
+            onsets = breath_data.get('onsets', np.array([]))
+            offsets = breath_data.get('offsets', np.array([]))
+            t = self.main_window.state.t
+
+            if sweep_idx not in self.main_window.state.sniff_regions_by_sweep:
+                self.main_window.state.sniff_regions_by_sweep[sweep_idx] = []
+
+            for run in runs:
+                # Start time = onset of first breath in run
+                first_breath = run[0]
+                last_breath = run[-1]
+
+                if first_breath >= len(onsets):
                     continue
 
-                onsets = breath_data.get('onsets', np.array([]))
-                offsets = breath_data.get('offsets', np.array([]))
+                start_time = t[int(onsets[first_breath])]
 
-                if breath_idx >= len(onsets):
-                    continue
-
-                # Get time range for this breath
-                t = self.main_window.state.t
-                start_time = t[int(onsets[breath_idx])]
-
-                # Offset for this breath (use expiratory offset if available)
-                if breath_idx < len(offsets):
-                    end_idx = int(offsets[breath_idx])
+                # End time = offset of last breath in run
+                if last_breath < len(offsets):
+                    end_idx = int(offsets[last_breath])
                 else:
                     # Fallback: use next onset or end of trace
-                    if breath_idx + 1 < len(onsets):
-                        end_idx = int(onsets[breath_idx + 1])
+                    if last_breath + 1 < len(onsets):
+                        end_idx = int(onsets[last_breath + 1])
                     else:
                         end_idx = len(t) - 1
 
                 end_time = t[end_idx]
 
-                # Add to sniffing regions for this sweep
-                if sweep_idx not in sniffing_regions_by_sweep:
-                    sniffing_regions_by_sweep[sweep_idx] = []
-                sniffing_regions_by_sweep[sweep_idx].append((start_time, end_time))
-
-        # Apply sniffing regions to main window state
-        total_regions = 0
-        for sweep_idx, regions in sniffing_regions_by_sweep.items():
-            if sweep_idx not in self.main_window.state.sniff_regions_by_sweep:
-                self.main_window.state.sniff_regions_by_sweep[sweep_idx] = []
-
-            # Add all regions
-            self.main_window.state.sniff_regions_by_sweep[sweep_idx].extend(regions)
-
-            # Merge overlapping/adjacent regions
-            self.main_window._merge_sniff_regions(sweep_idx)
+                # Add merged region
+                self.main_window.state.sniff_regions_by_sweep[sweep_idx].append((start_time, end_time))
+                print(f"[gmm-clustering] Created merged region from breaths {run[0]}-{run[-1]}: {start_time:.3f} - {end_time:.3f} s")
 
             total_regions += len(self.main_window.state.sniff_regions_by_sweep[sweep_idx])
 
@@ -1385,12 +2328,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         QMessageBox.information(
             self,
             "Applied to Plot",
-            f"Marked {n_sniffing_breaths} sniffing breaths across {len(sniffing_regions_by_sweep)} sweep(s).\n\n"
-            f"After merging adjacent regions: {total_regions} total sniffing region(s).\n\n"
+            f"Marked {n_sniffing_breaths} sniffing breaths across {len(sniffing_breaths_by_sweep)} sweep(s).\n\n"
+            f"After merging consecutive breaths: {total_regions} total sniffing region(s).\n\n"
             f"Purple background regions are now visible on the main plot.\n\n"
             f"Eupnea detection mode: {mode_msg}"
         )
 
         print(f"[gmm-clustering] Applied {n_sniffing_breaths} sniffing breaths to main plot")
-        print(f"[gmm-clustering] Created {total_regions} merged sniffing regions across {len(sniffing_regions_by_sweep)} sweeps")
+        print(f"[gmm-clustering] Created {total_regions} merged sniffing regions across {len(sniffing_breaths_by_sweep)} sweeps")
 

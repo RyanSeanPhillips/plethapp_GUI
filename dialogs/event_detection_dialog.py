@@ -151,7 +151,7 @@ class EventDetectionDialog(QDialog):
         checkboxes_layout.addWidget(self.snap_markers_check)
 
         self.show_labels_check = QCheckBox("Show labels")
-        self.show_labels_check.setChecked(True)
+        self.show_labels_check.setChecked(False)  # Default to OFF (Hargreaves mode overrides this)
         self.show_labels_check.setToolTip("Show time and duration labels on event markers")
         self.show_labels_check.stateChanged.connect(self.on_labels_changed)
         checkboxes_layout.addWidget(self.show_labels_check)
@@ -254,6 +254,7 @@ class EventDetectionDialog(QDialog):
             self.threshold_spin.setValue(0.5)
             self.min_duration_spin.setValue(0.050)
             self.min_gap_spin.setValue(1.0)
+            self.show_labels_check.setChecked(False)  # Labels OFF for Default mode
             print("[event-detection] Switched to Default mode")
 
     def on_licking_mode_selected(self, checked):
@@ -262,11 +263,13 @@ class EventDetectionDialog(QDialog):
             self.threshold_spin.setValue(0.5)
             self.min_duration_spin.setValue(0.050)
             self.min_gap_spin.setValue(1.0)
+            self.show_labels_check.setChecked(False)  # Labels OFF for Licking mode
             print("[event-detection] Switched to Licking mode")
 
     def on_hargreaves_mode_selected(self, checked):
         """Keep current parameters for Hargreaves mode."""
         if checked:
+            self.show_labels_check.setChecked(True)  # Labels ON for Hargreaves mode
             print("[event-detection] Switched to Hargreaves mode")
 
     def on_last_used_mode_selected(self, checked):

@@ -25,6 +25,17 @@ class PlotHost(QWidget):
         self.fig = plt.figure()
         self.canvas = FigureCanvas(self.fig)
 
+        # IMPORTANT: Connect our button handler BEFORE creating toolbar
+        # This ensures our handler is registered first and gets events before toolbar handlers
+        self._cid_scroll = self.canvas.mpl_connect('scroll_event', self._on_scroll)
+        self._cid_button = self.canvas.mpl_connect('button_press_event', self._on_button)
+
+        # Qt-level failsafe: Override mousePressEvent to ensure editing modes always work
+        # This provides a backup mechanism if matplotlib's callback chain is blocked
+        # Normally not needed, but provides robustness against edge cases
+        self._original_mouse_press = self.canvas.mousePressEvent
+        self.canvas.mousePressEvent = self._qt_mouse_press_override
+
         # Toolbar (clean, dark buttons, no bar background)
         self.toolbar = NavigationToolbar(self.canvas, self)
         self.toolbar.setObjectName("PlotNavToolbar")
@@ -70,6 +81,7 @@ class PlotHost(QWidget):
         #Continuious Breath metrics
         self.ax_y2 = None
         self.line_y2 = None
+        self.line_y2_secondary = None  # For second Y2 line (e.g., eupnea confidence)
 
         # Add mode for external click callback
         self._external_click_cb = None
@@ -99,9 +111,7 @@ class PlotHost(QWidget):
         self.scatter_peaks = None
         self._span_patches = []
 
-        # Interactions (optional helpers)
-        self._cid_scroll = self.canvas.mpl_connect('scroll_event', self._on_scroll)
-        self._cid_button = self.canvas.mpl_connect('button_press_event', self._on_button)
+        # Event connections already registered above (before toolbar creation)
 
     # ------- public API -------
     def set_preserve(self, x: bool = True, y: bool = False):
@@ -148,11 +158,21 @@ class PlotHost(QWidget):
             self._toolbar_callback()
 
     def _on_button(self, event):
-        if event.dblclick and event.inaxes is not None:
+        if event.inaxes is None:
+            return
+
+        # Double-click: autoscale (keep your behavior)
+        if event.dblclick:
             ax = event.inaxes
             ax.autoscale()
             self.canvas.draw_idle()
             self._store_from_axes(mode=("single" if len(self.fig.axes) == 1 else "grid"))
+            return
+
+        # Single-click (left or right): forward to external callback if present
+        # The Y2 axis has mouse events disabled, so clicks should only come from main axis
+        if self._external_click_cb is not None and event.xdata is not None:
+            self._external_click_cb(event.xdata, event.ydata, event)
 
     def _on_scroll(self, event):
         ax = event.inaxes
@@ -176,6 +196,55 @@ class PlotHost(QWidget):
 
         self.canvas.draw_idle()
         self._store_from_axes(mode=("single" if len(self.fig.axes) == 1 else "grid"))
+
+    def _qt_mouse_press_override(self, event):
+        """
+        Qt-level failsafe for editing mode clicks.
+
+        This override ensures editing modes (Mark Sniff, Add/Delete Peaks, etc.) continue
+        working even if matplotlib's callback chain is blocked by other handlers. It manually
+        converts click coordinates and calls our callback directly when an editing mode is active.
+
+        Normally not triggered since our matplotlib handler has priority, but provides robust
+        fallback behavior for edge cases.
+        """
+        # Always call the original handler first to let matplotlib/toolbar process normally
+        self._original_mouse_press(event)
+
+        # If we have an editing mode callback AND matplotlib didn't trigger our _on_button,
+        # manually convert coordinates and call our callback
+        if self._external_click_cb is not None and self.fig.axes:
+            try:
+                # Get click position in Qt coordinates
+                x_pixel = event.pos().x()
+                y_pixel = event.pos().y()
+
+                # Convert to display coordinates (matplotlib uses different origin)
+                # Get the figure's pixel dimensions
+                dpi = self.fig.dpi
+                fig_width, fig_height = self.fig.get_size_inches()
+                fig_height_pixels = fig_height * dpi
+
+                # Matplotlib has origin at bottom-left, Qt has origin at top-left
+                # Invert y coordinate
+                y_display = fig_height_pixels - y_pixel
+
+                # Try to find which axes contains this point and convert to data coordinates
+                for ax in self.fig.axes:
+                    # Check if click is within this axes
+                    bbox = ax.get_window_extent()
+                    if bbox.contains(x_pixel, y_display):
+                        # Convert display coordinates to data coordinates
+                        inv = ax.transData.inverted()
+                        x_data, y_data = inv.transform((x_pixel, y_display))
+
+                        # Call our callback directly
+                        self._external_click_cb(x_data, y_data, event)
+                        break
+
+            except Exception:
+                # Silently ignore conversion errors - matplotlib handler will catch valid clicks
+                pass
 
     # ------- remember/restore helpers -------
     def _attach_limit_listeners(self, axes, mode: str):
@@ -268,6 +337,12 @@ class PlotHost(QWidget):
         self.scatter_offsets = None
         self.scatter_expmins = None
 
+        # IMPORTANT: Clear Y2 axis references after fig.clear()
+        # This ensures that when Y2 is recreated, it properly sets up mouse event blocking
+        self.ax_y2 = None
+        self.line_y2 = None
+        self.line_y2_secondary = None
+
         # Plot main trace in black
         tds, yds = self._downsample_even(t, y, max_points=max_points if max_points else len(t))
         self.ax_main.plot(tds, yds, linewidth=0.9, color=PLETH_COLOR)
@@ -300,6 +375,10 @@ class PlotHost(QWidget):
         # Keep layout tight always
         self.fig.tight_layout()
         self.canvas.draw_idle()
+
+        # Update matplotlib toolbar's home view to current (maximized) limits
+        # This ensures the home button will always reset to the full x-axis view
+        self.toolbar.push_current()
 
 
 
@@ -370,6 +449,10 @@ class PlotHost(QWidget):
         self._attach_limit_listeners(axes, mode="grid")
         self._store_from_axes(mode="grid")
         self.canvas.draw_idle()
+
+        # Update matplotlib toolbar's home view to current (maximized) limits
+        # This ensures the home button will always reset to the full x-axis view
+        self.toolbar.push_current()
 
     # ------- Qt hook -------
     def resizeEvent(self, event):
@@ -535,6 +618,11 @@ class PlotHost(QWidget):
             self.line_y2 = None
             ax_y2 = self.ax_y2
 
+            # IMPORTANT: Disable mouse events on Y2 axis to prevent blocking clicks on main axis
+            # This allows editing modes (Mark Sniff, Add Peaks, etc.) to work when Y2 is displayed
+            ax_y2.set_navigate(False)  # Disable navigation (zoom/pan)
+            ax_y2.patch.set_visible(False)  # Make background transparent/non-interactive
+
         # optional downsample
         import numpy as np
         from math import ceil
@@ -569,14 +657,55 @@ class PlotHost(QWidget):
 
         self.canvas.draw_idle()
 
+    def add_or_update_y2_secondary(self, t, y2, color: str = "#2ecc71", max_points: int | None = None):
+        """Add a secondary line to the Y2 axis (for combined plotting like eupnea+sniffing confidence)."""
+        if not self.fig.axes or self.ax_y2 is None:
+            return
 
+        # Ensure Y2 axis exists (should be created by add_or_update_y2)
+        ax_y2 = self.ax_y2
+
+        # optional downsample
+        import numpy as np
+        from math import ceil
+        def _down(t_, y_, m):
+            if m is None or m <= 0 or len(t_) <= m:
+                return t_, y_
+            step = max(1, ceil(len(t_) / m))
+            return t_[::step], y_[::step]
+
+        tds, yds = _down(np.asarray(t), np.asarray(y2),
+                        max_points if max_points else len(t))
+
+        line_y2_sec = getattr(self, "line_y2_secondary", None)
+        if line_y2_sec is None or line_y2_sec.axes is not ax_y2:
+            (self.line_y2_secondary,) = ax_y2.plot(tds, yds, linewidth=1.2, alpha=0.95, color=color, zorder=6)
+            # Add white outline for visibility
+            try:
+                import matplotlib.patheffects as pe
+                self.line_y2_secondary.set_path_effects([pe.Stroke(linewidth=2.0, foreground="white"), pe.Normal()])
+            except Exception:
+                pass
+        else:
+            self.line_y2_secondary.set_data(tds, yds)
+            self.line_y2_secondary.set_color(color)
+
+        # Rescale Y2 to accommodate both lines
+        ax_y2.relim()
+        ax_y2.autoscale_view()
+
+        self.canvas.draw_idle()
 
     def clear_y2(self):
-        """Remove the Y2 axis/line if present."""
+        """Remove the Y2 axis/line(s) if present."""
         if self.line_y2 is not None:
             try: self.line_y2.remove()
             except Exception: pass
             self.line_y2 = None
+        if self.line_y2_secondary is not None:
+            try: self.line_y2_secondary.remove()
+            except Exception: pass
+            self.line_y2_secondary = None
         if self.ax_y2 is not None:
             try: self.ax_y2.remove()
             except Exception: pass
@@ -779,7 +908,7 @@ class PlotHost(QWidget):
         # Add outlier regions (orange background) - full height, visible rectangles
         if outlier_mask is not None and len(outlier_mask) == len(t):
             outlier_regions = self._extract_regions(t, outlier_mask)
-            print(f"Debug: Found {len(outlier_regions)} outlier regions")
+            # Debug: print(f"Found {len(outlier_regions)} outlier regions")
             for start_t, end_t in outlier_regions:
                 width = end_t - start_t
                 # Ensure minimum width for visibility (0.1 seconds)
@@ -787,7 +916,8 @@ class PlotHost(QWidget):
                     mid = (start_t + end_t) / 2
                     start_t = mid - 0.05
                     end_t = mid + 0.05
-                print(f"  Outlier region: {start_t:.3f} to {end_t:.3f} (width={end_t-start_t:.3f}s)")
+                # Outlier region visualization (debug: uncomment to see timing)
+                # print(f"  Outlier region: {start_t:.3f} to {end_t:.3f} (width={end_t-start_t:.3f}s)")
                 # Full-height rectangle with orange color
                 span = self.ax_main.axvspan(start_t, end_t,
                                           color='#FFA500', alpha=0.25,

@@ -10,9 +10,10 @@ scikit-learn>=1.0.0  # For GMM breath clustering
 # Plotting
 matplotlib>=3.6.0
 
-# ABF file handling (if using neo or pyabf)
+# File format loaders
 # neo>=0.12.0  # Uncomment if using neo for ABF files
-# pyabf>=2.3.0  # Uncomment if using pyabf for ABF files
+pyabf>=2.3.0  # For ABF file support
+pyedflib>=0.1.30  # For EDF/EDF+ file support (requires numpy<2.0)
 
 # Additional dependencies that may be needed
 pathlib2>=2.3.0  # For older Python compatibility (optional)

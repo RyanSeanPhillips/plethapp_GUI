@@ -895,56 +895,6 @@ def compute_max_dexp(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None)
 ##### Eupnic Breathing Detection
 ################################################################################
 
-def _sliding_window_cv(signal: np.ndarray, t: np.ndarray, window_sec: float) -> np.ndarray:
-    """
-    Compute coefficient of variation (CV = std/mean) efficiently using scipy.ndimage.
-    Falls back to simple decimation if scipy not available.
-    Returns array same length as signal with CV at each point.
-    """
-    N = len(signal)
-    cv = np.full(N, np.nan, dtype=float)
-
-    if N < 2 or window_sec <= 0:
-        return cv
-
-    # For efficiency with large datasets, use a decimated approach
-    # Sample every ~0.1 seconds instead of every sample
-    dt_mean = np.mean(np.diff(t)) if len(t) > 1 else 1.0
-    decimate_factor = max(1, int(0.1 / dt_mean))  # Sample every ~0.1s
-
-    # Create decimated indices
-    indices = np.arange(0, N, decimate_factor)
-    if indices[-1] != N - 1:
-        indices = np.append(indices, N - 1)  # Always include last point
-
-    window_samples = max(2, int(window_sec / dt_mean))
-    half_window = window_samples // 2
-
-    # Compute CV only at decimated points
-    for idx in indices:
-        start = max(0, idx - half_window)
-        end = min(N, idx + half_window + 1)
-
-        window_data = signal[start:end]
-        valid_data = window_data[~np.isnan(window_data)]
-
-        if len(valid_data) >= 3:  # Need at least 3 points for meaningful CV
-            mean_val = np.mean(valid_data)
-            std_val = np.std(valid_data, ddof=1)
-            if mean_val > 0:
-                cv[idx] = std_val / mean_val
-
-    # Forward-fill CV values between computed points
-    last_valid = np.nan
-    for i in range(N):
-        if not np.isnan(cv[i]):
-            last_valid = cv[i]
-        elif not np.isnan(last_valid):
-            cv[i] = last_valid
-
-    return cv
-
-
 def _merge_nearby_regions(mask: np.ndarray, t: np.ndarray, max_gap_sec: float = 0.5) -> np.ndarray:
     """
     Merge nearby True regions in a boolean mask if gaps are smaller than max_gap_sec.
@@ -1033,9 +983,13 @@ def detect_eupnic_regions(
     Detect regions of eupnic (normal, regular) breathing.
 
     Simplified eupnic breathing criteria:
-    - Respiratory rate below freq_threshold_hz
-    - Sustained for at least 2 seconds
+    - Respiratory rate below freq_threshold_hz (default: 5 Hz)
+    - Sustained for at least min_duration_sec (default: 2 seconds)
     - Excluded from sniffing regions (if provided)
+
+    NOTE: This is a FALLBACK method used when GMM-based detection is unavailable.
+    The default detection mode is GMM-based (eupnea_detection_mode = "gmm").
+    This frequency-based method does NOT use coefficient of variation (CV).
 
     Args:
         sniff_regions: List of (start_time, end_time) tuples marking sniffing bouts
@@ -1279,7 +1233,7 @@ def compute_area_exp_debug(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs
     return result
 
 # Set this to True to enable detailed diagnostic output for Te and area_exp
-ENABLE_DEBUG_OUTPUT = True
+ENABLE_DEBUG_OUTPUT = False
 
 # Registry: key -> function
 METRICS: Dict[str, Callable] = {

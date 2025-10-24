@@ -11,6 +11,7 @@ def load_data_file(path: Path, progress_callback=None) -> Tuple[float, Dict[str,
     Supported formats:
     - .abf: Axon Binary Format (pyabf)
     - .smrx: Son64 format (CED Spike2) via Python 3.9 bridge
+    - .edf: European Data Format (pyedflib)
 
     Returns (sr_hz, sweeps_by_channel, channel_names, t)
     sweeps_by_channel[channel] -> 2D array (n_samples, n_sweeps)
@@ -25,8 +26,11 @@ def load_data_file(path: Path, progress_callback=None) -> Tuple[float, Dict[str,
     elif suffix == '.smrx':
         from core.io.son64_loader import load_son64
         return load_son64(str(path), progress_callback)
+    elif suffix == '.edf':
+        from core.io.edf_loader import load_edf
+        return load_edf(path, progress_callback)
     else:
-        raise ValueError(f"Unsupported file format: {suffix}\nSupported formats: .abf, .smrx")
+        raise ValueError(f"Unsupported file format: {suffix}\nSupported formats: .abf, .smrx, .edf")
 
 
 def load_abf(path: Path, progress_callback=None) -> Tuple[float, Dict[str, np.ndarray], List[str], np.ndarray]:
@@ -130,7 +134,7 @@ def validate_files_for_concatenation(file_paths: List[Path]) -> Tuple[bool, List
     # Check all files are same type
     extensions = set(path.suffix.lower() for path in file_paths)
     if len(extensions) > 1:
-        errors.append(f"Mixed file types detected: {', '.join(extensions)}. All files must be same type (.abf or .smrx).")
+        errors.append(f"Mixed file types detected: {', '.join(extensions)}. All files must be same type (.abf, .smrx, or .edf).")
         return False, errors
 
     file_type = extensions.pop()
@@ -156,6 +160,11 @@ def validate_files_for_concatenation(file_paths: List[Path]) -> Tuple[bool, List
             # For SMRX files, we'd need to partially load them to get metadata
             # For now, we'll handle this more gracefully in the concatenation function
             errors.append("Multi-file concatenation for .smrx files not yet implemented.")
+            return False, errors
+        elif file_type == '.edf':
+            # For EDF files, we'd need to partially load them to get metadata
+            # For now, we'll handle this more gracefully in the concatenation function
+            errors.append("Multi-file concatenation for .edf files not yet implemented.")
             return False, errors
         else:
             errors.append(f"Unsupported file type: {file_type}")

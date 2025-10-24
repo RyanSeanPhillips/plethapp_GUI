@@ -43,6 +43,10 @@ dev_testing/
 lib/
 examples/
 
+# Profiling results
+profiling_results/
+*.lprof
+
 # Ignore any folder literally named 'old' or 'images' anywhere
 **/old/**
 **/images/**

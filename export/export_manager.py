@@ -17,6 +17,15 @@ from PyQt6.QtCore import Qt
 from core import metrics
 from dialogs import SaveMetaDialog
 
+# Enable line profiling when running with kernprof -l
+# Otherwise, @profile decorator is a no-op (zero overhead)
+try:
+    profile  # Check if already defined by kernprof
+except NameError:
+    def profile(func):
+        """No-op decorator when not profiling."""
+        return func
+
 
 class ExportManager:
     """Manages all data export operations for the main window."""
@@ -32,6 +41,35 @@ class ExportManager:
             main_window: Reference to MainWindow instance
         """
         self.window = main_window
+
+    def _is_breath_sniffing(self, sweep_idx, breath_idx, onsets):
+        """
+        Check if a breath is marked as sniffing based on GMM results.
+        Simple approach: Check if breath midpoint falls in any sniffing region.
+
+        Args:
+            sweep_idx: Sweep index
+            breath_idx: Breath index (0-based)
+            onsets: Array of onset indices
+
+        Returns:
+            True if breath is in a sniffing region, False otherwise
+        """
+        st = self.window.state
+        sniff_regions = st.sniff_regions_by_sweep.get(sweep_idx, [])
+        if not sniff_regions or breath_idx >= len(onsets) - 1:
+            return False
+
+        # Get breath time range (onset to next onset)
+        t_start = st.t[onsets[breath_idx]]
+        t_end = st.t[onsets[breath_idx + 1]]
+        t_mid = (t_start + t_end) / 2.0
+
+        # Check if midpoint falls in any sniffing region
+        for (region_start, region_end) in sniff_regions:
+            if region_start <= t_mid <= region_end:
+                return True
+        return False
 
     def _show_message_box(self, icon, title, text, parent=None):
         """
@@ -223,6 +261,22 @@ class ExportManager:
         from PyQt6.QtWidgets import QProgressDialog, QApplication
         from PyQt6.QtCore import Qt
 
+        t_start = time.time()
+        self.window._log_status_message("Preparing data export...")
+
+        # If eupnea/sniffing detection is out of date, auto-update first
+        if getattr(self.window, 'eupnea_sniffing_out_of_date', False):
+            print("[Save Data] Eupnea/sniffing detection out of date - auto-updating...")
+            self.window._log_status_message("Updating eupnea/sniffing detection...")
+            QApplication.processEvents()
+            self.window._run_automatic_gmm_clustering()
+            self.window.eupnea_sniffing_out_of_date = False
+            self.window.redraw_main_plot()
+            # Clear the persistent warning
+            self.window.statusBar().clearMessage()
+            print("[Save Data] Eupnea/sniffing detection updated")
+            self.window._log_status_message("Preparing data export...")
+
         # Create progress dialog
         progress = QProgressDialog("Preparing data export...", None, 0, 100, self.window)
         progress.setWindowTitle("PlethAnalysis")
@@ -233,6 +287,13 @@ class ExportManager:
 
         try:
             self._export_all_analyzed_data(preview_only=False, progress_dialog=progress)
+            # Show completion message with elapsed time
+            t_elapsed = time.time() - t_start
+            self.window._log_status_message(f"✓ Data export complete ({t_elapsed:.1f}s)", 3000)
+        except Exception as e:
+            t_elapsed = time.time() - t_start
+            self.window._log_status_message(f"✗ Data export failed ({t_elapsed:.1f}s)", 3000)
+            raise
         finally:
             progress.close()
 
@@ -241,6 +302,23 @@ class ExportManager:
         """Display interactive preview of the PDF summary without saving."""
         from PyQt6.QtWidgets import QProgressDialog, QApplication
         from PyQt6.QtCore import Qt
+
+        t_start = time.time()
+        self._preview_start_time = t_start  # Store for use in preview dialog methods
+        self.window._log_status_message("Generating summary...")
+
+        # If eupnea/sniffing detection is out of date, auto-update first
+        if getattr(self.window, 'eupnea_sniffing_out_of_date', False):
+            print("[View Summary] Eupnea/sniffing detection out of date - auto-updating...")
+            self.window._log_status_message("Updating eupnea/sniffing detection...")
+            QApplication.processEvents()
+            self.window._run_automatic_gmm_clustering()
+            self.window.eupnea_sniffing_out_of_date = False
+            self.window.redraw_main_plot()
+            # Clear the persistent warning
+            self.window.statusBar().clearMessage()
+            print("[View Summary] Eupnea/sniffing detection updated")
+            self.window._log_status_message("Generating summary...")
 
         # Create progress dialog
         progress = QProgressDialog("Generating summary preview...", None, 0, 100, self.window)
@@ -252,6 +330,11 @@ class ExportManager:
 
         try:
             self._export_all_analyzed_data(preview_only=True, progress_dialog=progress)
+            # Timing message is shown when dialog appears, not when user closes it
+        except Exception as e:
+            t_elapsed = time.time() - t_start
+            self.window._log_status_message(f"✗ Summary failed ({t_elapsed:.1f}s)", 3000)
+            raise
         finally:
             progress.close()
 
@@ -383,6 +466,7 @@ class ExportManager:
 
 
 
+    @profile
     def _export_all_analyzed_data(self, preview_only=False, progress_dialog=None):
         """
         Exports (or previews) analyzed data.
@@ -540,9 +624,21 @@ class ExportManager:
             export_strategy = self._get_export_strategy(experiment_type)
             print(f"[export] Using strategy: {export_strategy.get_strategy_name()}")
 
-            # Check for duplicate files before saving
+            # Extract file export flags from dialog
+            save_npz = vals.get("save_npz", True)  # Always True
+            save_timeseries_csv = vals.get("save_timeseries_csv", True)
+            save_breaths_csv = vals.get("save_breaths_csv", True)
+            save_events_csv = vals.get("save_events_csv", True)
+            save_pdf = vals.get("save_pdf", True)
+
+            # Check for duplicate files before saving (only check files that will be saved)
             existing_files = []
-            expected_suffixes = ["_bundle.npz", "_means_by_time.csv", "_breaths.csv", "_events.csv", "_summary.pdf"]
+            expected_suffixes = []
+            if save_npz: expected_suffixes.append("_bundle.npz")
+            if save_timeseries_csv: expected_suffixes.append("_means_by_time.csv")
+            if save_breaths_csv: expected_suffixes.append("_breaths.csv")
+            if save_events_csv: expected_suffixes.append("_events.csv")
+            if save_pdf: expected_suffixes.append("_summary.pdf")
             for suffix in expected_suffixes:
                 filepath = final_dir / (suggested + suffix)
                 if filepath.exists():
@@ -620,6 +716,11 @@ class ExportManager:
         all_keys     = self._metric_keys_in_order()
         Y_proc_ds    = np.full((M, S), np.nan, dtype=float)
         y2_ds_by_key = {k: np.full((M, S), np.nan, dtype=float) for k in all_keys}
+
+        # Eupnea masks cached and stored for interval plotting (NOT used for normalization)
+        # Normalization uses GMM sniff regions directly (much faster)
+        self._eupnea_masks_cache = {}  # Instance variable for caching across export sections
+        eupnea_masks_by_sweep = {}     # Local dict for PDF interval overlays
 
         peaks_by_sweep, on_by_sweep, off_by_sweep, exm_by_sweep, exo_by_sweep = [], [], [], [], []
         sigh_by_sweep = []
@@ -847,49 +948,38 @@ class ExportManager:
             y2_ds_by_key_norm_eupnea = {}
             eupnea_baseline_by_key = {}
 
-            # Get thresholds from UI
-            eupnea_thresh = self.window.eupnea_freq_threshold  # Hz
-            apnea_thresh = self.window._parse_float(self.window.ApneaThresh) or 0.5    # seconds
-
-            # Pre-compute eupnea masks once per sweep
+            # Pre-populate eupnea masks cache for all kept sweeps
             print(f"[CSV-time] Pre-computing eupnea masks for {len(kept_sweeps)} sweeps...")
-            eupnea_masks_csv = {}
             for s in kept_sweeps:
-                y_proc = self.window._get_processed_for(st.analyze_chan, s)
-                pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-                br = st.breath_by_sweep.get(s, None)
-                if br is None and pks.size:
-                    br = peakdet.compute_breath_events(y_proc, pks, st.sr_hz)
-                    st.breath_by_sweep[s] = br
-                if br is None:
-                    continue
+                if s not in self._eupnea_masks_cache:
+                    y_proc = self.window._get_processed_for(st.analyze_chan, s)
+                    # Use GMM-based eupnea detection if available, otherwise use traditional method
+                    if hasattr(st, 'gmm_sniff_probabilities') and s in st.gmm_sniff_probabilities:
+                        eupnea_mask = self.window._compute_eupnea_from_gmm(s, len(y_proc))
+                    else:
+                        eupnea_mask = metrics.detect_eupnic_regions(
+                            y_proc, st.sr_hz, freq_hz_thresh=5.0, duration_s_thresh=2.0
+                        )
+                    self._eupnea_masks_cache[s] = eupnea_mask
 
-                on = np.asarray(br.get("onsets", []), dtype=int)
-                off = np.asarray(br.get("offsets", []), dtype=int)
-                expmins = np.asarray(br.get("expmins", []), dtype=int)
-                expoffs = np.asarray(br.get("expoffs", []), dtype=int)
-
-                if on.size >= 2:
-                    # Get sniff regions for this sweep
-                    sniff_regions = self.window.state.sniff_regions_by_sweep.get(s, [])
-                    eupnea_mask = metrics.detect_eupnic_regions(
-                        st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
-                        freq_threshold_hz=eupnea_thresh,
-                        min_duration_sec=self.window.eupnea_min_duration,
-                        sniff_regions=sniff_regions
-                    )
-                    eupnea_masks_csv[s] = eupnea_mask
-
-            # Compute baselines by extracting from y2_ds_by_key matrices
+            # Compute baselines by extracting from y2_ds_by_key matrices (using pre-computed cache)
             # OPTIMIZATION: Build index mapping once instead of calling argmin repeatedly
             print(f"[CSV-time] Computing eupnea baselines for {len(keys_for_csv)} metrics...")
 
             # Pre-compute mapping from downsampled indices to original indices
+            # MEMORY-EFFICIENT: Use searchsorted instead of creating huge distance matrix
             t0 = float(global_s0) if have_global_stim else 0.0
-            ds_to_orig_idx = np.zeros(len(t_ds_csv), dtype=int)
-            for ds_idx in range(len(t_ds_csv)):
-                t_target = t_ds_csv[ds_idx] + t0
-                ds_to_orig_idx[ds_idx] = np.argmin(np.abs(st.t - t_target))
+            t_targets = t_ds_csv + t0  # Shape: (len(t_ds_csv),)
+
+            # Use searchsorted for O(log n) lookups without memory overhead
+            # This finds the insertion point for each target, then we check neighbors
+            insert_idx = np.searchsorted(st.t, t_targets)
+            insert_idx = np.clip(insert_idx, 1, len(st.t) - 1)  # Ensure valid range for neighbor check
+
+            # Check if left or right neighbor is closer
+            left_dist = np.abs(st.t[insert_idx - 1] - t_targets)
+            right_dist = np.abs(st.t[insert_idx] - t_targets)
+            ds_to_orig_idx = np.where(left_dist < right_dist, insert_idx - 1, insert_idx)
 
             # Identify baseline indices (t < 0)
             baseline_ds_mask = t_ds_csv < 0
@@ -906,7 +996,7 @@ class ExportManager:
 
                 # Collect eupneic baseline values from downsampled data
                 for col_idx, s in enumerate(kept_sweeps):
-                    eupnea_mask = eupnea_masks_csv.get(s, None)
+                    eupnea_mask = self._eupnea_masks_cache.get(s, None)
                     if eupnea_mask is None:
                         continue
 
@@ -923,7 +1013,7 @@ class ExportManager:
                 # Fallback: include post-stim eupneic periods if insufficient
                 if len(pooled_vals) < 10:
                     for col_idx, s in enumerate(kept_sweeps):
-                        eupnea_mask = eupnea_masks_csv.get(s, None)
+                        eupnea_mask = self._eupnea_masks_cache.get(s, None)
                         if eupnea_mask is None:
                             continue
 
@@ -1004,15 +1094,19 @@ class ExportManager:
                     data[f'{k}_norm_eupnea_mean'] = means_e
                     data[f'{k}_norm_eupnea_sem'] = sems_e
 
-                # Create DataFrame and write to CSV
+                # Create DataFrame and optionally write to CSV
                 df = pd.DataFrame(data, columns=header)
-                df.to_csv(csv_time_path, index=False, float_format='%.9g', na_rep='')
+                if save_timeseries_csv:
+                    df.to_csv(csv_time_path, index=False, float_format='%.9g', na_rep='')
 
             finally:
                 self.window.unsetCursor()
 
             t_elapsed = time.time() - t_start
-            print(f"[CSV] ✓ Time-series data written in {t_elapsed:.2f}s")
+            if save_timeseries_csv:
+                print(f"[CSV] ✓ Time-series data written in {t_elapsed:.2f}s")
+            else:
+                print(f"[CSV] ⊘ Time-series CSV skipped (computed in {t_elapsed:.2f}s)")
 
             # Save enhanced NPZ version 3 with timeseries data (for fast consolidation)
             # Version 3: Added bout_annotations_by_sweep and event_channel
@@ -1064,9 +1158,8 @@ class ExportManager:
             need_keys = ["if", "amp_insp", "amp_exp", "area_insp", "area_exp", "ti", "te", "vent_proxy"]
 
             # Compute EUPNEA-BASED baselines (pooled across all sweeps)
-            # Pre-compute eupnea masks once per sweep to avoid redundant calculations
+            # Uses GMM sniff regions directly - no need to compute eupnea masks
             eupnea_b_by_k = {}
-            eupnea_masks_by_sweep = {}
 
             # Get thresholds from UI (for breath classification)
             eupnea_thresh = self.window.eupnea_freq_threshold  # Hz
@@ -1089,21 +1182,10 @@ class ExportManager:
                 expmins = np.asarray(br.get("expmins", []), dtype=int)
                 expoffs = np.asarray(br.get("expoffs", []), dtype=int)
 
-                if on.size >= 2:
-                    # Get sniff regions for this sweep
-                    sniff_regions = st.sniff_regions_by_sweep.get(s, [])
-
-                    # Compute eupnea mask (excluding sniffing regions)
-                    eupnea_mask = metrics.detect_eupnic_regions(
-                        st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
-                        freq_threshold_hz=eupnea_thresh,
-                        min_duration_sec=self.window.eupnea_min_duration,
-                        sniff_regions=sniff_regions
-                    )
-                    eupnea_masks_by_sweep[s] = eupnea_mask
+                # No need to compute masks - we'll check breaths directly using GMM results
 
             t_elapsed = time.time() - t_start
-            print(f"[CSV] ✓ Eupnea masks computed in {t_elapsed:.2f}s")
+            print(f"[CSV] ✓ Breath events processed in {t_elapsed:.2f}s")
 
             # Now compute baselines by collecting breath values from eupneic periods
             # IMPORTANT: Cache traces to reuse in main export loop AND PDF generation
@@ -1131,10 +1213,6 @@ class ExportManager:
                 if on.size < 2:
                     continue
 
-                eupnea_mask = eupnea_masks_by_sweep.get(s, None)
-                if eupnea_mask is None:
-                    continue
-
                 mids = (on[:-1] + on[1:]) // 2
                 t_rel_all = (st.t[mids] - (global_s0 if have_global_stim else 0.0)).astype(float)
 
@@ -1149,8 +1227,8 @@ class ExportManager:
                     if t_rel_all[i] >= 0:
                         continue  # Only baseline (t < 0)
 
-                    # Check if this breath is eupneic
-                    if mid_idx < len(eupnea_mask) and eupnea_mask[mid_idx] > 0:
+                    # Check if this breath is eupneic (NOT sniffing based on GMM results)
+                    if not self._is_breath_sniffing(s, i, on):
                         for k in need_keys:
                             trace = traces_for_sweep.get(k, None)
                             if trace is not None and len(trace) == len(st.t):
@@ -1180,10 +1258,6 @@ class ExportManager:
                         if on.size < 2:
                             continue
 
-                        eupnea_mask = eupnea_masks_by_sweep.get(s, None)
-                        if eupnea_mask is None:
-                            continue
-
                         mids = (on[:-1] + on[1:]) // 2
                         t_rel_all = (st.t[mids] - (global_s0 if have_global_stim else 0.0)).astype(float)
 
@@ -1193,7 +1267,8 @@ class ExportManager:
 
                         for i, mid_idx in enumerate(mids):
                             if 0 <= t_rel_all[i] <= NORM_BASELINE_WINDOW_S:
-                                if mid_idx < len(eupnea_mask) and eupnea_mask[mid_idx] > 0:
+                                # SIMPLIFIED: Use GMM directly instead of eupnea_mask
+                                if not self._is_breath_sniffing(s, i, on):
                                     val = trace[mid_idx]
                                     if np.isfinite(val):
                                         fallback_vals.append(val)
@@ -1282,13 +1357,9 @@ class ExportManager:
                                 is_sniffing_per_breath[j] = 1
                                 break
 
-                # Eupnea: Breath midpoint marked as eupneic
-                eupnea_mask = eupnea_masks_by_sweep.get(s, None)
-                is_eupnea_per_breath = np.zeros(on.size - 1, dtype=int)
-                if eupnea_mask is not None:
-                    for j, mid_idx in enumerate(mids):
-                        if int(mid_idx) < len(eupnea_mask) and eupnea_mask[int(mid_idx)] > 0:
-                            is_eupnea_per_breath[j] = 1
+                # Eupnea: SIMPLIFIED - eupneic = NOT sniffing (already computed above)
+                # No need for eupnea_mask - just use inverse of sniffing flag
+                is_eupnea_per_breath = (1 - is_sniffing_per_breath).astype(int)
 
                 # Apnea: Breath preceded by long inter-breath interval (recovery breath after apnea)
                 is_apnea_per_breath = np.zeros(on.size - 1, dtype=int)
@@ -1481,11 +1552,15 @@ class ExportManager:
                     df_all_E, sep.copy(), df_bl_E, sep.copy(), df_st_E, sep.copy(), df_po_E
                 ], axis=1)
 
-            # Write to CSV
-            df_combined.to_csv(breaths_path, index=False, na_rep='')
+            # Optionally write to CSV
+            if save_breaths_csv:
+                df_combined.to_csv(breaths_path, index=False, na_rep='')
 
             t_elapsed = time.time() - t_start
-            print(f"[CSV] ✓ Breath data written in {t_elapsed:.2f}s")
+            if save_breaths_csv:
+                print(f"[CSV] ✓ Breath data written in {t_elapsed:.2f}s")
+            else:
+                print(f"[CSV] ⊘ Breaths CSV skipped (computed in {t_elapsed:.2f}s)")
 
             if progress_dialog:
                 progress_dialog.setLabelText("Writing events CSV...")
@@ -1552,34 +1627,36 @@ class ExportManager:
                         min_apnea_duration_sec=apnea_thresh
                     )
 
-                    # Detect eupnea regions
-                    eupnea_mask = metrics.detect_eupnic_regions(
-                        st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
-                        freq_threshold_hz=eupnea_thresh
-                    )
+                    # Retrieve eupnea mask from cache (computed earlier)
+                    eupnea_mask = self._eupnea_masks_cache.get(s, None)
+                    if eupnea_mask is None:
+                        # Fallback: compute if not cached
+                        if self.window.eupnea_detection_mode == "gmm":
+                            eupnea_mask = self.window._compute_eupnea_from_gmm(s, len(y_proc))
+                        else:
+                            eupnea_mask = metrics.detect_eupnic_regions(
+                                st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
+                                freq_threshold_hz=eupnea_thresh
+                            )
+                        self._eupnea_masks_cache[s] = eupnea_mask
 
                     # Convert masks to interval lists
                     def mask_to_intervals(mask):
-                        """Convert boolean mask to list of (start_idx, end_idx) intervals."""
-                        intervals = []
-                        in_region = False
-                        start_idx = 0
+                        """
+                        Convert boolean mask to list of (start_idx, end_idx) intervals.
+                        VECTORIZED: uses np.diff to find transitions (10-20× faster than Python loop).
+                        """
+                        if len(mask) == 0:
+                            return []
 
-                        for i in range(len(mask)):
-                            if mask[i] and not in_region:
-                                # Start of new region
-                                start_idx = i
-                                in_region = True
-                            elif not mask[i] and in_region:
-                                # End of region
-                                intervals.append((start_idx, i - 1))
-                                in_region = False
+                        # Pad mask with zeros at both ends to detect edge transitions
+                        # Find transitions: 0→1 (region starts) and 1→0 (region ends)
+                        padded = np.concatenate(([0], mask.astype(int), [0]))
+                        diff = np.diff(padded)
+                        starts = np.where(diff == 1)[0]      # indices where region begins
+                        ends = np.where(diff == -1)[0] - 1    # indices where region ends (inclusive)
 
-                        # Handle case where region extends to end
-                        if in_region:
-                            intervals.append((start_idx, len(mask) - 1))
-
-                        return intervals
+                        return list(zip(starts.tolist(), ends.tolist()))
 
                     # Add apnea intervals
                     apnea_intervals = mask_to_intervals(apnea_mask > 0)
@@ -1646,13 +1723,14 @@ class ExportManager:
                         f"{duration:.9g}"
                     ])
 
-            # Write events CSV using pandas
+            # Optionally write events CSV using pandas
             import pandas as pd
             df_events = pd.DataFrame(
                 events_rows,
                 columns=["sweep", "event_type", "start_time", "end_time", "duration"]
             ) if events_rows else pd.DataFrame(columns=["sweep", "event_type", "start_time", "end_time", "duration"])
-            df_events.to_csv(events_path, index=False, na_rep='')
+            if save_events_csv:
+                df_events.to_csv(events_path, index=False, na_rep='')
 
             # Count event types
             if events_rows:
@@ -1665,7 +1743,10 @@ class ExportManager:
                 event_summary = "no events"
 
             t_elapsed = time.time() - t_start
-            print(f"[CSV] ✓ Events data written in {t_elapsed:.2f}s ({event_summary})")
+            if save_events_csv:
+                print(f"[CSV] ✓ Events data written in {t_elapsed:.2f}s ({event_summary})")
+            else:
+                print(f"[CSV] ⊘ Events CSV skipped (computed in {t_elapsed:.2f}s, {event_summary})")
 
         # -------------------- (4) Summary PDF or Preview --------------------
         t_start = time.time()
@@ -1708,60 +1789,70 @@ class ExportManager:
                 traceback.print_exc()
         else:
             # -------------------- PDF Generation --------------------
-            # Check if event channel has data - if yes, ONLY generate CTA PDF
-            has_event_data = (st.event_channel and st.bout_annotations and
-                             any(st.bout_annotations.get(s, []) for s in kept_sweeps))
-
             pdf_path = None
             event_cta_pdf_path = None
 
-            if has_event_data:
-                # Event-aligned CTA PDF only (skip standard PDF)
-                print("[PDF] Event channel detected, generating CTA PDF only...")
-                event_cta_pdf_path = base.with_name(base.name + "_event_cta.pdf")
-                try:
-                    self._save_event_aligned_cta_pdf(
-                        out_path=event_cta_pdf_path,
-                        kept_sweeps=kept_sweeps,
-                        cached_traces_by_sweep=cached_traces_by_sweep,
-                        keys_for_csv=keys_for_timeplots,
-                        label_by_key=label_by_key,
-                    )
-                except Exception as e:
-                    print(f"[save][event-cta-pdf] skipped: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    event_cta_pdf_path = None
-            else:
-                # Standard summary PDF (no event data)
-                print("[PDF] No event channel, generating standard summary PDF...")
-                pdf_path = base.with_name(base.name + "_summary.pdf")
-                try:
-                    self._save_metrics_summary_pdf(
-                        out_path=pdf_path,
-                        t_ds_csv=t_ds_csv,
-                        y2_ds_by_key=y2_ds_by_key,
-                        keys_for_csv=keys_for_timeplots,
-                        label_by_key=label_by_key,
-                        stim_zero=(global_s0 if have_global_stim else None),
-                        stim_dur=(global_dur if have_global_stim else None),
-                    )
-                except Exception as e:
-                    print(f"[save][summary-pdf] skipped: {e}")
+            if save_pdf:
+                # Check if event channel has data - if yes, ONLY generate CTA PDF
+                has_event_data = (st.event_channel and st.bout_annotations and
+                                 any(st.bout_annotations.get(s, []) for s in kept_sweeps))
+
+                if has_event_data:
+                    # Event-aligned CTA PDF only (skip standard PDF)
+                    print("[PDF] Event channel detected, generating CTA PDF only...")
+                    event_cta_pdf_path = base.with_name(base.name + "_event_cta.pdf")
+                    try:
+                        self._save_event_aligned_cta_pdf(
+                            out_path=event_cta_pdf_path,
+                            kept_sweeps=kept_sweeps,
+                            cached_traces_by_sweep=cached_traces_by_sweep,
+                            keys_for_csv=keys_for_timeplots,
+                            label_by_key=label_by_key,
+                        )
+                    except Exception as e:
+                        print(f"[save][event-cta-pdf] skipped: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        event_cta_pdf_path = None
+                else:
+                    # Standard summary PDF (no event data)
+                    print("[PDF] No event channel, generating standard summary PDF...")
+                    pdf_path = base.with_name(base.name + "_summary.pdf")
+                    try:
+                        self._save_metrics_summary_pdf(
+                            out_path=pdf_path,
+                            t_ds_csv=t_ds_csv,
+                            y2_ds_by_key=y2_ds_by_key,
+                            keys_for_csv=keys_for_timeplots,
+                            label_by_key=label_by_key,
+                            stim_zero=(global_s0 if have_global_stim else None),
+                            stim_dur=(global_dur if have_global_stim else None),
+                        )
+                    except Exception as e:
+                        print(f"[save][summary-pdf] skipped: {e}")
 
             t_elapsed = time.time() - t_start
-            print(f"[PDF] ✓ PDF saved in {t_elapsed:.2f}s")
+            if save_pdf:
+                print(f"[PDF] ✓ PDF saved in {t_elapsed:.2f}s")
+            else:
+                print(f"[PDF] ⊘ PDF generation skipped ({t_elapsed:.2f}s saved)")
 
             # -------------------- done --------------------
             if progress_dialog:
                 progress_dialog.setValue(100)
                 QApplication.processEvents()
 
-            # Build success message
-            file_list = [npz_path.name, csv_time_path.name, breaths_path.name, events_path.name]
-            if pdf_path:
+            # Build success message (only include files that were actually saved)
+            file_list = [npz_path.name]  # NPZ always saved
+            if save_timeseries_csv:
+                file_list.append(csv_time_path.name)
+            if save_breaths_csv:
+                file_list.append(breaths_path.name)
+            if save_events_csv:
+                file_list.append(events_path.name)
+            if save_pdf and pdf_path:
                 file_list.append(pdf_path.name)
-            if event_cta_pdf_path:
+            if save_pdf and event_cta_pdf_path:
                 file_list.append(event_cta_pdf_path.name)
             msg = "Saved:\n" + "\n".join(f"- {name}" for name in file_list)
             print("[save]", msg)
@@ -2167,14 +2258,23 @@ class ExportManager:
                 expoffs = np.asarray(br.get("expoffs", []), dtype=int)
 
                 if on.size >= 2:
-                    eupnea_mask = metrics.detect_eupnic_regions(
-                        st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
-                        freq_threshold_hz=eupnea_thresh,
-                        min_duration_sec=self.window.eupnea_min_duration
-                    )
+                    # Retrieve eupnea mask from cache (computed earlier)
+                    eupnea_mask = self._eupnea_masks_cache.get(s, None)
+                    if eupnea_mask is None:
+                        # Fallback: compute if not cached
+                        if self.window.eupnea_detection_mode == "gmm":
+                            eupnea_mask = self.window._compute_eupnea_from_gmm(s, len(y_proc))
+                        else:
+                            eupnea_mask = metrics.detect_eupnic_regions(
+                                st.t, y_proc, st.sr_hz, pks, on, off, expmins, expoffs,
+                                freq_threshold_hz=eupnea_thresh,
+                                min_duration_sec=self.window.eupnea_min_duration
+                            )
+                        self._eupnea_masks_cache[s] = eupnea_mask
+
                     eupnea_masks_by_sweep[s] = eupnea_mask
 
-        print(f"[PDF] Computed {len(eupnea_masks_by_sweep)} eupnea masks")
+        print(f"[PDF] Computed {len(eupnea_masks_by_sweep)} eupnea masks (for intervals only)")
 
         print(f"[PDF] Building histograms (raw and time-normalized)...")
         # Pools + sigh overlays
@@ -2185,15 +2285,19 @@ class ExportManager:
         sigh_times_rel) = _build_hist_vals_raw_and_norm()
         print(f"[PDF] Built raw and time-normalized histograms")
 
-        # Build EUPNEA-normalized histograms using a simple breath-based approach
-        print(f"[PDF] Building eupnea-normalized histograms...")
+        # Build EUPNEA-normalized histograms using simplified GMM-direct approach
+        print(f"[PDF] Building eupnea-normalized histograms (using GMM directly)...")
 
         def _build_eupnea_normalized_hists():
             """
-            Simple approach:
+            Simplified GMM-direct approach:
             1. Collect all breath metric values from eupneic baseline periods
-            2. Compute mean baseline per metric
-            3. Normalize all breath values by that baseline
+            2. Eupneic = NOT sniffing (based on GMM sniff_regions_by_sweep)
+            3. Compute mean baseline per metric
+            4. Normalize all breath values by that baseline
+
+            This is MUCH faster than computing full eupnea masks because we just
+            check each breath directly against sniff regions.
             """
             # Step 1: Collect eupneic baseline breath values
             eupnea_baseline_breaths = {k: [] for k in keys_for_csv}
@@ -2215,11 +2319,6 @@ class ExportManager:
                 if on.size < 2:
                     continue
 
-                # Get eupnea mask for this sweep
-                eupnea_mask = eupnea_masks_by_sweep.get(s, None)
-                if eupnea_mask is None:
-                    continue
-
                 mids = (on[:-1] + on[1:]) // 2
                 t_rel_all = (st.t[mids] - t0).astype(float)
 
@@ -2232,10 +2331,11 @@ class ExportManager:
                         if np.any((sigh_idx >= a) & (sigh_idx < b)):
                             is_sigh_breath[j] = True
 
-                # For each breath, check if midpoint is eupneic and collect metric values
+                # For each breath, check if it's eupneic (NOT sniffing) using GMM directly
                 for i, mid_idx in enumerate(mids):
                     t_rel = t_rel_all[i]
-                    is_eupneic = eupnea_mask[mid_idx] > 0 if mid_idx < len(eupnea_mask) else False
+                    # SIMPLIFIED: Check if breath is eupneic by checking if NOT in sniffing region
+                    is_eupneic = not self._is_breath_sniffing(s, i, on)
                     is_baseline = t_rel < 0
 
                     # Determine region
@@ -2465,6 +2565,11 @@ class ExportManager:
 
         scroll_area.setWidget(canvas)
         main_layout.addWidget(scroll_area)
+
+        # Show timing message before dialog appears
+        if hasattr(self, '_preview_start_time'):
+            t_elapsed = time.time() - self._preview_start_time
+            self.window._log_status_message(f"✓ Summary generated ({t_elapsed:.1f}s)", 5000)
 
         # Show dialog modally
         dialog.exec()
@@ -2806,6 +2911,12 @@ class ExportManager:
         close_btn.clicked.connect(dialog.close)
 
         update_page()
+
+        # Show timing message before dialog appears
+        if hasattr(self, '_preview_start_time'):
+            t_elapsed = time.time() - self._preview_start_time
+            self.window._log_status_message(f"✓ Summary generated ({t_elapsed:.1f}s)", 5000)
+
         dialog.exec()
 
         # Cleanup

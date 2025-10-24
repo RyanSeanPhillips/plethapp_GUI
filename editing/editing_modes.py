@@ -410,6 +410,11 @@ class EditingModes:
         pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
         if pks.size and np.any(np.abs(pks - i_peak) <= sep_n):
             print(f"[add-peak] Rejected: candidate within {sep_s:.3f}s of an existing peak.")
+            self.window._log_status_message(f"✗ Peak too close (< {sep_s:.2f}s)", 2000)
+            # Restore out-of-date warning after temporary message expires
+            if getattr(self.window, 'eupnea_sniffing_out_of_date', False):
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(2100, lambda: self.window._log_status_message("⚠️ Eupnea/sniffing detection out of date"))
             return
 
         # Insert, sort, and store
@@ -446,6 +451,9 @@ class EditingModes:
         st.breath_by_sweep[s] = breaths
         print(f"[add-peak] Surgically added breath events at index {new_idx}")
 
+        # Show success message
+        self.window._log_status_message("✓ Peak added", 1500)
+
         # Recompute Y2 metric if selected
         if getattr(st, "y2_metric_key", None):
             self.window._compute_y2_all_sweeps()
@@ -454,10 +462,18 @@ class EditingModes:
         self.window.redraw_main_plot()
 
         # Re-run GMM clustering to update sniffing regions (if auto-update enabled)
-        if self.window.AutoUpdateGMMCheckbox.isChecked():
+        if getattr(self.window, 'auto_gmm_enabled', False):
             self.window._run_automatic_gmm_clustering()
-            # Redraw again to show updated GMM regions
-            self.window.redraw_main_plot()
+            # LIGHTWEIGHT UPDATE: Just refresh eupnea/sniffing overlays (no full redraw)
+            self.window._refresh_eupnea_overlays_only()
+            # Clear out-of-date flag and status bar
+            self.window.eupnea_sniffing_out_of_date = False
+            self.window.statusBar().clearMessage()
+        else:
+            # Mark eupnea/sniffing detection as out of date
+            self.window.eupnea_sniffing_out_of_date = True
+            # Show persistent warning (no timeout - stays until Update button is clicked)
+            self.window._log_status_message("⚠️ Eupnea/sniffing detection out of date")
 
     # ========== DELETE PEAKS MODE ==========
 
@@ -572,11 +588,17 @@ class EditingModes:
 
         if distances[closest_idx] > half_win_n:
             print(f"[delete-peak] Closest peak is too far ({distances[closest_idx]} samples > {half_win_n} samples).")
+            self.window._log_status_message(f"✗ Click too far from peak (> {half_win_s:.2f}s)", 2000)
+            # Restore out-of-date warning after temporary message expires
+            if getattr(self.window, 'eupnea_sniffing_out_of_date', False):
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(2100, lambda: self.window._log_status_message("⚠️ Eupnea/sniffing detection out of date"))
             return
 
         # Delete only the closest peak
         pks_new = np.delete(pks, closest_idx)
         print(f"[delete-peak] Deleted peak at index {closest_peak} (distance: {distances[closest_idx]} samples)")
+        self.window._log_status_message("✓ Peak deleted", 1500)
         st.peaks_by_sweep[s] = pks_new
 
         # Surgically delete corresponding breath events (no recomputation needed)
@@ -599,10 +621,18 @@ class EditingModes:
         self.window.redraw_main_plot()
 
         # Re-run GMM clustering to update sniffing regions (if auto-update enabled)
-        if self.window.AutoUpdateGMMCheckbox.isChecked():
+        if getattr(self.window, 'auto_gmm_enabled', False):
             self.window._run_automatic_gmm_clustering()
-            # Redraw again to show updated GMM regions
-            self.window.redraw_main_plot()
+            # LIGHTWEIGHT UPDATE: Just refresh eupnea/sniffing overlays (no full redraw)
+            self.window._refresh_eupnea_overlays_only()
+            # Clear out-of-date flag and status bar
+            self.window.eupnea_sniffing_out_of_date = False
+            self.window.statusBar().clearMessage()
+        else:
+            # Mark eupnea/sniffing detection as out of date
+            self.window.eupnea_sniffing_out_of_date = True
+            # Show persistent warning (no timeout - stays until Update button is clicked)
+            self.window._log_status_message("⚠️ Eupnea/sniffing detection out of date")
 
     # ========== ADD SIGH MODE ==========
 
@@ -1461,7 +1491,11 @@ class EditingModes:
         return snapped_start, snapped_end
 
     def _merge_sniff_regions(self, sweep_idx: int):
-        """Merge overlapping or adjacent sniffing regions for a given sweep."""
+        """Merge overlapping or directly adjacent sniffing regions for a given sweep.
+
+        Note: This is primarily for manually marked regions. GMM-based regions
+        are already merged by consecutive breath index before being added.
+        """
         regions = self.window.state.sniff_regions_by_sweep.get(sweep_idx, [])
         if len(regions) <= 1:
             return
@@ -1469,12 +1503,12 @@ class EditingModes:
         # Sort regions by start time
         regions = sorted(regions, key=lambda x: x[0])
 
-        # Merge overlapping regions
+        # Merge overlapping or directly adjacent regions
         merged = []
         current_start, current_end = regions[0]
 
         for start, end in regions[1:]:
-            if start <= current_end:  # Overlapping or adjacent
+            if start <= current_end:  # Overlapping or directly adjacent
                 # Merge by extending current region
                 current_end = max(current_end, end)
                 print(f"[mark-sniff] Merged overlapping regions into: {current_start:.3f} - {current_end:.3f} s")

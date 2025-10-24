@@ -68,6 +68,24 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"PlethAnalysis v{VERSION_STRING}")
 
+        # Style status bar to match dark theme
+        self.statusBar().setStyleSheet("""
+            QStatusBar {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                border-top: 1px solid #3e3e42;
+            }
+            QStatusBar::item {
+                border: none;
+            }
+        """)
+        # Disable the resize grip (removes the dots on the right side)
+        self.statusBar().setSizeGripEnabled(False)
+
+        # Add message history tracking and dropdown
+        self._status_message_history = []
+        self._setup_status_history_dropdown()
+
         self.settings = QSettings(ORG, APP)
         self.state = AppState()
         self.single_panel_mode = False  # flips True after stim channel selection
@@ -78,6 +96,11 @@ class MainWindow(QMainWindow):
 
         # Filter order
         self.filter_order = 4  # Default Butterworth filter order
+
+        # Auto-GMM refresh (default OFF for better performance)
+        self.auto_gmm_enabled = False
+        # Track if eupnea/sniffing detection is out of date
+        self.eupnea_sniffing_out_of_date = False
 
         # Z-score normalization
         self.use_zscore_normalization = True  # Default: enabled
@@ -155,7 +178,9 @@ class MainWindow(QMainWindow):
         self.GMMClusteringButton.clicked.connect(self.on_gmm_clustering_clicked)
 
         # Auto-Update GMM checkbox
-        self.AutoUpdateGMMCheckbox.toggled.connect(self.on_auto_update_gmm_toggled)
+        # Auto-Update GMM checkbox moved to GMM dialog
+        # Connect the manual update button
+        self.UpdateEupneaSniffingButton.clicked.connect(self.on_update_eupnea_sniffing_clicked)
 
         # --- Initialize Navigation Manager ---
         self.navigation_manager = NavigationManager(self)
@@ -268,11 +293,21 @@ class MainWindow(QMainWindow):
         # TESTING MODE: Auto-load file and set channels
         # ========================================
         # To enable: set environment variable PLETHAPP_TESTING=1
-        # Example: set PLETHAPP_TESTING=1 && python main.py
+        # Windows CMD (two commands):
+        #   set PLETHAPP_TESTING=1
+        #   python run_debug.py
+        # Windows PowerShell:
+        #   $env:PLETHAPP_TESTING="1"; python run_debug.py
+        # Linux/Mac:
+        #   PLETHAPP_TESTING=1 python run_debug.py
+        print(f"[DEBUG] PLETHAPP_TESTING environment variable = '{os.environ.get('PLETHAPP_TESTING')}'")
         if os.environ.get('PLETHAPP_TESTING') == '1':
             print("[TESTING MODE] Auto-loading test file...")
             test_file = Path(r"C:\Users\rphil2\Dropbox\python scripts\breath_analysis\pyqt6\examples\25121004.abf")
+            print(f"[TESTING MODE] Checking if file exists: {test_file}")
+            print(f"[TESTING MODE] File exists: {test_file.exists()}")
             if test_file.exists():
+                print(f"[TESTING MODE] Scheduling auto-load in 100ms...")
                 QTimer.singleShot(100, lambda: self._auto_load_test_file(test_file))
             else:
                 print(f"[TESTING MODE] Warning: Test file not found: {test_file}")
@@ -282,23 +317,29 @@ class MainWindow(QMainWindow):
 
     def _auto_load_test_file(self, file_path: Path):
         """Helper function for testing mode - auto-loads file and sets channels."""
-        print(f"[TESTING MODE] Loading {file_path}...")
+        print(f"[TESTING MODE] _auto_load_test_file() called with: {file_path}")
+        print(f"[TESTING MODE] Calling load_file()...")
         self.load_file(file_path)
+        print(f"[TESTING MODE] load_file() returned, starting polling timer...")
 
         # Poll until file is loaded, then set channels
         self._check_file_loaded_timer = QTimer()
         self._check_file_loaded_timer.timeout.connect(self._check_if_file_loaded)
         self._check_file_loaded_timer.start(100)  # Check every 100ms
+        print(f"[TESTING MODE] Polling timer started")
 
     def _check_if_file_loaded(self):
         """Poll to see if file has finished loading."""
         # Check if state has been populated with data AND combos have been populated
+        print(f"[TESTING MODE] Polling: t={self.state.t is not None}, sweeps={self.state.sweeps is not None}, "
+              f"AnalyzeChanSelect.count={self.AnalyzeChanSelect.count()}, StimChanSelect.count={self.StimChanSelect.count()}")
         if (self.state.t is not None and
             self.state.sweeps is not None and
             len(self.state.sweeps) > 0 and
             self.AnalyzeChanSelect.count() > 0 and
             self.StimChanSelect.count() > 0):
             # File is loaded and combos are populated!
+            print(f"[TESTING MODE] File loaded! Stopping timer and setting test channels...")
             self._check_file_loaded_timer.stop()
             self._set_test_channels()
 
@@ -351,6 +392,78 @@ class MainWindow(QMainWindow):
         self.settings.setValue("geometry", self.saveGeometry())
         super().closeEvent(event)
 
+    def _setup_status_history_dropdown(self):
+        """Add a subtle dropdown button to the status bar for viewing message history."""
+        from PyQt6.QtWidgets import QPushButton, QMenu
+        from PyQt6.QtGui import QIcon
+        from PyQt6.QtCore import QSize
+
+        # Create a small button with just a "▼" symbol
+        self.history_button = QPushButton("📋", self)
+        self.history_button.setFixedSize(24, 20)
+        self.history_button.setToolTip("View message history")
+        self.history_button.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: none;
+                color: #d4d4d4;
+                font-size: 14px;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: #3e3e42;
+                border-radius: 3px;
+            }
+        """)
+        self.history_button.clicked.connect(self._show_message_history)
+
+        # Add to status bar (right side)
+        self.statusBar().addPermanentWidget(self.history_button)
+
+    def _show_message_history(self):
+        """Show a menu with recent status bar messages."""
+        from PyQt6.QtWidgets import QMenu
+        from PyQt6.QtGui import QAction
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #2d2d2d;
+                color: #d4d4d4;
+                border: 1px solid #3e3e42;
+            }
+            QMenu::item:selected {
+                background-color: #3e3e42;
+            }
+        """)
+
+        if not self._status_message_history:
+            action = QAction("No messages yet", self)
+            action.setEnabled(False)
+            menu.addAction(action)
+        else:
+            # Show last 20 messages, most recent first
+            for i, (timestamp, message) in enumerate(reversed(self._status_message_history[-20:])):
+                action = QAction(f"{timestamp} - {message}", self)
+                action.setEnabled(False)  # Not clickable, just for display
+                menu.addAction(action)
+
+        # Show menu below the button
+        menu.exec(self.history_button.mapToGlobal(self.history_button.rect().bottomLeft()))
+
+    def _log_status_message(self, message: str, timeout: int = 0):
+        """Log a status message and show it on the status bar."""
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self._status_message_history.append((timestamp, message))
+
+        # Keep only last 100 messages to avoid memory growth
+        if len(self._status_message_history) > 100:
+            self._status_message_history = self._status_message_history[-100:]
+
+        # Show on status bar
+        self.statusBar().showMessage(message, timeout)
+
     def keyPressEvent(self, event):
         """Handle keyboard events - delegate to editing modes first."""
         # Try editing modes handler first
@@ -399,8 +512,11 @@ class MainWindow(QMainWindow):
             self.load_multiple_files(file_paths)
 
     def load_file(self, path: Path):
+        import time
         from PyQt6.QtWidgets import QProgressDialog, QApplication
         from PyQt6.QtCore import Qt
+
+        t_start = time.time()
 
         # Determine file type for progress dialog title
         file_type = path.suffix.upper()[1:]  # .abf -> ABF, .smrx -> SMRX
@@ -543,6 +659,10 @@ class MainWindow(QMainWindow):
         self.single_panel_mode = False
         self.plot_host.clear_saved_view("grid")  # fresh autoscale for grid
         self.plot_all_channels()
+
+        # Show completion message with elapsed time
+        t_elapsed = time.time() - t_start
+        self._log_status_message(f"✓ File loaded ({t_elapsed:.1f}s)", 3000)
 
     def load_multiple_files(self, file_paths: List[Path]):
         """Load and concatenate multiple ABF files."""
@@ -1205,10 +1325,15 @@ class MainWindow(QMainWindow):
         Run peak detection on the ANALYZE channel for ALL sweeps,
         store indices per sweep, and redraw current sweep with peaks + breath markers.
         """
+        import time
+        t_start = time.time()
+
         st = self.state
         if not st.channel_names or not st.analyze_chan or st.analyze_chan not in st.sweeps:
             self.ApplyPeakFindPushButton.setEnabled(False)
             return
+
+        self._log_status_message("Detecting peaks and breath features...")
 
         # Parse UI parameters
         def _num(line):
@@ -1264,9 +1389,17 @@ class MainWindow(QMainWindow):
         print("[peak-detection] Running automatic GMM clustering...")
         self._run_automatic_gmm_clustering()
 
-        # Second redraw: Show GMM-detected sniffing/eupnea regions
-        print("[peak-detection] Redrawing plot with GMM results...")
-        self.redraw_main_plot()
+        # Clear out-of-date flag (GMM just ran)
+        self.eupnea_sniffing_out_of_date = False
+
+        # LIGHTWEIGHT UPDATE: Just refresh eupnea/sniffing overlays without full redraw
+        # This skips expensive outlier detection (which already ran in first redraw)
+        print("[peak-detection] Adding GMM-detected eupnea/sniffing overlays...")
+        self._refresh_eupnea_overlays_only()
+
+        # Show completion message with elapsed time
+        t_elapsed = time.time() - t_start
+        self._log_status_message(f"✓ Peak detection complete ({t_elapsed:.1f}s)", 3000)
 
     def _compute_eupnea_from_gmm(self, sweep_idx: int, signal_length: int) -> np.ndarray:
         """
@@ -1376,11 +1509,13 @@ class MainWindow(QMainWindow):
         Uses streamlined default features (if, ti, amp_insp, max_dinsp) and 2 clusters.
         Silently marks identified sniffing breaths with purple background.
         """
+        import time
         from sklearn.mixture import GaussianMixture
         from sklearn.preprocessing import StandardScaler
         from sklearn.metrics import silhouette_score
         import numpy as np
 
+        t_start = time.time()
         st = self.state
 
         # Check if we have breath data
@@ -1394,6 +1529,7 @@ class MainWindow(QMainWindow):
 
         print(f"\n[auto-gmm] Running automatic GMM clustering with {n_clusters} clusters...")
         print(f"[auto-gmm] Features: {', '.join(feature_keys)}")
+        self._log_status_message("Running GMM clustering...")
 
         try:
             # Collect breath features from all analyzed sweeps
@@ -1427,15 +1563,13 @@ class MainWindow(QMainWindow):
                 print("[auto-gmm] Could not identify sniffing cluster, skipping")
                 return
 
-            # Store GMM probabilities but DO NOT apply sniffing regions automatically
-            # User must enable "Apply Sniffing Detection" checkbox in GMM dialog to see markings
-            self._store_gmm_probabilities_only(
-                breath_cycles, cluster_probabilities, sniffing_cluster_id
+            # Apply GMM sniffing regions to plot (stores probabilities AND creates regions)
+            self._apply_gmm_sniffing_regions(
+                breath_cycles, cluster_labels, cluster_probabilities, sniffing_cluster_id
             )
 
             n_sniffing_breaths = np.sum(cluster_labels == sniffing_cluster_id)
-            print(f"[auto-gmm] ✓ Identified {n_sniffing_breaths} sniffing breaths (not applied to plot)")
-            print(f"[auto-gmm]   Open 'Eupnea/Sniffing Detection' dialog and enable 'Apply Sniffing Detection' to mark regions")
+            print(f"[auto-gmm] ✓ Identified {n_sniffing_breaths} sniffing breaths and applied to plot")
 
             # Cache results for fast dialog loading
             self._cached_gmm_results = {
@@ -1448,8 +1582,14 @@ class MainWindow(QMainWindow):
             }
             print("[auto-gmm] Cached GMM results for fast dialog loading")
 
+            # Show completion message with elapsed time
+            t_elapsed = time.time() - t_start
+            self._log_status_message(f"✓ GMM clustering complete ({t_elapsed:.1f}s)", 2000)
+
         except Exception as e:
             print(f"[auto-gmm] Error during automatic GMM clustering: {e}")
+            t_elapsed = time.time() - t_start
+            self._log_status_message(f"✗ GMM clustering failed ({t_elapsed:.1f}s)", 3000)
             import traceback
             traceback.print_exc()
 
@@ -1847,34 +1987,92 @@ class MainWindow(QMainWindow):
 
 
 
-    def on_auto_update_gmm_toggled(self, checked: bool):
-        """Handle Auto-Update GMM checkbox toggle - run GMM when enabled and apply sniffing regions."""
-        if checked:
-            # User just enabled auto-update - run GMM clustering if we have peaks
-            st = self.state
-            if st.peaks_by_sweep and len(st.peaks_by_sweep) > 0:
-                print("[auto-update-gmm] Auto-update enabled - running GMM and applying sniffing regions...")
-                self._run_automatic_gmm_clustering()
+    def on_update_eupnea_sniffing_clicked(self):
+        """Handle Update Eupnea/Sniffing Detection button - manually rerun GMM and apply."""
+        import time
+        from PyQt6.QtCore import QTimer
 
-                # Now apply the sniffing regions if GMM was successful
-                if self._cached_gmm_results is not None:
-                    print("[auto-update-gmm] Applying sniffing regions to plot...")
-                    breath_cycles = self._cached_gmm_results['breath_cycles']
-                    cluster_labels = self._cached_gmm_results['cluster_labels']
-                    cluster_probabilities = self._cached_gmm_results['cluster_probabilities']
-                    sniffing_cluster_id = self._cached_gmm_results['sniffing_cluster_id']
+        st = self.state
+        if not st.peaks_by_sweep or len(st.peaks_by_sweep) == 0:
+            self._log_status_message("No peaks detected yet - run peak detection first", 3000)
+            return
 
-                    # Apply sniffing regions
-                    n_sniffing = self._apply_gmm_sniffing_regions(
-                        breath_cycles, cluster_labels, cluster_probabilities, sniffing_cluster_id
-                    )
-                    print(f"[auto-update-gmm] Applied {n_sniffing} sniffing breaths to plot")
+        t_start = time.time()
+        print("[update-eupnea] Manually updating eupnea/sniffing detection...")
+        self._log_status_message("Updating eupnea/sniffing detection...")
 
-                self.redraw_main_plot()
+        # Run GMM clustering and apply sniffing regions
+        self._run_automatic_gmm_clustering()
+
+        # Clear out-of-date flag
+        self.eupnea_sniffing_out_of_date = False
+
+        # LIGHTWEIGHT UPDATE: Just refresh eupnea/sniffing overlays without full redraw
+        # This skips expensive outlier detection and metrics recomputation
+        self._refresh_eupnea_overlays_only()
+
+        # Show completion message with elapsed time
+        t_elapsed = time.time() - t_start
+        print(f"[update-eupnea] ✓ Eupnea/sniffing detection updated ({t_elapsed:.1f}s)")
+        self._log_status_message(f"✓ Eupnea/sniffing detection updated ({t_elapsed:.1f}s)", 2000)
+        # Clear again after the success message disappears
+        QTimer.singleShot(2100, lambda: self.statusBar().clearMessage())
+
+    def _refresh_eupnea_overlays_only(self):
+        """
+        Lightweight update of eupnea/sniffing region overlays without full plot redraw.
+        Used after GMM clustering to avoid expensive outlier detection recomputation.
+        """
+        st = self.state
+        s = st.sweep_idx
+
+        # Get current trace data
+        t, y = self._current_trace()
+        if t is None or y is None:
+            return
+
+        # Apply time normalization if stim channel exists
+        spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
+        if st.stim_chan and spans:
+            t0 = spans[0][0]
+            t_plot = t - t0
         else:
-            # User disabled auto-update - optionally clear sniffing regions
-            # (Currently we leave them as-is, user can manually clear via GMM dialog)
-            print("[auto-update-gmm] Auto-update disabled")
+            t_plot = t
+
+        # Get breath data
+        br = st.breath_by_sweep.get(s, None)
+        if not br:
+            return
+
+        # Compute ONLY eupnea mask from GMM (fast, no metrics recomputation)
+        eupnea_mask = self._compute_eupnea_from_gmm(s, len(y))
+
+        # Get existing apnea threshold
+        apnea_thresh = self._parse_float(self.ApneaThresh) or 0.5
+
+        # Compute apnea mask (also fast, no metrics)
+        pks = st.peaks_by_sweep.get(s, [])
+        on_idx = br.get("onsets", [])
+        off_idx = br.get("offsets", [])
+        ex_idx = br.get("expmins", [])
+        exoff_idx = br.get("expoffs", [])
+
+        from core import metrics
+        apnea_mask = metrics.detect_apneas(
+            t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx,
+            min_apnea_duration_sec=apnea_thresh
+        )
+
+        # Update ONLY the region overlays (skips outlier masks entirely - huge speedup!)
+        self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask,
+                                              outlier_mask=None, failure_mask=None)
+
+        # Update sniffing region backgrounds (purple)
+        self.editing_modes.update_sniff_artists(t_plot, s)
+
+        # Refresh canvas
+        self.plot_host.canvas.draw_idle()
+        print("[update-eupnea] Lightweight overlay refresh complete (skipped outlier detection)")
 
     def on_spectral_analysis_clicked(self):
         """Open spectral analysis dialog and optionally apply notch filter."""
@@ -1982,11 +2180,11 @@ class MainWindow(QMainWindow):
         s = max(0, min(st.sweep_idx, self.navigation_manager._sweep_count() - 1))
         if s in st.omitted_sweeps:
             st.omitted_sweeps.remove(s)
-            try: self.statusbar.showMessage(f"Sweep {s+1}: included", 3000)
+            try: self._log_status_message(f"Sweep {s+1}: included", 3000)
             except Exception: pass
         else:
             st.omitted_sweeps.add(s)
-            try: self.statusbar.showMessage(f"Sweep {s+1}: omitted", 3000)
+            try: self._log_status_message(f"Sweep {s+1}: omitted", 3000)
             except Exception: pass
 
         self._refresh_omit_button_label()
@@ -2271,7 +2469,7 @@ class MainWindow(QMainWindow):
 
         if not files_sorted:
             try:
-                self.statusbar.showMessage("No matching CSV files found in the selected folder.", 4000)
+                self._log_status_message("No matching CSV files found in the selected folder.", 4000)
             except Exception:
                 pass
             return

@@ -58,6 +58,9 @@ def main():
     print("PlethApp Debug Launcher")
     print("="*50)
 
+    # Debug: Show environment variables
+    print(f"[DEBUG] PLETHAPP_TESTING = '{os.environ.get('PLETHAPP_TESTING', 'NOT SET')}'")
+
     setup_environment()
 
     if not check_imports():

@@ -9,7 +9,7 @@ location, stimulation parameters, and animal information.
 import re
 from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QComboBox, QLabel,
-    QCheckBox, QDialogButtonBox, QCompleter
+    QCheckBox, QDialogButtonBox, QCompleter, QGridLayout, QWidget
 )
 from PyQt6.QtCore import Qt as QtCore_Qt
 
@@ -112,15 +112,79 @@ class SaveMetaDialog(QDialog):
         )
         lay.addRow("Experiment Type:", self.cb_experiment_type)
 
+        # Live preview of filename
+        self.lbl_preview = QLabel("", self)
+        self.lbl_preview.setStyleSheet("color:#b6bfda;")
+        lay.addRow("File Name Preview:", self.lbl_preview)
+
+        # File export options section (compact grid layout, spans both columns)
+        lay.addRow("", QLabel(""))  # Spacer
+
+        # Create container widget for grid layout (will span both columns)
+        export_container = QWidget(self)
+        export_container_layout = QGridLayout(export_container)
+        export_container_layout.setContentsMargins(0, 0, 0, 0)
+        export_container_layout.setSpacing(5)
+
+        export_label = QLabel("<b>Files to Export:</b>")
+        export_label.setStyleSheet("font-size: 10pt;")
+        export_container_layout.addWidget(export_label, 0, 0, 1, 3)  # Spans 3 columns
+
+        # Create inner widget for checkbox grid
+        export_widget = QWidget(self)
+        export_grid = QGridLayout(export_widget)
+        export_grid.setContentsMargins(0, 0, 0, 0)
+        export_grid.setSpacing(8)
+
+        # Create checkboxes with smaller font
+        small_font = "font-size: 9pt;"
+
+        self.chk_save_npz = QCheckBox("NPZ Bundle*", self)
+        self.chk_save_npz.setChecked(True)
+        self.chk_save_npz.setEnabled(False)  # Always required
+        self.chk_save_npz.setToolTip("Binary data bundle - always saved (fast, ~0.5s)")
+        self.chk_save_npz.setStyleSheet(small_font)
+
+        self.chk_save_timeseries = QCheckBox("Timeseries CSV", self)
+        self.chk_save_timeseries.setChecked(True)
+        self.chk_save_timeseries.setToolTip("Time-aligned metric traces (~9s)")
+        self.chk_save_timeseries.setStyleSheet(small_font)
+
+        self.chk_save_breaths = QCheckBox("Breaths CSV", self)
+        self.chk_save_breaths.setChecked(True)
+        self.chk_save_breaths.setToolTip("Per-breath metrics by region (~1-2s)")
+        self.chk_save_breaths.setStyleSheet(small_font)
+
+        self.chk_save_events = QCheckBox("Events CSV", self)
+        self.chk_save_events.setChecked(True)
+        self.chk_save_events.setToolTip("Apnea/eupnea/sniffing intervals (~0.5s)")
+        self.chk_save_events.setStyleSheet(small_font)
+
+        self.chk_save_pdf = QCheckBox("Summary PDF", self)
+        self.chk_save_pdf.setChecked(True)
+        self.chk_save_pdf.setToolTip("Visualization plots (~31s - can skip for quick exports)")
+        self.chk_save_pdf.setStyleSheet(small_font)
+
+        # Arrange in 3 columns x 2 rows
+        # Row 0: NPZ, Timeseries, Breaths
+        export_grid.addWidget(self.chk_save_npz, 0, 0)
+        export_grid.addWidget(self.chk_save_timeseries, 0, 1)
+        export_grid.addWidget(self.chk_save_breaths, 0, 2)
+        # Row 1: Events, PDF
+        export_grid.addWidget(self.chk_save_events, 1, 0)
+        export_grid.addWidget(self.chk_save_pdf, 1, 1)
+
+        # Add checkbox grid to container
+        export_container_layout.addWidget(export_widget, 1, 0, 1, 3)  # Spans 3 columns
+
+        # Add container to form layout (single argument = span both columns)
+        lay.addRow(export_container)
+        lay.addRow("", QLabel(""))  # Spacer
+
         # NEW: choose location checkbox
         self.cb_choose_dir = QCheckBox("Let me choose where to save", self)
         self.cb_choose_dir.setToolTip("If unchecked, files go to a 'Pleth_App_Analysis' folder automatically.")
         lay.addRow("", self.cb_choose_dir)
-
-        # Live preview
-        self.lbl_preview = QLabel("", self)
-        self.lbl_preview.setStyleSheet("color:#b6bfda;")
-        lay.addRow("Preview:", self.lbl_preview)
 
         # Buttons
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
@@ -210,4 +274,10 @@ class SaveMetaDialog(QDialog):
             "preview": self.lbl_preview.text().strip(),
             "choose_dir": bool(self.cb_choose_dir.isChecked()),
             "experiment_type": experiment_type,
+            # File export options
+            "save_npz": True,  # Always true (checkbox disabled)
+            "save_timeseries_csv": bool(self.chk_save_timeseries.isChecked()),
+            "save_breaths_csv": bool(self.chk_save_breaths.isChecked()),
+            "save_events_csv": bool(self.chk_save_events.isChecked()),
+            "save_pdf": bool(self.chk_save_pdf.isChecked()),
         }
