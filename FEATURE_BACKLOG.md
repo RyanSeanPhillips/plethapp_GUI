@@ -25,6 +25,7 @@ This document tracks planned features, enhancements, and long-term development g
 
 ### 🎯 High Priority (Next Up)
 - [ ] **NPZ file save/load with full state restoration** (4-6 hours) ← RECOMMENDED NEXT
+- [ ] **Auto-threshold selection with ML auto-labeling** (3-4 hours) ← ML FOUNDATION
 - [ ] Help button with app usage guide and typical workflow (3-4 hours)
 - [ ] Display mode toggles for breathing states - background vs line (4-5 hours)
 
@@ -194,7 +195,152 @@ def validate_multi_file_abf(file_paths: list[Path]) -> tuple[bool, list[str]]:
 
 ---
 
-### 4. CSV/Text Time-Series Import
+### 4. Auto-Threshold Selection with ML Auto-Labeling
+**Description**: Automatically detect optimal peak detection threshold using elbow detection, then auto-label all peaks for ML training
+
+**Motivation**:
+- **Zero manual annotation**: Auto-label 4,500 peaks (3,100 breaths + 1,400 noise) without user clicking
+- **ML training foundation**: Generate labeled dataset automatically for breath classifier
+- **Adaptive to noise**: Different recordings have different noise levels - auto-adapt
+- **Future-proof**: Detect all peaks (threshold=0) so better ML can reclassify later
+
+**Key Insight** (from user testing):
+- Threshold=0 with min_distance=0.05s: 4,500 peaks (10 min recording)
+- Optimal threshold: 3,100 peaks (real breaths)
+- **Only 31% overhead** (1,400 extra peaks) - totally manageable!
+- Min distance prevents explosion (no 20Hz breathing physically possible)
+
+**Algorithm**:
+```python
+# Step 1: Detect ALL peaks (threshold=0, min_distance=0.05s)
+all_peaks = detect_peaks(signal, prominence=0, distance=samples_per_50ms)
+
+# Step 2: Compute peaks vs threshold curve
+thresholds = np.linspace(0.01, 0.5, 100)
+n_peaks = []
+for thresh in thresholds:
+    peaks_at_thresh = all_peaks[prominence >= thresh]
+    n_peaks.append(len(peaks_at_thresh))
+
+# Step 3: Find elbow (plateau before noise pickup)
+optimal_threshold = find_knee_point(thresholds, n_peaks)
+# Methods: second derivative, curvature, or Kneedle algorithm
+
+# Step 4: AUTO-LABEL all peaks (no manual work!)
+auto_labels = []
+for peak in all_peaks:
+    peak_prom = compute_prominence(signal, peak)
+    if peak_prom >= optimal_threshold:
+        auto_labels.append("breath")      # 3100 peaks (69%)
+    else:
+        auto_labels.append("not_breath")  # 1400 peaks (31%)
+```
+
+**UI Implementation**:
+```
+┌─────────────────────────────────────────────┐
+│ Peak Detection Settings                     │
+├─────────────────────────────────────────────┤
+│ ☑ Auto-detect threshold (elbow method)     │
+│   Detected: 0.12 prominence                 │
+│   → 3,100 peaks (1,400 below threshold)     │
+│                                             │
+│ ☐ Manual threshold: [____] 0.15            │
+│                                             │
+│ ☐ Show all peaks (including below thresh)  │
+│                                             │
+│ [📊 View Threshold Curve]                  │
+└─────────────────────────────────────────────┘
+```
+
+**Threshold Curve Visualization**:
+```
+Number of Peaks
+    │
+4500├─────────────────  ← Noise starts
+    │                ╱
+3500│               ╱
+    │              ╱
+3100├─────────────●    ← Elbow (auto-selected)
+    │            ╱
+2000│          ╱
+    │        ╱
+    │      ╱
+    │    ╱
+  0 └────────────────
+    0.0  0.1  0.2  0.3  Prominence Threshold
+              ↑
+         Auto-selected
+```
+
+**ML Training Data Export**:
+```python
+# Saved in NPZ file
+ml_training_data = {
+    "all_peaks": all_peaks,              # 4500 peak indices
+    "auto_threshold": 0.12,              # Detected elbow
+    "labels": auto_labels,               # ["breath", "not_breath", ...]
+    "label_source": label_sources,       # ["auto", "auto", "user_corrected", ...]
+    "features": {
+        "ti": ti_values,                 # Inspiratory time
+        "te": te_values,                 # Expiratory time
+        "amp_insp": amp_insp_values,     # Inspiratory amplitude
+        "amp_exp": amp_exp_values,       # Expiratory amplitude
+        "max_dinsp": max_dinsp_values,   # Max inspiratory derivative
+        "max_dexp": max_dexp_values,     # Max expiratory derivative
+        "prominence": prominence_values, # Peak prominence
+        "freq": freq_values              # Instantaneous frequency
+    }
+}
+```
+
+**User Workflow**:
+1. Load file → Run peak detection with auto-threshold
+2. App shows 3,100 "breath" peaks (clean display)
+3. User reviews - looks good!
+4. User toggles "Show all peaks" → sees 1,400 faint peaks below threshold
+5. User manually corrects 5 mistakes:
+   - Promotes 3 real breaths that were below threshold
+   - Demotes 2 noise peaks that were above threshold
+6. Corrections automatically update labels and label_source
+7. Export saves all 4,500 peaks with corrected labels
+
+**Benefits**:
+- ✅ **Zero annotation burden**: 4,500 peaks labeled automatically
+- ✅ **Good class balance**: 69% positive, 31% negative (no special ML techniques needed)
+- ✅ **Clean UI**: Only shows "breath" peaks by default
+- ✅ **Fast**: Only 31% more peaks to process (not 10× like raw threshold=0)
+- ✅ **Active learning ready**: User corrections improve future ML models
+- ✅ **Future-proof**: All peaks saved, better ML can reclassify
+
+**Files to modify**:
+- `dialogs/event_detection_dialog.py` (add auto-threshold checkbox, view curve button)
+- `core/peaks.py` (add `find_optimal_threshold()`, `compute_threshold_curve()`)
+- `main.py` (add auto-labeling logic, "show all peaks" toggle)
+- `core/state.py` (save auto-labels and label sources)
+- `export/export_manager.py` (export ML training data)
+
+**Dependencies**:
+- NumPy (existing)
+- SciPy (existing, for knee detection)
+- Matplotlib (existing, for curve visualization)
+
+**Effort**: 3-4 hours
+
+**Follow-up Features**:
+- ML-ready data export format (2-3 hours) - export auto-labeled data
+- ML breath classifier (12-20 hours) - train Random Forest/XGBoost on auto-labeled data
+- Active learning integration (4-6 hours) - retrain on user corrections
+
+**Training Data Requirements** (see below for details):
+- **Minimum viable**: 5-10 files (~20,000-40,000 peaks, ~15,000-30,000 breaths)
+- **Good performance**: 20-30 files (~80,000-120,000 peaks)
+- **Excellent performance**: 50-100 files (~200,000-400,000 peaks)
+- **Key insight**: Diversity matters more than quantity (different animals, conditions, noise levels)
+
+---
+
+### 5. CSV/Text Time-Series Import
 **Description**: Load arbitrary time-series data from CSV/text files
 
 **Motivation**:
@@ -625,6 +771,230 @@ def set_dark_plot_theme(ax, dark_mode: bool):
 **See PUBLICATION_ROADMAP.md for complete implementation plan (Week 3-6 of v1.0 timeline).**
 
 **Effort**: 18-24 hours (phased implementation)
+
+---
+
+## ML Training Data Requirements & Continuous Learning
+
+### How Many Breaths Do You Need to Train a Good Model?
+
+**TL;DR**: Start with 5-10 files (~15,000-30,000 breaths), diversity matters more than quantity.
+
+#### Minimum Viable Model (MVP)
+- **Files**: 5-10 recordings (~10 min each)
+- **Total peaks**: ~20,000-40,000 (auto-labeled via elbow detection)
+  - ~15,000-30,000 breaths (positive class)
+  - ~5,000-10,000 noise (negative class)
+- **Diversity needed**:
+  - 2-3 different animals
+  - Multiple recording sessions
+  - Different noise levels
+- **Expected performance**: 85-90% accuracy
+- **Good enough for**: Initial testing, catching obvious errors
+
+#### Good Performance Model
+- **Files**: 20-30 recordings
+- **Total peaks**: ~80,000-120,000 peaks
+  - ~60,000-90,000 breaths
+  - ~20,000-30,000 noise
+- **Diversity needed**:
+  - 5-10 different animals
+  - Multiple experimental conditions (baseline, stim, drugs)
+  - Variety of noise types (motion artifacts, electrical noise, etc.)
+- **Expected performance**: 92-95% accuracy
+- **Good enough for**: Production use, reliable analysis
+
+#### Excellent Performance Model
+- **Files**: 50-100 recordings
+- **Total peaks**: ~200,000-400,000 peaks
+  - ~150,000-300,000 breaths
+  - ~50,000-100,000 noise
+- **Diversity needed**:
+  - 20+ animals
+  - Multiple genotypes/strains
+  - Different recording setups (hardware, sampling rates)
+  - Wide range of experimental manipulations
+- **Expected performance**: 96-98% accuracy
+- **Good enough for**: Publication-quality automated analysis
+
+#### Key Insights
+
+**Diversity Matters More Than Quantity**:
+- 10 files from 10 different animals > 10 files from 1 animal
+- Different noise types are crucial (train on what you'll see in practice)
+- Edge cases are valuable (sighs, apneas, motion artifacts)
+
+**Class Balance**:
+- Your auto-labeling gives ~70% breaths / ~30% noise (ideal!)
+- No need for SMOTE or special balancing techniques
+- Natural distribution from elbow detection
+
+**Feature Quality**:
+- 8 features (ti, te, amp_insp, amp_exp, max_dinsp, max_dexp, prominence, freq)
+- Well-tested, biologically meaningful
+- Low correlation (each adds unique information)
+
+### How Does Continuous Learning Work?
+
+**Concept**: The model improves as users correct mistakes during normal analysis.
+
+#### Active Learning Workflow
+
+**Phase 1: Initial Training (One-Time)**
+```python
+# Use auto-labeled data from 10 files
+initial_dataset = load_auto_labeled_files(file_list)
+# 40,000 peaks with auto-labels
+
+model = RandomForestClassifier()
+model.fit(initial_dataset.features, initial_dataset.labels)
+# Accuracy: ~85-90% on test set
+
+# Save model
+save_model(model, "breath_classifier_v1.pkl")
+```
+
+**Phase 2: User Corrections (During Normal Use)**
+```python
+# User loads file, runs peak detection with ML
+all_peaks = detect_peaks(signal, threshold=0, min_distance=0.05)
+ml_predictions = model.predict(compute_features(all_peaks))
+
+# UI shows ML predictions
+# User reviews: most are correct, but finds 3 mistakes
+
+# USER ACTION: Manually corrects 3 peaks
+# - Peak #245: ML said "not_breath", user corrects to "breath"
+# - Peak #1821: ML said "breath", user corrects to "not_breath"
+# - Peak #3012: ML said "breath", user corrects to "not_breath"
+
+# Corrections are AUTOMATICALLY saved
+corrections = {
+    "peaks": [245, 1821, 3012],
+    "ml_labels": ["not_breath", "breath", "breath"],
+    "user_labels": ["breath", "not_breath", "not_breath"],
+    "label_source": ["user_corrected", "user_corrected", "user_corrected"],
+    "file_id": "20241024_mouse05.abf",
+    "timestamp": "2025-01-15 14:32:01"
+}
+
+# Saved in NPZ export
+npz.save(corrections)
+```
+
+**Phase 3: Periodic Retraining (Weekly/Monthly)**
+```python
+# Collect all user corrections from multiple files
+all_corrections = load_corrections_from_all_files()
+# 200 user corrections from 20 analyzed files
+
+# Combine with original auto-labeled data
+combined_dataset = {
+    "auto_labeled": 40,000 peaks,
+    "user_corrected": 200 peaks  # GOLD STANDARD!
+}
+
+# Weight user corrections higher (they're more reliable)
+sample_weights = []
+for label_source in combined_dataset.label_sources:
+    if label_source == "user_corrected":
+        sample_weights.append(10.0)  # 10× more important
+    else:
+        sample_weights.append(1.0)
+
+# Retrain model
+model_v2 = RandomForestClassifier()
+model_v2.fit(
+    combined_dataset.features,
+    combined_dataset.labels,
+    sample_weight=sample_weights
+)
+
+# Accuracy: ~93-95% (improved!)
+
+# Save updated model
+save_model(model_v2, "breath_classifier_v2.pkl")
+```
+
+**Phase 4: Model Improvement Over Time**
+```
+Version 1: 40,000 auto-labeled → 85-90% accuracy
+   ↓ (User analyzes 20 files, makes 200 corrections)
+Version 2: 40,000 auto + 200 corrected → 93-95% accuracy
+   ↓ (User analyzes 50 more files, makes 150 corrections)
+Version 3: 40,000 auto + 350 corrected → 95-97% accuracy
+   ↓ (User analyzes 100 more files, makes 100 corrections)
+Version 4: 40,000 auto + 450 corrected → 96-98% accuracy
+   ↓ (Fewer corrections needed as model improves!)
+```
+
+#### Implementation Details
+
+**Tracking Label Sources**:
+```python
+label_sources = [
+    "auto",              # From elbow detection
+    "auto",
+    "user_corrected",    # User manually changed
+    "auto",
+    "user_added",        # User added missing peak
+    "user_removed"       # User deleted false positive
+]
+```
+
+**Export Format** (saved in NPZ):
+```python
+ml_training_data = {
+    "peaks": [...],
+    "labels": ["breath", "not_breath", ...],
+    "label_sources": ["auto", "user_corrected", ...],
+    "features": {...},
+    "model_version_used": "v2",  # Which model made predictions
+    "timestamp": "2025-01-15 14:32:01",
+    "file_id": "20241024_mouse05.abf"
+}
+```
+
+**Retraining Script** (run monthly):
+```python
+# collect_corrections.py
+corrections_db = []
+for npz_file in Path("analyzed_data").glob("*.npz"):
+    data = np.load(npz_file)
+    if "label_sources" in data:
+        corrections = extract_corrections(data)
+        corrections_db.extend(corrections)
+
+print(f"Found {len(corrections_db)} user corrections")
+# Found 450 user corrections from 150 files
+
+# retrain_model.py
+retrain_model(
+    auto_labeled_data="initial_dataset.npz",
+    user_corrections=corrections_db,
+    output_model="breath_classifier_v4.pkl"
+)
+```
+
+#### Benefits of Continuous Learning
+
+✅ **Adapts to your data**: Learns patterns specific to your recording setup
+✅ **Improves over time**: Every correction makes the model better
+✅ **Minimal overhead**: Corrections happen during normal analysis (no extra work)
+✅ **Personalized**: Model learns your labeling preferences
+✅ **Transparent**: User always has final control (ML is assistive, not autonomous)
+
+#### When to Retrain
+
+**Recommended schedule**:
+- **First month**: Retrain weekly (rapid improvement phase)
+- **Months 2-3**: Retrain bi-weekly (stabilization phase)
+- **After 3 months**: Retrain monthly (maintenance phase)
+
+**Triggers for immediate retraining**:
+- Accumulated 50+ new corrections
+- New experimental condition (different drug, genotype, etc.)
+- Model accuracy drops noticeably
 
 ---
 
