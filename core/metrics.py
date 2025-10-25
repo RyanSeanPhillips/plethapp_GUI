@@ -1162,7 +1162,19 @@ def compute_sniff_confidence(
     N = len(y)
 
     # If no GMM probabilities available, return NaN
-    if _current_gmm_probabilities is None or len(_current_gmm_probabilities) == 0:
+    if _current_gmm_probabilities is None:
+        return np.full(N, np.nan, dtype=float)
+
+    # Handle case where _current_gmm_probabilities is a numpy scalar (0-d array)
+    if isinstance(_current_gmm_probabilities, np.ndarray) and _current_gmm_probabilities.ndim == 0:
+        return np.full(N, np.nan, dtype=float)
+
+    # Check if empty (for dict or array-like)
+    try:
+        if len(_current_gmm_probabilities) == 0:
+            return np.full(N, np.nan, dtype=float)
+    except TypeError:
+        # If len() fails, treat as invalid and return NaN
         return np.full(N, np.nan, dtype=float)
 
     # Get breath spans from onsets
@@ -1197,7 +1209,19 @@ def compute_eupnea_confidence(
     N = len(y)
 
     # If no GMM probabilities available, return NaN
-    if _current_gmm_probabilities is None or len(_current_gmm_probabilities) == 0:
+    if _current_gmm_probabilities is None:
+        return np.full(N, np.nan, dtype=float)
+
+    # Handle case where _current_gmm_probabilities is a numpy scalar (0-d array)
+    if isinstance(_current_gmm_probabilities, np.ndarray) and _current_gmm_probabilities.ndim == 0:
+        return np.full(N, np.nan, dtype=float)
+
+    # Check if empty (for dict or array-like)
+    try:
+        if len(_current_gmm_probabilities) == 0:
+            return np.full(N, np.nan, dtype=float)
+    except TypeError:
+        # If len() fails, treat as invalid and return NaN
         return np.full(N, np.nan, dtype=float)
 
     # Get breath spans from onsets
