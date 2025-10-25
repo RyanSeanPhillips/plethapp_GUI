@@ -284,8 +284,12 @@ def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[A
     state = AppState()
 
     # ===== METADATA =====
-    version = data.get('version', 'unknown')
-    original_file_path = Path(data['original_file_path'])
+    version = str(data.get('version', 'unknown'))
+    # Convert numpy scalar to Python string, then to Path
+    original_file_path_str = str(data['original_file_path'])
+    if hasattr(data['original_file_path'], 'item'):
+        original_file_path_str = str(data['original_file_path'].item())
+    original_file_path = Path(original_file_path_str)
 
     # ===== LOAD RAW DATA =====
     raw_data_loaded = False
@@ -357,9 +361,21 @@ def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[A
         }]
 
     # ===== CHANNEL SELECTIONS =====
-    state.analyze_chan = str(data['analyze_chan']) if data['analyze_chan'] != 'None' else None
-    state.stim_chan = str(data['stim_chan']) if data['stim_chan'] != 'None' else None
-    state.event_channel = str(data['event_channel']) if data['event_channel'] != 'None' else None
+    # Convert numpy scalars to Python strings
+    analyze_chan_val = data.get('analyze_chan', 'None')
+    if hasattr(analyze_chan_val, 'item'):
+        analyze_chan_val = analyze_chan_val.item()
+    state.analyze_chan = str(analyze_chan_val) if analyze_chan_val != 'None' else None
+
+    stim_chan_val = data.get('stim_chan', 'None')
+    if hasattr(stim_chan_val, 'item'):
+        stim_chan_val = stim_chan_val.item()
+    state.stim_chan = str(stim_chan_val) if stim_chan_val != 'None' else None
+
+    event_channel_val = data.get('event_channel', 'None')
+    if hasattr(event_channel_val, 'item'):
+        event_channel_val = event_channel_val.item()
+    state.event_channel = str(event_channel_val) if event_channel_val != 'None' else None
 
     # ===== FILTER SETTINGS =====
     state.use_low = bool(data['use_low'])
@@ -443,7 +459,10 @@ def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[A
 
     # ===== Y2 METRICS =====
     if 'y2_metric_key' in data:
-        state.y2_metric_key = str(data['y2_metric_key'])
+        y2_key = data['y2_metric_key']
+        if hasattr(y2_key, 'item'):
+            y2_key = y2_key.item()
+        state.y2_metric_key = str(y2_key)
 
         if 'y2_sweep_indices' in data:
             y2_indices = data['y2_sweep_indices']
@@ -504,12 +523,20 @@ def get_npz_metadata(npz_path: Path) -> Dict[str, Any]:
         import os
         mtime = datetime.fromtimestamp(os.path.getmtime(npz_path))
 
+        # Helper to convert numpy scalars
+        def safe_str(val, default='unknown'):
+            if val is None:
+                return default
+            if hasattr(val, 'item'):
+                val = val.item()
+            return str(val)
+
         return {
-            'version': str(data.get('version', 'unknown')),
-            'saved_timestamp': str(data.get('saved_timestamp', 'unknown')),
+            'version': safe_str(data.get('version'), 'unknown'),
+            'saved_timestamp': safe_str(data.get('saved_timestamp'), 'unknown'),
             'modified_time': mtime.strftime('%Y-%m-%d %H:%M'),
-            'original_file': str(data.get('original_file_path', 'unknown')),
-            'channel': str(data.get('analyze_chan', 'unknown')),
+            'original_file': safe_str(data.get('original_file_path'), 'unknown'),
+            'channel': safe_str(data.get('analyze_chan'), 'unknown'),
             'n_peaks': n_peaks,
             'n_sweeps': len(data.get('peak_sweep_indices', [])),
             'has_gmm': len(data.get('gmm_sweep_indices', [])) > 0,
