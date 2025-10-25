@@ -488,7 +488,8 @@ class MainWindow(QMainWindow):
             last_dir = str(Path.home())
 
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Select File(s)", last_dir, "Data Files (*.abf *.smrx *.edf);;ABF Files (*.abf);;SMRX Files (*.smrx);;EDF Files (*.edf);;All Files (*.*)"
+            self, "Select File(s)", last_dir,
+            "All Supported (*.abf *.smrx *.edf *.pleth.npz);;Data Files (*.abf *.smrx *.edf);;PlethApp Sessions (*.pleth.npz);;ABF Files (*.abf);;SMRX Files (*.smrx);;EDF Files (*.edf);;All Files (*.*)"
         )
         if not paths:
             return
@@ -505,11 +506,29 @@ class MainWindow(QMainWindow):
         else:
             self.BrowseFilePath.setText(f"{len(file_paths)} files selected: {file_paths[0].name}, ...")
 
-        # Load single file or concatenate multiple files
-        if len(file_paths) == 1:
-            self.load_file(file_paths[0])
+        # Check if any files are .pleth.npz (session files)
+        npz_files = [f for f in file_paths if f.suffix == '.npz' or f.name.endswith('.pleth.npz')]
+
+        if npz_files:
+            # Can only load one NPZ session at a time
+            if len(file_paths) > 1:
+                QMessageBox.warning(
+                    self, "Cannot Mix File Types",
+                    "Cannot load session files (.pleth.npz) together with data files.\n\n"
+                    "Please select either:\n"
+                    "• One or more data files (.abf, .smrx, .edf) for concatenation, OR\n"
+                    "• One session file (.pleth.npz) to restore analysis"
+                )
+                return
+
+            # Load the NPZ session
+            self.load_npz_state(file_paths[0])
         else:
-            self.load_multiple_files(file_paths)
+            # Load data files (ABF, SMRX, EDF)
+            if len(file_paths) == 1:
+                self.load_file(file_paths[0])
+            else:
+                self.load_multiple_files(file_paths)
 
     def load_file(self, path: Path):
         import time
@@ -836,6 +855,294 @@ class MainWindow(QMainWindow):
             message
         )
 
+    # ---------- Session Save/Load ----------
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts globally."""
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QKeyEvent
+
+        # Ctrl+S - Save Session State
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_S:
+            self.save_session_state()
+            event.accept()
+        else:
+            # Pass event to parent for default handling
+            super().keyPressEvent(event)
+
+    def save_session_state(self):
+        """Save current analysis state to .pleth.npz file (Ctrl+S)."""
+        from core.npz_io import save_state_to_npz, get_npz_path_for_channel
+
+        # Check if we have data loaded
+        if not self.state.in_path:
+            QMessageBox.warning(
+                self, "No Data Loaded",
+                "Please load a data file before saving session state."
+            )
+            return
+
+        # Check if channel is selected
+        if not self.state.analyze_chan:
+            QMessageBox.warning(
+                self, "No Channel Selected",
+                "Please select a channel to analyze before saving.\n\n"
+                "(Session state is saved per-channel, allowing independent analysis of multi-channel files)"
+            )
+            return
+
+        # Auto-generate default filename with channel name
+        default_path = get_npz_path_for_channel(self.state.in_path, self.state.analyze_chan)
+
+        # Let user modify path if desired
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Session State",
+            str(default_path),
+            "PlethApp Session (*.pleth.npz);;All Files (*)"
+        )
+
+        if not save_path:
+            return  # User cancelled
+
+        save_path = Path(save_path)
+
+        # Ask about including raw data (for portability vs file size)
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QCheckBox, QDialogButtonBox
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Save Options")
+        layout = QVBoxLayout()
+
+        label = QLabel(
+            "Choose what to include in the session file:\n\n"
+            "• Analysis results (peaks, edits, filters) - Always included\n"
+            "• Raw signal data - Optional (makes file portable but larger)"
+        )
+        layout.addWidget(label)
+
+        include_raw_checkbox = QCheckBox("Include raw signal data (for portability)")
+        include_raw_checkbox.setToolTip(
+            "If checked: File can be loaded without original .abf file (larger file ~65MB)\n"
+            "If unchecked: File will reload from original .abf file (smaller file ~5-10MB)"
+        )
+        include_raw_checkbox.setChecked(False)  # Default: don't include (smaller files)
+        layout.addWidget(include_raw_checkbox)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        dialog.setLayout(layout)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return  # User cancelled
+
+        include_raw = include_raw_checkbox.isChecked()
+
+        # Save to NPZ
+        try:
+            import time
+            t_start = time.time()
+
+            save_state_to_npz(self.state, save_path, include_raw_data=include_raw)
+
+            t_elapsed = time.time() - t_start
+            file_size_mb = save_path.stat().st_size / (1024 * 1024)
+
+            self._log_status_message(
+                f"✓ Session saved: {save_path.name} ({file_size_mb:.1f} MB, {t_elapsed:.1f}s)",
+                duration_ms=5000
+            )
+
+            # Update settings with last save location
+            self.settings.setValue("last_npz_save_dir", str(save_path.parent))
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Save Error",
+                f"Failed to save session state:\n\n{str(e)}"
+            )
+
+    def load_npz_state(self, npz_path: Path):
+        """Load complete analysis state from .pleth.npz file."""
+        from core.npz_io import load_state_from_npz, get_npz_metadata
+        import time
+
+        t_start = time.time()
+
+        # Get metadata for display
+        metadata = get_npz_metadata(npz_path)
+
+        if 'error' in metadata:
+            QMessageBox.critical(
+                self, "Load Error",
+                f"Failed to read NPZ file:\n\n{metadata['error']}"
+            )
+            return
+
+        # Show loading dialog
+        from PyQt6.QtWidgets import QProgressDialog, QApplication
+        from PyQt6.QtCore import Qt
+
+        progress = QProgressDialog(f"Loading session...\n{npz_path.name}", None, 0, 100, self)
+        progress.setWindowTitle("Loading PlethApp Session")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.setValue(10)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            # Load state from NPZ
+            progress.setLabelText(f"Reading session file...\n{npz_path.name}")
+            progress.setValue(30)
+            QApplication.processEvents()
+
+            new_state, raw_data_loaded = load_state_from_npz(npz_path, reload_raw_data=True)
+
+            if not raw_data_loaded:
+                progress.close()
+                QMessageBox.critical(
+                    self, "Load Error",
+                    "Could not load raw data from original file or NPZ.\n\n"
+                    f"Original file: {new_state.in_path}\n\n"
+                    "Please ensure the original data file is accessible."
+                )
+                return
+
+            progress.setLabelText("Restoring analysis state...")
+            progress.setValue(50)
+            QApplication.processEvents()
+
+            # Replace current state
+            self.state = new_state
+            st = self.state
+
+            # ===== RESTORE UI ELEMENTS =====
+
+            # Update file path display
+            if len(st.file_info) == 1:
+                self.BrowseFilePath.setText(str(st.file_info[0]['path']))
+            else:
+                self.BrowseFilePath.setText(f"{len(st.file_info)} files: {st.file_info[0]['path'].name}, ...")
+
+            progress.setValue(60)
+            QApplication.processEvents()
+
+            # Restore channel combos
+            self.AnalyzeChanSelect.blockSignals(True)
+            self.AnalyzeChanSelect.clear()
+            self.AnalyzeChanSelect.addItem("All Channels")
+            self.AnalyzeChanSelect.addItems(st.channel_names)
+
+            if st.analyze_chan and st.analyze_chan in st.channel_names:
+                idx = st.channel_names.index(st.analyze_chan) + 1  # +1 for "All Channels"
+                self.AnalyzeChanSelect.setCurrentIndex(idx)
+                self.single_panel_mode = True
+            else:
+                self.AnalyzeChanSelect.setCurrentIndex(0)  # "All Channels"
+                self.single_panel_mode = False
+
+            self.AnalyzeChanSelect.blockSignals(False)
+
+            self.StimChanSelect.blockSignals(True)
+            self.StimChanSelect.clear()
+            self.StimChanSelect.addItem("None")
+            self.StimChanSelect.addItems(st.channel_names)
+
+            if st.stim_chan and st.stim_chan in st.channel_names:
+                idx = st.channel_names.index(st.stim_chan) + 1
+                self.StimChanSelect.setCurrentIndex(idx)
+            else:
+                self.StimChanSelect.setCurrentIndex(0)
+
+            self.StimChanSelect.blockSignals(False)
+
+            self.EventsChanSelect.blockSignals(True)
+            self.EventsChanSelect.clear()
+            self.EventsChanSelect.addItem("None")
+            self.EventsChanSelect.addItems(st.channel_names)
+
+            if st.event_channel and st.event_channel in st.channel_names:
+                idx = st.channel_names.index(st.event_channel) + 1
+                self.EventsChanSelect.setCurrentIndex(idx)
+            else:
+                self.EventsChanSelect.setCurrentIndex(0)
+
+            self.EventsChanSelect.blockSignals(False)
+
+            progress.setValue(70)
+            QApplication.processEvents()
+
+            # Restore filter settings
+            self.LowCheckBox.setChecked(st.use_low)
+            self.HighCheckBox.setChecked(st.use_high)
+            self.MeanSubCheckBox.setChecked(st.use_mean_sub)
+            self.InvertCheckBox.setChecked(st.use_invert)
+
+            if st.low_hz:
+                self.LowSpinBox.setValue(st.low_hz)
+            if st.high_hz:
+                self.HighSpinBox.setValue(st.high_hz)
+
+            progress.setValue(80)
+            QApplication.processEvents()
+
+            # Clear caches (same as new file load)
+            self.metrics_by_sweep.clear()
+            self.onsets_by_sweep.clear()
+            self.global_outlier_stats = None
+            self._export_metric_cache = {}
+            self.zscore_global_mean = None
+            self.zscore_global_std = None
+
+            # Update omit button label
+            self._refresh_omit_button_label()
+
+            # Enable/disable peak apply button
+            self.ApplyPeakFindPushButton.setEnabled(False)
+            self._maybe_enable_peak_apply()
+
+            progress.setValue(90)
+            QApplication.processEvents()
+
+            # Restore navigation and plot
+            self.navigation_manager.reset_window_state()
+
+            # Plot based on mode
+            if self.single_panel_mode and st.analyze_chan:
+                self.plot_current_data()
+            else:
+                self.plot_all_channels()
+
+            # Restore navigation position (after plotting)
+            # Note: Window position is restored in plot_current_data via state.window_start_s
+
+            progress.setValue(100)
+            progress.close()
+
+            # Show success message
+            t_elapsed = time.time() - t_start
+            file_size_mb = npz_path.stat().st_size / (1024 * 1024)
+
+            self._log_status_message(
+                f"✓ Session loaded: {npz_path.name} ({file_size_mb:.1f} MB, {t_elapsed:.1f}s) - "
+                f"Channel: {st.analyze_chan}, {metadata['n_peaks']} peaks",
+                duration_ms=8000
+            )
+
+            # Update last directory
+            self.settings.setValue("last_dir", str(npz_path.parent))
+
+        except Exception as e:
+            progress.close()
+            import traceback
+            QMessageBox.critical(
+                self, "Load Error",
+                f"Failed to load session state:\n\n{str(e)}\n\n{traceback.format_exc()}"
+            )
+
     def _proc_key(self, chan: str, sweep: int):
         st = self.state
         return (
@@ -946,6 +1253,39 @@ class MainWindow(QMainWindow):
             # Switch to single channel view
             new_chan = st.channel_names[idx - 1]  # -1 because idx 0 is "All Channels"
             if new_chan != st.analyze_chan or not self.single_panel_mode:
+                # Check if NPZ file exists for this channel (auto-load prompt)
+                if st.in_path and new_chan:
+                    from core.npz_io import get_npz_path_for_channel, get_npz_metadata
+
+                    npz_path = get_npz_path_for_channel(st.in_path, new_chan)
+
+                    if npz_path.exists():
+                        # Get metadata for display
+                        metadata = get_npz_metadata(npz_path)
+
+                        # Prompt user to load existing analysis
+                        reply = QMessageBox.question(
+                            self,
+                            "Load Existing Analysis?",
+                            f"Found saved analysis for channel '{new_chan}':\n\n"
+                            f"{npz_path.name}\n"
+                            f"Last modified: {metadata.get('modified_time', 'unknown')}\n"
+                            f"Contains: {metadata.get('n_peaks', 0)} peaks\n"
+                            f"GMM clustering: {'Yes' if metadata.get('has_gmm', False) else 'No'}\n\n"
+                            f"Load this analysis?",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.Yes  # Default to Yes
+                        )
+
+                        if reply == QMessageBox.StandardButton.Yes:
+                            # User wants to load existing analysis
+                            # Block signals to prevent recursive calls
+                            self.AnalyzeChanSelect.blockSignals(True)
+                            self.load_npz_state(npz_path)
+                            self.AnalyzeChanSelect.blockSignals(False)
+                            return  # Don't continue with fresh channel switch
+
+                # User declined or no NPZ exists - continue with fresh channel
                 st.analyze_chan = new_chan
                 st.proc_cache.clear()
                 # Clear z-score global statistics cache
