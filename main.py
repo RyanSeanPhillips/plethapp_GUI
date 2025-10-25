@@ -451,6 +451,30 @@ class MainWindow(QMainWindow):
         # Show menu below the button
         menu.exec(self.history_button.mapToGlobal(self.history_button.rect().bottomLeft()))
 
+    def _show_error(self, title: str, message: str):
+        """Show an error dialog with selectable text for easy copying."""
+        msg = QMessageBox(QMessageBox.Icon.Critical, title, message,
+                         QMessageBox.StandardButton.Ok, self)
+        msg.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse |
+                                   Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        msg.exec()
+
+    def _show_warning(self, title: str, message: str):
+        """Show a warning dialog with selectable text for easy copying."""
+        msg = QMessageBox(QMessageBox.Icon.Warning, title, message,
+                         QMessageBox.StandardButton.Ok, self)
+        msg.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse |
+                                   Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        msg.exec()
+
+    def _show_info(self, title: str, message: str):
+        """Show an info dialog with selectable text for easy copying."""
+        msg = QMessageBox(QMessageBox.Icon.Information, title, message,
+                         QMessageBox.StandardButton.Ok, self)
+        msg.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse |
+                                   Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        msg.exec()
+
     def _log_status_message(self, message: str, timeout: int = 0):
         """Log a status message and show it on the status bar."""
         import datetime
@@ -512,8 +536,7 @@ class MainWindow(QMainWindow):
         if npz_files:
             # Can only load one NPZ session at a time
             if len(file_paths) > 1:
-                QMessageBox.warning(
-                    self, "Cannot Mix File Types",
+                self._show_warning("Cannot Mix File Types",
                     "Cannot load session files (.pleth.npz) together with data files.\n\n"
                     "Please select either:\n"
                     "• One or more data files (.abf, .smrx, .edf) for concatenation, OR\n"
@@ -561,7 +584,7 @@ class MainWindow(QMainWindow):
             sr, sweeps_by_ch, ch_names, t = abf_io.load_data_file(path, progress_callback=update_progress)
         except Exception as e:
             progress.close()
-            QMessageBox.critical(self, "Load error", str(e))
+            self._show_error("Load error", str(e))
             return
         finally:
             progress.close()
@@ -693,7 +716,7 @@ class MainWindow(QMainWindow):
 
         if not valid:
             # Show error dialog
-            QMessageBox.critical(self, "File Validation Failed", "\n".join(messages))
+            self._show_error("File Validation Failed", "\n".join(messages))
             return
         elif messages:  # Warnings
             # Show warning dialog with option to proceed
@@ -730,7 +753,7 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             progress.close()
-            QMessageBox.critical(self, "Load error", str(e))
+            self._show_error("Load error", str(e))
             return
         finally:
             progress.close()
@@ -849,11 +872,7 @@ class MainWindow(QMainWindow):
         if padded_count > 0:
             message += f"\n\nNote: {padded_count} file(s) had different sweep lengths and were padded with NaN values."
 
-        QMessageBox.information(
-            self,
-            "Files Loaded Successfully",
-            message
-        )
+        self._show_info("Files Loaded Successfully", message)
 
     # ---------- Session Save/Load ----------
     def keyPressEvent(self, event):
@@ -875,16 +894,14 @@ class MainWindow(QMainWindow):
 
         # Check if we have data loaded
         if not self.state.in_path:
-            QMessageBox.warning(
-                self, "No Data Loaded",
+            self._show_warning("No Data Loaded",
                 "Please load a data file before saving session state."
             )
             return
 
         # Check if channel is selected
         if not self.state.analyze_chan:
-            QMessageBox.warning(
-                self, "No Channel Selected",
+            self._show_warning("No Channel Selected",
                 "Please select a channel to analyze before saving.\n\n"
                 "(Session state is saved per-channel, allowing independent analysis of multi-channel files)"
             )
@@ -958,8 +975,7 @@ class MainWindow(QMainWindow):
             self.settings.setValue("last_npz_save_dir", str(save_path.parent))
 
         except Exception as e:
-            QMessageBox.critical(
-                self, "Save Error",
+            self._show_error("Save Error",
                 f"Failed to save session state:\n\n{str(e)}"
             )
 
@@ -974,8 +990,7 @@ class MainWindow(QMainWindow):
         metadata = get_npz_metadata(npz_path)
 
         if 'error' in metadata:
-            QMessageBox.critical(
-                self, "Load Error",
+            self._show_error("Load Error",
                 f"Failed to read NPZ file:\n\n{metadata['error']}"
             )
             return
@@ -1003,8 +1018,7 @@ class MainWindow(QMainWindow):
 
             if not raw_data_loaded:
                 progress.close()
-                QMessageBox.critical(
-                    self, "Load Error",
+                self._show_error("Load Error",
                     "Could not load raw data from original file or NPZ.\n\n"
                     f"Original file: {new_state.in_path}\n\n"
                     "Please ensure the original data file is accessible."
@@ -1138,8 +1152,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             progress.close()
             import traceback
-            QMessageBox.critical(
-                self, "Load Error",
+            self._show_error("Load Error",
                 f"Failed to load session state:\n\n{str(e)}\n\n{traceback.format_exc()}"
             )
 
@@ -2418,13 +2431,13 @@ class MainWindow(QMainWindow):
         """Open spectral analysis dialog and optionally apply notch filter."""
         st = self.state
         if st.t is None or not st.analyze_chan or st.analyze_chan not in st.sweeps:
-            QMessageBox.warning(self, "Spectral Analysis", "Please load data and select an analyze channel first.")
+            self._show_warning("Spectral Analysis", "Please load data and select an analyze channel first.")
             return
 
         # Get current sweep data
         t, y = self._current_trace()
         if t is None or y is None:
-            QMessageBox.warning(self, "Spectral Analysis", "No data available for current sweep.")
+            self._show_warning("Spectral Analysis", "No data available for current sweep.")
             return
 
         # Get stimulation spans for current sweep if available
@@ -2790,7 +2803,7 @@ class MainWindow(QMainWindow):
             for pat in patterns:
                 files.extend(root.rglob(pat))
         except Exception as e:
-            QMessageBox.critical(self, "Scan error", f"Failed to scan folder:\n{root}\n\n{e}")
+            self._show_error("Scan error", f"Failed to scan folder:\n{root}\n\n{e}")
             return
 
         # Deduplicate & sort (by name, then path for stability)
