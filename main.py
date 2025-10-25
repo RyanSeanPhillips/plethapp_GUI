@@ -1090,15 +1090,15 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
 
             # Restore filter settings
-            self.LowCheckBox.setChecked(st.use_low)
-            self.HighCheckBox.setChecked(st.use_high)
-            self.MeanSubCheckBox.setChecked(st.use_mean_sub)
-            self.InvertCheckBox.setChecked(st.use_invert)
+            self.LowPass_checkBox.setChecked(st.use_low)
+            self.HighPass_checkBox.setChecked(st.use_high)
+            self.InvertSignal_checkBox.setChecked(st.use_invert)
+            # Note: use_mean_sub is stored but not restored (no UI checkbox)
 
             if st.low_hz:
-                self.LowSpinBox.setValue(st.low_hz)
+                self.LowPassVal.setText(str(st.low_hz))
             if st.high_hz:
-                self.HighSpinBox.setValue(st.high_hz)
+                self.HighPassVal.setText(str(st.high_hz))
 
             progress.setValue(80)
             QApplication.processEvents()
