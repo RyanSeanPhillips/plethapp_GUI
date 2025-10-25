@@ -861,9 +861,9 @@ class MainWindow(QMainWindow):
         from PyQt6.QtCore import Qt
         from PyQt6.QtGui import QKeyEvent
 
-        # Ctrl+S - Save Session State
+        # Ctrl+S - Save Data (same as Save Data button)
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_S:
-            self.save_session_state()
+            self.on_save_analyzed_clicked()
             event.accept()
         else:
             # Pass event to parent for default handling
@@ -951,7 +951,7 @@ class MainWindow(QMainWindow):
 
             self._log_status_message(
                 f"✓ Session saved: {save_path.name} ({file_size_mb:.1f} MB, {t_elapsed:.1f}s)",
-                duration_ms=5000
+                timeout=5000
             )
 
             # Update settings with last save location
@@ -1129,7 +1129,7 @@ class MainWindow(QMainWindow):
             self._log_status_message(
                 f"✓ Session loaded: {npz_path.name} ({file_size_mb:.1f} MB, {t_elapsed:.1f}s) - "
                 f"Channel: {st.analyze_chan}, {metadata['n_peaks']} peaks",
-                duration_ms=8000
+                timeout=8000
             )
 
             # Update last directory

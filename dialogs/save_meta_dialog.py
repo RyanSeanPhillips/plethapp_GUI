@@ -165,14 +165,20 @@ class SaveMetaDialog(QDialog):
         self.chk_save_pdf.setToolTip("Visualization plots (~31s - can skip for quick exports)")
         self.chk_save_pdf.setStyleSheet(small_font)
 
+        self.chk_save_session = QCheckBox("Session State", self)
+        self.chk_save_session.setChecked(True)
+        self.chk_save_session.setToolTip("Save analysis session (.pleth.npz) - allows resuming work later (~8 MB, <1s)")
+        self.chk_save_session.setStyleSheet(small_font)
+
         # Arrange in 3 columns x 2 rows
         # Row 0: NPZ, Timeseries, Breaths
         export_grid.addWidget(self.chk_save_npz, 0, 0)
         export_grid.addWidget(self.chk_save_timeseries, 0, 1)
         export_grid.addWidget(self.chk_save_breaths, 0, 2)
-        # Row 1: Events, PDF
+        # Row 1: Events, PDF, Session
         export_grid.addWidget(self.chk_save_events, 1, 0)
         export_grid.addWidget(self.chk_save_pdf, 1, 1)
+        export_grid.addWidget(self.chk_save_session, 1, 2)
 
         # Add checkbox grid to container
         export_container_layout.addWidget(export_widget, 1, 0, 1, 3)  # Spans 3 columns
@@ -280,4 +286,5 @@ class SaveMetaDialog(QDialog):
             "save_breaths_csv": bool(self.chk_save_breaths.isChecked()),
             "save_events_csv": bool(self.chk_save_events.isChecked()),
             "save_pdf": bool(self.chk_save_pdf.isChecked()),
+            "save_session": bool(self.chk_save_session.isChecked()),
         }

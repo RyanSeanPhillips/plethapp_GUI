@@ -630,6 +630,7 @@ class ExportManager:
             save_breaths_csv = vals.get("save_breaths_csv", True)
             save_events_csv = vals.get("save_events_csv", True)
             save_pdf = vals.get("save_pdf", True)
+            save_session = vals.get("save_session", True)  # Session state (.pleth.npz)
 
             # Check for duplicate files before saving (only check files that will be saved)
             existing_files = []
@@ -639,6 +640,7 @@ class ExportManager:
             if save_breaths_csv: expected_suffixes.append("_breaths.csv")
             if save_events_csv: expected_suffixes.append("_events.csv")
             if save_pdf: expected_suffixes.append("_summary.pdf")
+            if save_session: expected_suffixes.append(".pleth.npz")
             for suffix in expected_suffixes:
                 filepath = final_dir / (suggested + suffix)
                 if filepath.exists():
@@ -1842,6 +1844,19 @@ class ExportManager:
                 progress_dialog.setValue(100)
                 QApplication.processEvents()
 
+            # Save session state if requested
+            session_path = None
+            if save_session:
+                from core.npz_io import get_npz_path_for_channel, save_state_to_npz
+                try:
+                    # Session file goes next to original data file (not in Pleth_App_analysis folder)
+                    session_path = get_npz_path_for_channel(st.in_path, st.analyze_chan)
+                    save_state_to_npz(st, session_path, include_raw_data=False)
+                    print(f"[session] ✓ Session state saved: {session_path.name}")
+                except Exception as e:
+                    print(f"[session] ✗ Session save failed: {e}")
+                    session_path = None
+
             # Build success message (only include files that were actually saved)
             file_list = [npz_path.name]  # NPZ always saved
             if save_timeseries_csv:
@@ -1854,6 +1869,8 @@ class ExportManager:
                 file_list.append(pdf_path.name)
             if save_pdf and event_cta_pdf_path:
                 file_list.append(event_cta_pdf_path.name)
+            if save_session and session_path:
+                file_list.append(f"{session_path.name} (session)")
             msg = "Saved:\n" + "\n".join(f"- {name}" for name in file_list)
             print("[save]", msg)
             try:
