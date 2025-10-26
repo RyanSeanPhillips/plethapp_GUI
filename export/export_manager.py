@@ -1872,7 +1872,17 @@ class ExportManager:
                     session_path = get_npz_path_for_channel(st.in_path, st.analyze_chan)
                     # Get GMM cache from main window to preserve user's cluster assignments
                     gmm_cache = getattr(self.window, '_cached_gmm_results', None)
-                    save_state_to_npz(st, session_path, include_raw_data=False, gmm_cache=gmm_cache)
+
+                    # Collect app-level settings from main window
+                    app_settings = {
+                        'filter_order': self.window.filter_order,
+                        'use_zscore_normalization': self.window.use_zscore_normalization,
+                        'notch_filter_lower': self.window.notch_filter_lower,
+                        'notch_filter_upper': self.window.notch_filter_upper,
+                        'apnea_threshold': self.window._parse_float(self.window.ApneaThresh) or 0.5
+                    }
+
+                    save_state_to_npz(st, session_path, include_raw_data=False, gmm_cache=gmm_cache, app_settings=app_settings)
                     print(f"[session] ✓ Session state saved: {session_path.name}")
                 except Exception as e:
                     print(f"[session] ✗ Session save failed: {e}")

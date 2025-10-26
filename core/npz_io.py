@@ -64,7 +64,7 @@ def get_ml_npz_path_for_channel(data_path: Path, channel_name: str) -> Path:
     return ml_folder / f"{base}.{safe_channel}.ml.npz"
 
 
-def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = False, gmm_cache: Optional[Dict] = None) -> None:
+def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = False, gmm_cache: Optional[Dict] = None, app_settings: Optional[Dict] = None) -> None:
     """
     Save complete analysis state to .pleth.npz file.
 
@@ -76,6 +76,7 @@ def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = 
         npz_path: Path to save .pleth.npz file
         include_raw_data: If True, include raw sweeps (for portability, larger files)
         gmm_cache: Optional GMM cache dict to preserve user's cluster assignments
+        app_settings: Optional dict with app-level settings (filter_order, zscore, notch, apnea_thresh)
 
     Raises:
         ValueError: If state is missing required fields
@@ -231,6 +232,17 @@ def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = 
     else:
         data['has_gmm_cache'] = False
 
+    # ===== APP SETTINGS (filter order, zscore, notch, apnea threshold) =====
+    if app_settings is not None:
+        data['has_app_settings'] = True
+        data['filter_order'] = app_settings.get('filter_order', 4)
+        data['use_zscore_normalization'] = app_settings.get('use_zscore_normalization', True)
+        data['notch_filter_lower'] = app_settings.get('notch_filter_lower', 0.0) if app_settings.get('notch_filter_lower') is not None else 0.0
+        data['notch_filter_upper'] = app_settings.get('notch_filter_upper', 0.0) if app_settings.get('notch_filter_upper') is not None else 0.0
+        data['apnea_threshold'] = app_settings.get('apnea_threshold', 0.5)
+    else:
+        data['has_app_settings'] = False
+
     # ===== Y2 METRICS =====
     if state.y2_metric_key:
         data['y2_metric_key'] = state.y2_metric_key
@@ -269,7 +281,7 @@ def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = 
     np.savez_compressed(npz_path, **data)
 
 
-def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[AppState, bool, Optional[Dict]]:
+def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[AppState, bool, Optional[Dict], Optional[Dict]]:
     """
     Load complete analysis state from .pleth.npz file.
 
@@ -279,10 +291,11 @@ def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[A
                         If False, only load if embedded in NPZ
 
     Returns:
-        (state, raw_data_loaded, gmm_cache)
+        (state, raw_data_loaded, gmm_cache, app_settings)
         - state: Restored AppState instance
         - raw_data_loaded: True if raw data was loaded (either from file or NPZ)
         - gmm_cache: Restored GMM cache dict (or None if not saved)
+        - app_settings: Restored app-level settings dict (or None if not saved)
 
     Raises:
         FileNotFoundError: If original data file not found (and not embedded)
@@ -486,6 +499,19 @@ def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[A
             'breath_cycles': [tuple(bc) for bc in data['gmm_breath_cycles']]
         }
 
+    # ===== APP SETTINGS (restore filter order, zscore, notch, apnea threshold) =====
+    app_settings = None
+    if data.get('has_app_settings', False):
+        notch_lower = float(data['notch_filter_lower'])
+        notch_upper = float(data['notch_filter_upper'])
+        app_settings = {
+            'filter_order': int(data['filter_order']),
+            'use_zscore_normalization': bool(data['use_zscore_normalization']),
+            'notch_filter_lower': notch_lower if notch_lower != 0.0 else None,
+            'notch_filter_upper': notch_upper if notch_upper != 0.0 else None,
+            'apnea_threshold': float(data['apnea_threshold'])
+        }
+
     # ===== Y2 METRICS =====
     if 'y2_metric_key' in data:
         y2_key = data['y2_metric_key']
@@ -520,7 +546,7 @@ def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[A
             metrics = json.loads(metrics_json)
             state.stim_metrics_by_sweep[int(sweep_idx)] = metrics
 
-    return state, raw_data_loaded, gmm_cache
+    return state, raw_data_loaded, gmm_cache, app_settings
 
 
 def get_npz_metadata(npz_path: Path) -> Dict[str, Any]:

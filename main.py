@@ -963,7 +963,17 @@ class MainWindow(QMainWindow):
 
             # Pass GMM cache to preserve user's cluster assignments
             gmm_cache = getattr(self, '_cached_gmm_results', None)
-            save_state_to_npz(self.state, save_path, include_raw_data=include_raw, gmm_cache=gmm_cache)
+
+            # Collect app-level settings to preserve
+            app_settings = {
+                'filter_order': self.filter_order,
+                'use_zscore_normalization': self.use_zscore_normalization,
+                'notch_filter_lower': self.notch_filter_lower,
+                'notch_filter_upper': self.notch_filter_upper,
+                'apnea_threshold': self._parse_float(self.ApneaThresh) or 0.5
+            }
+
+            save_state_to_npz(self.state, save_path, include_raw_data=include_raw, gmm_cache=gmm_cache, app_settings=app_settings)
 
             t_elapsed = time.time() - t_start
             file_size_mb = save_path.stat().st_size / (1024 * 1024)
@@ -1016,7 +1026,7 @@ class MainWindow(QMainWindow):
             progress.setValue(30)
             QApplication.processEvents()
 
-            new_state, raw_data_loaded, gmm_cache = load_state_from_npz(npz_path, reload_raw_data=True)
+            new_state, raw_data_loaded, gmm_cache, app_settings = load_state_from_npz(npz_path, reload_raw_data=True)
 
             if not raw_data_loaded:
                 progress.close()
@@ -1107,6 +1117,24 @@ class MainWindow(QMainWindow):
                 self.LowPassVal.setText(str(st.low_hz))
             if st.high_hz:
                 self.HighPassVal.setText(str(st.high_hz))
+
+            # Restore app-level settings (filter order, zscore, notch, apnea threshold)
+            if app_settings is not None:
+                self.filter_order = app_settings.get('filter_order', 4)
+                self.use_zscore_normalization = app_settings.get('use_zscore_normalization', True)
+                self.notch_filter_lower = app_settings.get('notch_filter_lower')
+                self.notch_filter_upper = app_settings.get('notch_filter_upper')
+                apnea_thresh = app_settings.get('apnea_threshold', 0.5)
+
+                # Update UI elements
+                if hasattr(self, 'FilterOrderSpin'):
+                    self.FilterOrderSpin.setValue(self.filter_order)
+                if hasattr(self, 'ApneaThresh'):
+                    self.ApneaThresh.setText(str(apnea_thresh))
+
+                print(f"[npz-load] Restored app settings: filter_order={self.filter_order}, "
+                      f"zscore={self.use_zscore_normalization}, notch={self.notch_filter_lower}-{self.notch_filter_upper}, "
+                      f"apnea_thresh={apnea_thresh}")
 
             progress.setValue(80)
             QApplication.processEvents()
