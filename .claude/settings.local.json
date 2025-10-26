@@ -8,7 +8,8 @@
       "Read(//c/CEDMATLAB/CEDS64ML/**)",
       "WebSearch",
       "Bash(mv:*)",
-      "Read(//c/**)"
+      "Read(//c/**)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

@@ -659,7 +659,7 @@ class ExportManager:
             if save_breaths_csv: expected_suffixes.append("_breaths.csv")
             if save_events_csv: expected_suffixes.append("_events.csv")
             if save_pdf: expected_suffixes.append("_summary.pdf")
-            if save_session: expected_suffixes.append(".pleth.npz")
+            if save_session: expected_suffixes.append("_session.npz")
             for suffix in expected_suffixes:
                 filepath = final_dir / (suggested + suffix)
                 if filepath.exists():
@@ -1866,10 +1866,10 @@ class ExportManager:
             # Save session state if requested
             session_path = None
             if save_session:
-                from core.npz_io import get_npz_path_for_channel, save_state_to_npz
+                from core.npz_io import save_state_to_npz
                 try:
-                    # Session file goes next to original data file (not in Pleth_App_analysis folder)
-                    session_path = get_npz_path_for_channel(st.in_path, st.analyze_chan)
+                    # Session file goes in analysis folder with rich metadata naming
+                    session_path = base.with_name(base.name + "_session.npz")
                     # Get GMM cache from main window to preserve user's cluster assignments
                     gmm_cache = getattr(self.window, '_cached_gmm_results', None)
 
