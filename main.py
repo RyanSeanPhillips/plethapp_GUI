@@ -1136,6 +1136,11 @@ class MainWindow(QMainWindow):
             # Restore navigation position (after plotting)
             # Note: Window position is restored in redraw_main_plot via state.window_start_s
 
+            # If GMM probabilities were saved, rebuild the GMM cache for dialog display
+            if st.gmm_sniff_probabilities and self.auto_gmm_enabled:
+                print("[npz-load] Rebuilding GMM cache from loaded probabilities...")
+                self._run_automatic_gmm_clustering()
+
             progress.setValue(100)
             progress.close()
 
