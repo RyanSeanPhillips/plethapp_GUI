@@ -15,19 +15,22 @@ from PyQt6.QtCore import Qt as QtCore_Qt
 
 
 class SaveMetaDialog(QDialog):
-    def __init__(self, abf_name: str, channel: str, parent=None, auto_stim: str = "", history: dict = None):
+    def __init__(self, abf_name: str, channel: str, parent=None, auto_stim: str = "", history: dict = None, last_values: dict = None):
         super().__init__(parent)
         self.setWindowTitle("Save analyzed data — name builder")
 
         self._abf_name = abf_name
         self._channel = channel
         self._history = history or {}
+        self._last_values = last_values or {}
 
         lay = QFormLayout(self)
 
         # Mouse Strain with autocomplete
         self.le_strain = QLineEdit(self)
         self.le_strain.setPlaceholderText("e.g., VgatCre")
+        if self._last_values.get('strain'):
+            self.le_strain.setText(self._last_values['strain'])
         if self._history.get('strain'):
             completer = QCompleter(self._history['strain'], self)
             completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
@@ -38,6 +41,8 @@ class SaveMetaDialog(QDialog):
         # Virus with autocomplete
         self.le_virus = QLineEdit(self)
         self.le_virus.setPlaceholderText("e.g., ConFoff-ChR2")
+        if self._last_values.get('virus'):
+            self.le_virus.setText(self._last_values['virus'])
         if self._history.get('virus'):
             completer = QCompleter(self._history['virus'], self)
             completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
@@ -48,6 +53,8 @@ class SaveMetaDialog(QDialog):
         # Location with autocomplete
         self.le_location = QLineEdit(self)
         self.le_location.setPlaceholderText("e.g., preBotC or RTN")
+        if self._last_values.get('location'):
+            self.le_location.setText(self._last_values['location'])
         if self._history.get('location'):
             completer = QCompleter(self._history['location'], self)
             completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
@@ -58,8 +65,11 @@ class SaveMetaDialog(QDialog):
         # Stimulation type (can be auto-populated) with autocomplete
         self.le_stim = QLineEdit(self)
         self.le_stim.setPlaceholderText("e.g., 20Hz10s15ms or 15msPulse")
+        # Prefer auto_stim if available, otherwise use last value
         if auto_stim:
             self.le_stim.setText(auto_stim)
+        elif self._last_values.get('stim'):
+            self.le_stim.setText(self._last_values['stim'])
         if self._history.get('stim'):
             completer = QCompleter(self._history['stim'], self)
             completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
@@ -70,6 +80,8 @@ class SaveMetaDialog(QDialog):
         # Laser power with autocomplete
         self.le_power = QLineEdit(self)
         self.le_power.setPlaceholderText("e.g., 8mW")
+        if self._last_values.get('power'):
+            self.le_power.setText(self._last_values['power'])
         if self._history.get('power'):
             completer = QCompleter(self._history['power'], self)
             completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)
@@ -79,11 +91,18 @@ class SaveMetaDialog(QDialog):
 
         self.cb_sex = QComboBox(self)
         self.cb_sex.addItems(["", "M", "F", "Unknown"])
+        # Set last sex value if available
+        if self._last_values.get('sex'):
+            idx = self.cb_sex.findText(self._last_values['sex'])
+            if idx >= 0:
+                self.cb_sex.setCurrentIndex(idx)
         lay.addRow("Sex:", self.cb_sex)
 
         # Animal ID with autocomplete
         self.le_animal = QLineEdit(self)
         self.le_animal.setPlaceholderText("e.g., 25121004")
+        if self._last_values.get('animal'):
+            self.le_animal.setText(self._last_values['animal'])
         if self._history.get('animal'):
             completer = QCompleter(self._history['animal'], self)
             completer.setCaseSensitivity(QtCore_Qt.CaseSensitivity.CaseInsensitive)

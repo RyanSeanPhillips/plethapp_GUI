@@ -168,6 +168,23 @@ class ExportManager:
             # Save back
             self.window.settings.setValue(f"save_history/{key}", current)
 
+    def _load_last_save_values(self) -> dict:
+        """Load the last used values for the Save Data dialog to auto-populate fields."""
+        return {
+            'strain': self.window.settings.value("last_save/strain", ""),
+            'virus': self.window.settings.value("last_save/virus", ""),
+            'location': self.window.settings.value("last_save/location", ""),
+            'stim': self.window.settings.value("last_save/stim", ""),
+            'power': self.window.settings.value("last_save/power", ""),
+            'animal': self.window.settings.value("last_save/animal", ""),
+            'sex': self.window.settings.value("last_save/sex", "")
+        }
+
+    def _save_last_save_values(self, vals: dict):
+        """Save the last used values from the Save Data dialog for auto-population."""
+        for key in ['strain', 'virus', 'location', 'stim', 'power', 'animal', 'sex']:
+            value = vals.get(key, '').strip()
+            self.window.settings.setValue(f"last_save/{key}", value)
 
     def _sanitize_token(self, s: str) -> str:
         if not s:
@@ -542,18 +559,20 @@ class ExportManager:
             chan = st.analyze_chan or ""
             auto_stim = _auto_stim_from_metrics()
 
-            # --- Load autocomplete history ---
+            # --- Load autocomplete history and last values---
             history = self._load_save_dialog_history()
+            last_values = self._load_last_save_values()
 
             # --- Name builder dialog (with auto stim suggestion) ---
-            dlg = SaveMetaDialog(abf_name=abf_stem, channel=chan, parent=self.window, auto_stim=auto_stim, history=history)
+            dlg = SaveMetaDialog(abf_name=abf_stem, channel=chan, parent=self.window, auto_stim=auto_stim, history=history, last_values=last_values)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
 
             vals = dlg.values()
 
-            # --- Update history with new values ---
+            # --- Update history with new values and save last used values ---
             self._update_save_dialog_history(vals)
+            self._save_last_save_values(vals)
             suggested = self._sanitize_token(vals["preview"]) or "analysis"
             want_picker = bool(vals.get("choose_dir", False))
 

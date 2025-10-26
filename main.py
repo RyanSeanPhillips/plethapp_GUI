@@ -1122,9 +1122,10 @@ class MainWindow(QMainWindow):
             # Update omit button label
             self._refresh_omit_button_label()
 
-            # Enable/disable peak apply button
+            # Disable peak apply button after session load to prevent accidental re-run
+            # User already has peaks loaded from session, shouldn't re-detect
             self.ApplyPeakFindPushButton.setEnabled(False)
-            self._maybe_enable_peak_apply()
+            self.ApplyPeakFindPushButton.setToolTip("Peak detection already complete (loaded from session). Modify parameters and click to re-detect.")
 
             progress.setValue(90)
             QApplication.processEvents()
@@ -1142,9 +1143,10 @@ class MainWindow(QMainWindow):
             if gmm_cache is not None:
                 print("[npz-load] Restoring GMM cache from session file...")
                 self._cached_gmm_results = gmm_cache
-            elif st.gmm_sniff_probabilities and self.auto_gmm_enabled:
+            elif st.gmm_sniff_probabilities:
                 # Fallback: rebuild GMM cache if probabilities exist but no cache was saved
                 # (for backwards compatibility with old session files)
+                # Always rebuild regardless of auto_gmm_enabled setting
                 print("[npz-load] Rebuilding GMM cache from loaded probabilities (legacy fallback)...")
                 self._run_automatic_gmm_clustering()
 
