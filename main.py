@@ -961,7 +961,9 @@ class MainWindow(QMainWindow):
             import time
             t_start = time.time()
 
-            save_state_to_npz(self.state, save_path, include_raw_data=include_raw)
+            # Pass GMM cache to preserve user's cluster assignments
+            gmm_cache = getattr(self, '_cached_gmm_results', None)
+            save_state_to_npz(self.state, save_path, include_raw_data=include_raw, gmm_cache=gmm_cache)
 
             t_elapsed = time.time() - t_start
             file_size_mb = save_path.stat().st_size / (1024 * 1024)
@@ -1014,7 +1016,7 @@ class MainWindow(QMainWindow):
             progress.setValue(30)
             QApplication.processEvents()
 
-            new_state, raw_data_loaded = load_state_from_npz(npz_path, reload_raw_data=True)
+            new_state, raw_data_loaded, gmm_cache = load_state_from_npz(npz_path, reload_raw_data=True)
 
             if not raw_data_loaded:
                 progress.close()
@@ -1136,9 +1138,14 @@ class MainWindow(QMainWindow):
             # Restore navigation position (after plotting)
             # Note: Window position is restored in redraw_main_plot via state.window_start_s
 
-            # If GMM probabilities were saved, rebuild the GMM cache for dialog display
-            if st.gmm_sniff_probabilities and self.auto_gmm_enabled:
-                print("[npz-load] Rebuilding GMM cache from loaded probabilities...")
+            # Restore GMM cache if it was saved (preserves user's cluster assignments)
+            if gmm_cache is not None:
+                print("[npz-load] Restoring GMM cache from session file...")
+                self._cached_gmm_results = gmm_cache
+            elif st.gmm_sniff_probabilities and self.auto_gmm_enabled:
+                # Fallback: rebuild GMM cache if probabilities exist but no cache was saved
+                # (for backwards compatibility with old session files)
+                print("[npz-load] Rebuilding GMM cache from loaded probabilities (legacy fallback)...")
                 self._run_automatic_gmm_clustering()
 
             progress.setValue(100)

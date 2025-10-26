@@ -64,7 +64,7 @@ def get_ml_npz_path_for_channel(data_path: Path, channel_name: str) -> Path:
     return ml_folder / f"{base}.{safe_channel}.ml.npz"
 
 
-def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = False) -> None:
+def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = False, gmm_cache: Optional[Dict] = None) -> None:
     """
     Save complete analysis state to .pleth.npz file.
 
@@ -75,6 +75,7 @@ def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = 
         state: AppState instance to save
         npz_path: Path to save .pleth.npz file
         include_raw_data: If True, include raw sweeps (for portability, larger files)
+        gmm_cache: Optional GMM cache dict to preserve user's cluster assignments
 
     Raises:
         ValueError: If state is missing required fields
@@ -215,6 +216,21 @@ def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = 
         probs = state.gmm_sniff_probabilities[sweep_idx]
         data[f'gmm_probs_sweep_{sweep_idx}'] = probs
 
+    # ===== GMM CACHE (preserves user's cluster assignments and dialog data) =====
+    if gmm_cache is not None:
+        data['has_gmm_cache'] = True
+        data['gmm_cluster_labels'] = gmm_cache['cluster_labels']
+        data['gmm_cluster_probabilities'] = gmm_cache['cluster_probabilities']
+        data['gmm_feature_matrix'] = gmm_cache['feature_matrix']
+        data['gmm_sniffing_cluster_id'] = gmm_cache['sniffing_cluster_id']
+        data['gmm_feature_keys_json'] = json.dumps(gmm_cache['feature_keys'])
+
+        # Breath cycles is a list of tuples: (sweep_idx, breath_idx)
+        breath_cycles_array = np.array(gmm_cache['breath_cycles'], dtype=int)
+        data['gmm_breath_cycles'] = breath_cycles_array
+    else:
+        data['has_gmm_cache'] = False
+
     # ===== Y2 METRICS =====
     if state.y2_metric_key:
         data['y2_metric_key'] = state.y2_metric_key
@@ -253,7 +269,7 @@ def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = 
     np.savez_compressed(npz_path, **data)
 
 
-def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[AppState, bool]:
+def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[AppState, bool, Optional[Dict]]:
     """
     Load complete analysis state from .pleth.npz file.
 
@@ -263,9 +279,10 @@ def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[A
                         If False, only load if embedded in NPZ
 
     Returns:
-        (state, raw_data_loaded)
+        (state, raw_data_loaded, gmm_cache)
         - state: Restored AppState instance
         - raw_data_loaded: True if raw data was loaded (either from file or NPZ)
+        - gmm_cache: Restored GMM cache dict (or None if not saved)
 
     Raises:
         FileNotFoundError: If original data file not found (and not embedded)
@@ -457,6 +474,18 @@ def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[A
             probs = data[f'gmm_probs_sweep_{sweep_idx}']
             state.gmm_sniff_probabilities[int(sweep_idx)] = probs
 
+    # ===== GMM CACHE (restore user's cluster assignments and dialog data) =====
+    gmm_cache = None
+    if data.get('has_gmm_cache', False):
+        gmm_cache = {
+            'cluster_labels': data['gmm_cluster_labels'],
+            'cluster_probabilities': data['gmm_cluster_probabilities'],
+            'feature_matrix': data['gmm_feature_matrix'],
+            'sniffing_cluster_id': int(data['gmm_sniffing_cluster_id']),
+            'feature_keys': json.loads(str(data['gmm_feature_keys_json'])),
+            'breath_cycles': [tuple(bc) for bc in data['gmm_breath_cycles']]
+        }
+
     # ===== Y2 METRICS =====
     if 'y2_metric_key' in data:
         y2_key = data['y2_metric_key']
@@ -491,7 +520,7 @@ def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[A
             metrics = json.loads(metrics_json)
             state.stim_metrics_by_sweep[int(sweep_idx)] = metrics
 
-    return state, raw_data_loaded
+    return state, raw_data_loaded, gmm_cache
 
 
 def get_npz_metadata(npz_path: Path) -> Dict[str, Any]:

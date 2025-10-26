@@ -1851,7 +1851,9 @@ class ExportManager:
                 try:
                     # Session file goes next to original data file (not in Pleth_App_analysis folder)
                     session_path = get_npz_path_for_channel(st.in_path, st.analyze_chan)
-                    save_state_to_npz(st, session_path, include_raw_data=False)
+                    # Get GMM cache from main window to preserve user's cluster assignments
+                    gmm_cache = getattr(self.window, '_cached_gmm_results', None)
+                    save_state_to_npz(st, session_path, include_raw_data=False, gmm_cache=gmm_cache)
                     print(f"[session] ✓ Session state saved: {session_path.name}")
                 except Exception as e:
                     print(f"[session] ✗ Session save failed: {e}")
