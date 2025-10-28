@@ -83,6 +83,27 @@ def main():
 
         app = QApplication(sys.argv)
 
+        # Check for first launch and show welcome dialog
+        from core import config as app_config
+        if app_config.is_first_launch():
+            from dialogs import FirstLaunchDialog
+            first_launch_dialog = FirstLaunchDialog()
+            if first_launch_dialog.exec():
+                # User clicked Continue - save preferences
+                telemetry_enabled, crash_reports_enabled = first_launch_dialog.get_preferences()
+                cfg = app_config.load_config()
+                cfg['telemetry_enabled'] = telemetry_enabled
+                cfg['crash_reports_enabled'] = crash_reports_enabled
+                cfg['first_launch'] = False
+                app_config.save_config(cfg)
+            else:
+                # User closed dialog - use defaults and continue
+                app_config.mark_first_launch_complete()
+
+        # Initialize telemetry (after first-launch dialog)
+        from core import telemetry
+        telemetry.init_telemetry()
+
         # Create splash screen
         splash_paths = [
             Path(__file__).parent / "images" / "plethapp_splash_dark-01.png",

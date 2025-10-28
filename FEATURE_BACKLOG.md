@@ -25,9 +25,9 @@ This document tracks planned features, enhancements, and long-term development g
 - [x] **NPZ file save/load with full state restoration** (.pleth.npz sessions)
 - [x] **Auto-prominence threshold detection using Otsu's method** (interactive histogram dialog)
 - [x] **Help button with comprehensive usage guide** (3 tabs: workflow, exported files, about) - *NOTE: Update as features are added*
+- [x] **Anonymous usage tracking and telemetry** (Google Analytics 4 + Sentry) - *See TELEMETRY_SETUP.md*
 
 ### 🎯 High Priority (Next Up)
-- [ ] **Anonymous usage tracking and telemetry** (4-6 hours) ← USAGE STATISTICS
 - [ ] **Relative metrics (z-scores) for ML features** (2-3 hours) ← ML FOUNDATION
 - [ ] **Auto-threshold selection with ML auto-labeling** (3-4 hours) ← ML FOUNDATION
 - [ ] Display mode toggles for breathing states - background vs line (4-5 hours)

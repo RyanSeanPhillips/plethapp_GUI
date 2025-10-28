@@ -32,6 +32,7 @@ from core import stim as stimdet   # stim detection
 from core import peaks as peakdet   # peak detection
 from core import metrics  # calculation of breath metrics
 from core.navigation_manager import NavigationManager
+from core import telemetry  # Anonymous usage tracking
 from plotting import PlotManager
 from export import ExportManager
 
@@ -405,6 +406,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Save window geometry on close."""
         self.settings.setValue("geometry", self.saveGeometry())
+
+        # Log telemetry session end
+        telemetry.log_session_end()
+
         super().closeEvent(event)
 
     def _setup_status_history_dropdown(self):
@@ -620,6 +625,14 @@ class MainWindow(QMainWindow):
         st.t = t
         st.sweep_idx = 0
         self.navigation_manager.reset_window_state()
+
+        # Log telemetry: file loaded
+        file_ext = path.suffix.lower()[1:]  # .abf -> abf
+        telemetry.log_file_loaded(
+            file_type=file_ext,
+            num_sweeps=n_sweeps,
+            num_breaths=None  # Not detected yet
+        )
 
         # Reset peak results and trace cache
         if not hasattr(st, "peaks_by_sweep"):
@@ -2720,6 +2733,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             # User applied clustering results
             print("[gmm-clustering] Results applied to main plot")
+            telemetry.log_feature_used('gmm_clustering')
             self.redraw_main_plot()
 
     def _refresh_omit_button_label(self):

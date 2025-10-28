@@ -404,9 +404,109 @@ class HelpDialog(QDialog):
         description.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(description)
 
+        # Add spacing before telemetry settings
+        layout.addSpacing(30)
+
+        # Telemetry settings group
+        from core import config as app_config
+        from PyQt6.QtWidgets import QGroupBox, QCheckBox
+
+        telemetry_group = QGroupBox("Privacy & Usage Statistics")
+        telemetry_layout = QVBoxLayout()
+
+        # Telemetry checkbox
+        self.telemetry_checkbox = QCheckBox("Share anonymous usage statistics")
+        self.telemetry_checkbox.setChecked(app_config.is_telemetry_enabled())
+        self.telemetry_checkbox.setStyleSheet("font-size: 10pt;")
+        self.telemetry_checkbox.toggled.connect(self._on_telemetry_toggled)
+        telemetry_layout.addWidget(self.telemetry_checkbox)
+
+        # Crash reports checkbox
+        self.crash_reports_checkbox = QCheckBox("Send crash reports")
+        self.crash_reports_checkbox.setChecked(app_config.is_crash_reports_enabled())
+        self.crash_reports_checkbox.setStyleSheet("font-size: 10pt;")
+        self.crash_reports_checkbox.toggled.connect(self._on_crash_reports_toggled)
+        telemetry_layout.addWidget(self.crash_reports_checkbox)
+
+        # Learn more link
+        learn_more_label = QLabel('<a href="#details" style="color: #2a7fff;">What data is collected?</a>')
+        learn_more_label.setOpenExternalLinks(False)
+        learn_more_label.linkActivated.connect(self._show_telemetry_details)
+        telemetry_layout.addWidget(learn_more_label)
+
+        telemetry_group.setLayout(telemetry_layout)
+        telemetry_group.setMaximumWidth(400)
+        layout.addWidget(telemetry_group, alignment=Qt.AlignmentFlag.AlignHCenter)
+
         layout.addStretch()
 
         return widget
+
+    def _on_telemetry_toggled(self, checked):
+        """Handle telemetry checkbox toggle."""
+        from core import config as app_config
+        app_config.set_telemetry_enabled(checked)
+
+    def _on_crash_reports_toggled(self, checked):
+        """Handle crash reports checkbox toggle."""
+        from core import config as app_config
+        app_config.set_crash_reports_enabled(checked)
+
+    def _show_telemetry_details(self):
+        """Show detailed information about what data is collected."""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QPushButton
+
+        details_dialog = QDialog(self)
+        details_dialog.setWindowTitle("Telemetry Details")
+        details_dialog.resize(500, 400)
+
+        layout = QVBoxLayout(details_dialog)
+
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(False)
+        browser.setHtml("""
+            <h3 style="color: #2a7fff;">What Data is Collected?</h3>
+
+            <h4>Usage Data</h4>
+            <p>When you use PlethApp, we collect anonymous usage statistics:</p>
+            <ul>
+                <li><b>File types:</b> Whether you load ABF, SMRX, or EDF files (not file names)</li>
+                <li><b>Features used:</b> Which tools you use (GMM, manual editing, spectral analysis)</li>
+                <li><b>Export types:</b> What you export (PDF, CSV, NPZ)</li>
+                <li><b>Session duration:</b> How long you use the app</li>
+                <li><b>System info:</b> OS, Python version, PlethApp version</li>
+            </ul>
+
+            <h4>Crash Reports</h4>
+            <p>If the app crashes, we collect:</p>
+            <ul>
+                <li><b>Error messages:</b> What went wrong</li>
+                <li><b>Stack traces:</b> Where the error occurred in the code</li>
+                <li><b>No data:</b> Your files and data are NEVER included</li>
+            </ul>
+
+            <h4>Anonymous User ID</h4>
+            <p>A random UUID (like "a3f2e8c9-4b7d-...") is generated once and stored on your computer.
+            This lets us count unique users without knowing who you are.</p>
+
+            <p style="color: #FFD700; font-weight: bold;">What we NEVER collect:</p>
+            <ul>
+                <li>File names, paths, or directory structure</li>
+                <li>Animal metadata (strain, virus, injection site)</li>
+                <li>Actual breathing data (frequencies, amplitudes, metrics)</li>
+                <li>Your name, email, or institution</li>
+            </ul>
+
+            <p><b>You have complete control.</b> You can disable telemetry at any time using the checkboxes above.</p>
+        """)
+        layout.addWidget(browser)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(details_dialog.close)
+        layout.addWidget(close_btn)
+
+        details_dialog.setStyleSheet(self.styleSheet())
+        details_dialog.exec()
 
     def _apply_dark_theme(self):
         """Apply dark theme styling to the dialog."""
