@@ -25,7 +25,18 @@ This document tracks planned features, enhancements, and long-term development g
 - [x] **NPZ file save/load with full state restoration** (.pleth.npz sessions)
 - [x] **Auto-prominence threshold detection using Otsu's method** (interactive histogram dialog)
 - [x] **Help button with comprehensive usage guide** (3 tabs: workflow, exported files, about) - *NOTE: Update as features are added*
-- [x] **Anonymous usage tracking and telemetry** (Google Analytics 4 + Sentry) - *See TELEMETRY_SETUP.md*
+- [x] **Anonymous usage tracking and telemetry** (Google Analytics 4 + Sentry) - ✅ **COMPLETE**
+  - Comprehensive tracking: file loading, peak detection, GMM, filtering, manual edits
+  - **ML performance metrics**: edit_percentage, false_positive/negative rates, eupnea/sniff ratios
+  - User engagement: active user recognition, engagement time, screen views (5 dialogs)
+  - Crash tracking: global exception handler with context
+  - Privacy compliant: Anonymous UUID, opt-out, no PII
+  - Documentation: TELEMETRY_SETUP.md, TELEMETRY_INTEGRATION_GUIDE.md, TELEMETRY_TRACKING_CHECKLIST.md
+  - **📝 Future work needed**:
+    * Add tracking for new features as they're implemented
+    * Adjust metrics based on insights from real user data
+    * Set up custom GA4 dashboards (will need help)
+    * Fine-tune engagement timing and event parameters as needed
 
 ### 🎯 High Priority (Next Up)
 - [ ] **Relative metrics (z-scores) for ML features** (2-3 hours) ← ML FOUNDATION
