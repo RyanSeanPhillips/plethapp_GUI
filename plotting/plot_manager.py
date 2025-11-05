@@ -104,12 +104,84 @@ class PlotManager:
         # Draw automatic region overlays (eupnea, apnea, outliers)
         self._draw_region_overlays(s, t, y, t_plot)
 
+        # Draw omitted region overlays
+        self._draw_omitted_regions(s, t_plot)
+
         # Refresh threshold lines
         self.refresh_threshold_lines()
 
-        # Dim plot if sweep is omitted
-        if s in st.omitted_sweeps:
-            self._apply_omitted_dimming()
+        # Set y-limits based on non-omitted data only (exclude omitted regions from autoscaling)
+        self._set_ylim_excluding_omitted(s, y, t_plot)
+
+        # Note: Full sweep dimming now handled in _draw_omitted_regions() for consistency
+
+    def _set_ylim_excluding_omitted(self, sweep_idx, y, t_plot):
+        """Calculate and set y-limits based only on non-omitted data and peaks."""
+        st = self.state
+        ax = self.plot_host.ax_main
+
+        # If view is preserved, don't change ylim
+        if self.plot_host._preserve_y:
+            return
+
+        # If full sweep is omitted, use default autoscale
+        if sweep_idx in st.omitted_sweeps:
+            return
+
+        # Collect all y-values to consider (non-omitted only)
+        y_values = []
+
+        # 1. Add non-omitted trace data
+        if sweep_idx in st.omitted_ranges:
+            # Create mask for non-omitted samples
+            mask = np.ones(len(y), dtype=bool)
+            for (start_idx, end_idx) in st.omitted_ranges[sweep_idx]:
+                start_idx = max(0, min(start_idx, len(y) - 1))
+                end_idx = max(0, min(end_idx, len(y) - 1))
+                mask[start_idx:end_idx+1] = False
+            y_non_omit = y[mask]
+        else:
+            # No omitted regions, use all data
+            y_non_omit = y
+
+        if len(y_non_omit) > 0:
+            y_values.extend(y_non_omit)
+
+        # 2. Add non-omitted peak markers
+        pks = st.peaks_by_sweep.get(sweep_idx, [])
+        if len(pks) > 0:
+            for pk in pks:
+                if not self._is_peak_in_omitted_region(sweep_idx, pk):
+                    y_values.append(y[pk])
+
+        # 3. Add non-omitted breath markers (onsets, offsets, expmins, expoffs)
+        br = st.breath_by_sweep.get(sweep_idx, {})
+        for key in ['onsets', 'offsets', 'expmins', 'expoffs']:
+            indices = br.get(key, [])
+            if len(indices) > 0:
+                for idx in indices:
+                    if not self._is_peak_in_omitted_region(sweep_idx, idx):
+                        y_values.append(y[idx])
+
+        # 4. Add non-omitted sigh markers (they have vertical offset, but we'll approximate)
+        sigh_idx = getattr(st, "sigh_by_sweep", {}).get(sweep_idx, [])
+        if len(sigh_idx) > 0:
+            for idx in sigh_idx:
+                if not self._is_peak_in_omitted_region(sweep_idx, idx):
+                    # Sigh markers have ~7% offset, so add that for ylim calculation
+                    y_values.append(y[idx])
+
+        # Calculate ylim with padding
+        if len(y_values) > 0:
+            y_values = np.array(y_values)
+            y_min = np.nanmin(y_values)
+            y_max = np.nanmax(y_values)
+
+            # Add 5% padding
+            y_range = y_max - y_min
+            if y_range > 0:
+                padding = 0.05 * y_range
+                ax.set_ylim(y_min - padding, y_max + padding)
 
     def _draw_dual_subplot_plot(self, t_full, y_pleth, t_plot, spans_plot, title, sweep_idx, t0):
         """Draw dual subplot layout with pleth trace on top and event channel on bottom."""
@@ -338,14 +410,36 @@ class PlotManager:
         return " | ".join(title_parts)
 
     def _draw_peak_markers(self, sweep_idx, t_plot, y):
-        """Draw peak markers for current sweep."""
+        """Draw peak markers for current sweep, with gray markers for omitted regions."""
         st = self.state
         pks = getattr(st, "peaks_by_sweep", {}).get(sweep_idx, None)
 
         if pks is not None and len(pks):
-            t_peaks = t_plot[pks]
-            y_peaks = y[pks]
-            self.plot_host.update_peaks(t_peaks, y_peaks, size=24)
+            # Separate peaks into normal and omitted groups
+            normal_pks = []
+            omitted_pks = []
+
+            for pk in pks:
+                if self._is_peak_in_omitted_region(sweep_idx, pk):
+                    omitted_pks.append(pk)
+                else:
+                    normal_pks.append(pk)
+
+            # Draw normal peaks in red
+            if len(normal_pks):
+                t_normal = t_plot[normal_pks]
+                y_normal = y[normal_pks]
+                self.plot_host.update_peaks(t_normal, y_normal, size=24)
+            else:
+                self.plot_host.clear_peaks()
+
+            # Draw omitted peaks in gray
+            if len(omitted_pks):
+                t_omitted = t_plot[omitted_pks]
+                y_omitted = y[omitted_pks]
+                ax = self.plot_host.ax_main
+                if ax is not None:
+                    ax.scatter(t_omitted, y_omitted, s=24, c='gray', alpha=0.5, marker='o', zorder=5, edgecolors='darkgray', linewidths=0.5)
         else:
             self.plot_host.clear_peaks()
 
@@ -378,7 +472,7 @@ class PlotManager:
             self.plot_host.clear_sighs()
 
     def _draw_breath_markers(self, sweep_idx, t_plot, y):
-        """Draw breath event markers (onsets, offsets, expiratory mins/offs)."""
+        """Draw breath event markers (onsets, offsets, expiratory mins/offs) with gray for omitted regions."""
         st = self.state
         br = getattr(st, "breath_by_sweep", {}).get(sweep_idx, None)
 
@@ -388,14 +482,30 @@ class PlotManager:
             ex_idx = br.get("expmins", [])
             exoff_idx = br.get("expoffs", [])
 
-            t_on = t_plot[on_idx] if len(on_idx) else None
-            y_on = y[on_idx] if len(on_idx) else None
-            t_off = t_plot[off_idx] if len(off_idx) else None
-            y_off = y[off_idx] if len(off_idx) else None
-            t_exp = t_plot[ex_idx] if len(ex_idx) else None
-            y_exp = y[ex_idx] if len(ex_idx) else None
-            t_exof = t_plot[exoff_idx] if len(exoff_idx) else None
-            y_exof = y[exoff_idx] if len(exoff_idx) else None
+            # Separate into normal and omitted markers
+            on_normal, on_omit = [], []
+            off_normal, off_omit = [], []
+            ex_normal, ex_omit = [], []
+            exoff_normal, exoff_omit = [], []
+
+            for idx in on_idx:
+                (on_omit if self._is_peak_in_omitted_region(sweep_idx, idx) else on_normal).append(idx)
+            for idx in off_idx:
+                (off_omit if self._is_peak_in_omitted_region(sweep_idx, idx) else off_normal).append(idx)
+            for idx in ex_idx:
+                (ex_omit if self._is_peak_in_omitted_region(sweep_idx, idx) else ex_normal).append(idx)
+            for idx in exoff_idx:
+                (exoff_omit if self._is_peak_in_omitted_region(sweep_idx, idx) else exoff_normal).append(idx)
+
+            # Draw normal markers
+            t_on = t_plot[on_normal] if len(on_normal) else None
+            y_on = y[on_normal] if len(on_normal) else None
+            t_off = t_plot[off_normal] if len(off_normal) else None
+            y_off = y[off_normal] if len(off_normal) else None
+            t_exp = t_plot[ex_normal] if len(ex_normal) else None
+            y_exp = y[ex_normal] if len(ex_normal) else None
+            t_exof = t_plot[exoff_normal] if len(exoff_normal) else None
+            y_exof = y[exoff_normal] if len(exoff_normal) else None
 
             self.plot_host.update_breath_markers(
                 t_on=t_on, y_on=y_on,
@@ -404,6 +514,18 @@ class PlotManager:
                 t_exoff=t_exof, y_exoff=y_exof,
                 size=36
             )
+
+            # Draw omitted markers in gray
+            ax = self.plot_host.ax_main
+            if ax is not None:
+                if len(on_omit):
+                    ax.scatter(t_plot[on_omit], y[on_omit], s=36, c='gray', alpha=0.5, marker='^', zorder=4, edgecolors='darkgray', linewidths=0.5)
+                if len(off_omit):
+                    ax.scatter(t_plot[off_omit], y[off_omit], s=36, c='gray', alpha=0.5, marker='v', zorder=4, edgecolors='darkgray', linewidths=0.5)
+                if len(ex_omit):
+                    ax.scatter(t_plot[ex_omit], y[ex_omit], s=36, c='gray', alpha=0.5, marker='s', zorder=4, edgecolors='darkgray', linewidths=0.5)
+                if len(exoff_omit):
+                    ax.scatter(t_plot[exoff_omit], y[exoff_omit], s=36, c='gray', alpha=0.5, marker='D', zorder=4, edgecolors='darkgray', linewidths=0.5)
         else:
             self.plot_host.clear_breath_markers()
 
@@ -547,6 +669,89 @@ class PlotManager:
 
         return outlier_mask, failure_mask
 
+    def _is_peak_in_omitted_region(self, sweep_idx, peak_idx):
+        """Check if a peak index falls within an omitted region for the given sweep."""
+        st = self.state
+        if sweep_idx not in st.omitted_ranges:
+            return False
+
+        for (start_idx, end_idx) in st.omitted_ranges[sweep_idx]:
+            if start_idx <= peak_idx <= end_idx:
+                return True
+        return False
+
+    def _draw_omitted_regions(self, sweep_idx, t_plot):
+        """Draw semi-transparent overlays for omitted regions, or full sweep if sweep is omitted."""
+        st = self.state
+        print(f"[_draw_omitted_regions] Called for sweep {sweep_idx}")
+
+        ax = self.plot_host.ax_main
+        if ax is None:
+            print(f"[_draw_omitted_regions] No axes found!")
+            return
+
+        # Check if full sweep is omitted
+        if sweep_idx in st.omitted_sweeps:
+            print(f"[_draw_omitted_regions] Full sweep {sweep_idx} is omitted - drawing full overlay")
+            # Draw gray overlay over entire visible time range
+            xlim = ax.get_xlim()
+            ax.axvspan(xlim[0], xlim[1], color='gray', alpha=0.4, zorder=100,
+                      linewidth=1, edgecolor='darkgray', linestyle='--')
+
+            # Add "omitted" label in center
+            t_center = (xlim[0] + xlim[1]) / 2.0
+            y_limits = ax.get_ylim()
+            y_center = (y_limits[0] + y_limits[1]) / 2.0
+            ax.text(t_center, y_center, 'omitted',
+                   ha='center', va='center',
+                   fontsize=10, color='darkgray',
+                   weight='bold', alpha=0.7, zorder=101,
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.6, edgecolor='none'))
+            return
+
+        # Otherwise draw smaller omitted regions
+        print(f"[_draw_omitted_regions] omitted_ranges keys: {list(st.omitted_ranges.keys())}")
+
+        if sweep_idx not in st.omitted_ranges:
+            print(f"[_draw_omitted_regions] No omitted ranges for sweep {sweep_idx}")
+            return
+
+        print(f"[_draw_omitted_regions] Found {len(st.omitted_ranges[sweep_idx])} regions: {st.omitted_ranges[sweep_idx]}")
+
+        # Convert sample indices to time for plotting
+        sr_hz = st.sr_hz if st.sr_hz else 1000.0
+
+        for (i_start, i_end) in st.omitted_ranges[sweep_idx]:
+            t_start = i_start / sr_hz
+            t_end = i_end / sr_hz
+
+            # Adjust times if plot is normalized to stim onset
+            if st.stim_chan:
+                s = max(0, min(sweep_idx, next(iter(st.sweeps.values())).shape[1] - 1))
+                spans = st.stim_spans_by_sweep.get(s, [])
+                if spans:
+                    t0 = spans[0][0]
+                    t_start -= t0
+                    t_end -= t0
+
+            print(f"[_draw_omitted_regions] Drawing region at {t_start:.3f} - {t_end:.3f}s")
+
+            # Draw semi-transparent gray overlay for omitted region (high zorder to appear on top)
+            ax.axvspan(t_start, t_end, color='gray', alpha=0.4, zorder=100,
+                      linewidth=1, edgecolor='darkgray', linestyle='--')
+
+            # Add "omitted" text label in center of region
+            t_center = (t_start + t_end) / 2.0
+            y_limits = ax.get_ylim()
+            y_center = (y_limits[0] + y_limits[1]) / 2.0
+            ax.text(t_center, y_center, 'omitted',
+                   ha='center', va='center',
+                   fontsize=10, color='darkgray',
+                   weight='bold', alpha=0.7, zorder=101,
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.6, edgecolor='none'))
+
+        print(f"[_draw_omitted_regions] Finished drawing {len(st.omitted_ranges[sweep_idx])} regions")
+
     def _apply_omitted_dimming(self):
         """Dim the plot and hide markers for omitted sweeps."""
         fig = self.plot_host.fig
@@ -601,42 +806,14 @@ class PlotManager:
     def refresh_threshold_lines(self):
         """
         (Re)draw the dashed threshold line on the current visible axes.
-        Called after typing in ThreshVal and after redraws that clear the axes.
+        Called after redraws that clear the axes.
         """
-        fig = getattr(self.plot_host, "fig", None)
-        canvas = getattr(self.plot_host, "canvas", None)
-        if fig is None or canvas is None or not fig.axes:
-            return
-
-        # Remove previous lines if they exist
-        for ln in self._thresh_line_artists:
-            try:
-                ln.remove()
-            except Exception:
-                pass
-        self._thresh_line_artists = []
-
-        y = getattr(self.window, "_threshold_value", None)
-        if y is None:
-            # Nothing to draw
-            canvas.draw_idle()
-            return
-
-        # Draw only on the first axes (main plot) in single-panel mode
-        axes = fig.axes[:1] if getattr(self.window, "single_panel_mode", False) else fig.axes[:1]
-
-        for ax in axes:
-            line = ax.axhline(
-                y,
-                color="red",
-                linewidth=1.0,
-                linestyle=(0, (2, 2)),  # small dash pattern: 2 on, 2 off
-                alpha=0.95,
-                zorder=5,
-            )
-            self._thresh_line_artists.append(line)
-
-        canvas.draw_idle()
+        # Use the new PlotHost threshold line system
+        threshold_value = getattr(self.window, "peak_height_threshold", None)
+        if threshold_value is not None:
+            self.plot_host.update_threshold_line(threshold_value)
+        else:
+            self.plot_host.clear_threshold_line()
 
     def dim_axes_for_omitted(self, ax, label=True):
         """Grey overlay + 'OMITTED' watermark on given axes."""

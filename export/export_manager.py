@@ -27,6 +27,57 @@ except NameError:
         return func
 
 
+def is_sample_in_omitted_region(sweep_idx: int, sample_idx: int, omitted_ranges: dict) -> bool:
+    """Check if a sample index falls within an omitted region for a given sweep.
+
+    Args:
+        sweep_idx: Sweep number
+        sample_idx: Sample index within the sweep
+        omitted_ranges: Dictionary mapping sweep index to list of (start, end) sample ranges
+
+    Returns:
+        True if the sample is within an omitted region, False otherwise
+    """
+    if sweep_idx not in omitted_ranges:
+        return False
+
+    for (start_idx, end_idx) in omitted_ranges[sweep_idx]:
+        if start_idx <= sample_idx <= end_idx:
+            return True
+    return False
+
+
+def create_omitted_mask(sweep_idx: int, trace_length: int, omitted_ranges: dict, omitted_sweeps: set) -> np.ndarray:
+    """Create a boolean mask for omitted regions in a trace.
+
+    Args:
+        sweep_idx: Sweep number
+        trace_length: Length of the trace in samples
+        omitted_ranges: Dictionary mapping sweep index to list of (start, end) sample ranges
+        omitted_sweeps: Set of sweep indices that are fully omitted
+
+    Returns:
+        Boolean array where True = keep (not omitted), False = omit
+    """
+    # Start with all samples kept
+    mask = np.ones(trace_length, dtype=bool)
+
+    # If full sweep is omitted, mask everything
+    if sweep_idx in omitted_sweeps:
+        mask[:] = False
+        return mask
+
+    # Otherwise, mask partial regions
+    if sweep_idx in omitted_ranges:
+        for (start_idx, end_idx) in omitted_ranges[sweep_idx]:
+            # Ensure indices are within bounds
+            start_idx = max(0, min(start_idx, trace_length - 1))
+            end_idx = max(0, min(end_idx, trace_length - 1))
+            mask[start_idx:end_idx+1] = False
+
+    return mask
+
+
 class ExportManager:
     """Manages all data export operations for the main window."""
 
@@ -134,20 +185,39 @@ class ExportManager:
             True if this is a pulse experiment (single brief pulse per sweep)
         """
         st = self.window.state
+
+        # Debug logging
+        print(f"[Pulse Detection] Checking {len(kept_sweeps)} sweeps...")
+        print(f"[Pulse Detection] stim_chan: {st.stim_chan}")
+
         if not st.stim_chan:
+            print("[Pulse Detection] No stim channel - NOT a pulse experiment")
             return False
+
+        pulse_count_by_sweep = []
+        for s in kept_sweeps[:5]:  # Check first 5 sweeps for debugging
+            spans = st.stim_spans_by_sweep.get(s, [])
+            metrics = st.stim_metrics_by_sweep.get(s, {})
+            pulse_width = metrics.get("pulse_width_s", None)
+            print(f"[Pulse Detection] Sweep {s}: {len(spans)} pulses, pulse_width={pulse_width}")
 
         for s in kept_sweeps:
             spans = st.stim_spans_by_sweep.get(s, [])
             if len(spans) != 1:
+                print(f"[Pulse Detection] Sweep {s} has {len(spans)} pulses (need exactly 1) - NOT a pulse experiment")
                 return False  # Need exactly 1 pulse per sweep
 
             # Check pulse width
             metrics = st.stim_metrics_by_sweep.get(s, {})
             pulse_width = metrics.get("pulse_width_s", None)
-            if pulse_width is None or pulse_width >= 1.0:
-                return False  # Too long or missing
+            if pulse_width is None:
+                print(f"[Pulse Detection] Sweep {s} has no pulse_width_s metric - NOT a pulse experiment")
+                return False
+            if pulse_width >= 1.0:
+                print(f"[Pulse Detection] Sweep {s} has pulse_width={pulse_width}s (need <1.0s) - NOT a pulse experiment")
+                return False
 
+        print(f"[Pulse Detection] ✓ All {len(kept_sweeps)} sweeps have exactly 1 pulse <1.0s - IS a pulse experiment")
         return True
 
     def _load_save_dialog_history(self) -> dict:
@@ -377,6 +447,16 @@ class ExportManager:
         t_start = time.time()
         self._preview_start_time = t_start  # Store for use in preview dialog methods
         self.window._log_status_message("Generating summary...")
+
+        # Auto-detect stims on all sweeps if stim channel exists
+        st = self.window.state
+        if st.stim_chan:
+            print("[View Summary] Detecting stims on all sweeps...")
+            self.window._log_status_message("Detecting stimulations...")
+            QApplication.processEvents()
+            self.window._detect_stims_all_sweeps()
+            print("[View Summary] Stim detection complete")
+            self.window._log_status_message("Generating summary...")
 
         # If eupnea/sniffing detection is out of date, auto-update first
         if getattr(self.window, 'eupnea_sniffing_out_of_date', False):
@@ -800,6 +880,9 @@ class ExportManager:
         peaks_by_sweep, on_by_sweep, off_by_sweep, exm_by_sweep, exo_by_sweep = [], [], [], [], []
         sigh_by_sweep = []
 
+        # Cache omitted masks per sweep (computed once, reused for all metrics)
+        omitted_masks_cache = {}
+
         # -------------------- fill per kept sweep --------------------
         for col, s in enumerate(kept_sweeps):
             y_proc = self.window._get_processed_for(st.analyze_chan, s)
@@ -831,9 +914,21 @@ class ExportManager:
             sighs = sighs[(sighs >= 0) & (sighs < len(y_proc))]
             sigh_by_sweep.append(sighs)
 
+            # Build omitted mask once per sweep (only if needed)
+            has_omitted = s in st.omitted_sweeps or s in st.omitted_ranges
+            if has_omitted:
+                omitted_masks_cache[s] = create_omitted_mask(s, N, st.omitted_ranges, st.omitted_sweeps)
+            else:
+                omitted_masks_cache[s] = None  # No masking needed
+
             for k in all_keys:
                 y2 = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
                 if y2 is not None and len(y2) == N:
+                    # Apply cached omitted mask if it exists
+                    omit_mask = omitted_masks_cache[s]
+                    if omit_mask is not None:
+                        y2[~omit_mask] = np.nan
+
                     y2_ds_by_key[k][:, col] = y2[ds_idx]
 
         if progress_dialog:
@@ -863,7 +958,13 @@ class ExportManager:
                 traces_for_sweep = {}
                 for k in keys_for_cta:
                     if k in metrics.METRICS:
-                        traces_for_sweep[k] = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
+                        trace = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
+                        # Apply cached omitted mask if it exists (reuse from main loop)
+                        if trace is not None:
+                            omit_mask = omitted_masks_cache.get(s)
+                            if omit_mask is not None:
+                                trace[~omit_mask] = np.nan
+                        traces_for_sweep[k] = trace
                 cached[s] = traces_for_sweep
 
             return cached
@@ -1446,6 +1547,10 @@ class ExportManager:
                             is_apnea_per_breath[j] = 1
 
                 for i, idx in enumerate(mids, start=1):
+                    # Skip breaths in omitted regions
+                    if is_sample_in_omitted_region(s, int(idx), st.omitted_ranges):
+                        continue
+
                     t_rel = float(st.t[int(idx)] - (global_s0 if have_global_stim else 0.0))
                     breath_idx = i - 1  # 0-indexed for accessing arrays
                     sigh_flag = str(int(is_sigh_per_breath[breath_idx]))
@@ -1837,8 +1942,14 @@ class ExportManager:
             # Show interactive preview dialog instead of saving
             # Check experiment type to determine which preview to show
 
+            print("=" * 60)
+            print("PREVIEW MODE - CHECKING EXPERIMENT TYPE")
+            print("=" * 60)
+
             # First check for pulse experiments (Phase 1 testing)
             is_pulse_exp = self._is_pulse_experiment(kept_sweeps)
+            print(f"is_pulse_exp = {is_pulse_exp}")
+            print("=" * 60)
 
             # Check if event channel data exists
             has_event_data = (st.event_channel and st.bout_annotations and
@@ -1846,12 +1957,64 @@ class ExportManager:
 
             try:
                 if is_pulse_exp:
-                    # PHASE 1 TEST: Show pulse CTA test figure
-                    print("[Preview] Pulse experiment detected - showing CTA test figure")
-                    fig_test = self._generate_pulse_cta_test_figure(kept_sweeps)
+                    # PHASE 2+: Pulse experiment - show CTA + 3D (offset-aligned) + 3D (stim-aligned) + probability
+                    print("[Preview] Pulse experiment detected - showing 4-page preview")
 
-                    # Show in simple preview dialog
-                    self._show_simple_figure_preview(fig_test, "Pulse CTA Test (Phase 1)")
+                    # Generate pulse figures with detailed error tracking
+                    try:
+                        print("[Preview] Generating CTA figure...")
+                        fig_cta = self._generate_pulse_cta_test_figure(kept_sweeps)
+                        print("[Preview] CTA figure generated successfully")
+                    except Exception as e:
+                        print(f"[Preview] ERROR in CTA generation: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        raise
+
+                    try:
+                        print("[Preview] Generating 3D phase-sorted figure (offset-aligned)...")
+                        fig_3d = self._generate_pulse_3d_test_figure(kept_sweeps)
+                        print("[Preview] 3D offset-aligned figure generated successfully")
+                    except Exception as e:
+                        print(f"[Preview] ERROR in 3D generation: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        raise
+
+                    try:
+                        print("[Preview] Generating 3D phase-sorted figure (stim-aligned)...")
+                        fig_3d_stim = self._generate_pulse_3d_stim_aligned_test_figure(kept_sweeps)
+                        print("[Preview] 3D stim-aligned figure generated successfully")
+                    except Exception as e:
+                        print(f"[Preview] ERROR in 3D stim-aligned generation: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        raise
+
+                    try:
+                        print("[Preview] Generating probability curve...")
+                        fig_prob = self._generate_pulse_probability_test_figure(kept_sweeps)
+                        print("[Preview] Probability curve generated successfully")
+                    except Exception as e:
+                        print(f"[Preview] ERROR in probability curve generation: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        raise
+
+                    # Show 4-page pulse preview
+                    print("[Preview] Showing 4-page pulse preview dialog...")
+                    self._show_pulse_4page_preview(fig_cta, fig_3d, fig_3d_stim, fig_prob)
+
+                    # Also show standard metrics preview for pulse experiments
+                    print("[Preview] Also showing standard metrics preview...")
+                    self._show_summary_preview_dialog(
+                        t_ds_csv=t_ds_csv,
+                        y2_ds_by_key=y2_ds_by_key,
+                        keys_for_csv=keys_for_timeplots,
+                        label_by_key=label_by_key,
+                        stim_zero=(global_s0 if have_global_stim else None),
+                        stim_dur=(global_dur if have_global_stim else None),
+                    )
 
                 elif has_event_data:
                     # Show event-aligned CTA preview
@@ -1879,15 +2042,30 @@ class ExportManager:
             # -------------------- PDF Generation --------------------
             pdf_path = None
             event_cta_pdf_path = None
+            pulse_pdf_path = None
 
             if save_pdf:
-                # Check if event channel has data - if yes, ONLY generate CTA PDF
+                # Check experiment type
+                is_pulse_exp = self._is_pulse_experiment(kept_sweeps)
                 has_event_data = (st.event_channel and st.bout_annotations and
                                  any(st.bout_annotations.get(s, []) for s in kept_sweeps))
 
+                # Generate pulse-specific PDF if pulse experiment
+                if is_pulse_exp:
+                    print("[PDF] Pulse experiment detected, generating pulse analysis PDF...")
+                    pulse_pdf_path = base.with_name(base.name + "_pulse.pdf")
+                    try:
+                        self._save_pulse_analysis_pdf(pulse_pdf_path, kept_sweeps)
+                    except Exception as e:
+                        print(f"[save][pulse-pdf] skipped: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        pulse_pdf_path = None
+
+                # Generate event-aligned CTA PDF if event data present
                 if has_event_data:
-                    # Event-aligned CTA PDF only (skip standard PDF)
-                    print("[PDF] Event channel detected, generating CTA PDF only...")
+                    # Event-aligned CTA PDF (skip standard PDF for event experiments)
+                    print("[PDF] Event channel detected, generating CTA PDF...")
                     event_cta_pdf_path = base.with_name(base.name + "_event_cta.pdf")
                     try:
                         self._save_event_aligned_cta_pdf(
@@ -1902,9 +2080,11 @@ class ExportManager:
                         import traceback
                         traceback.print_exc()
                         event_cta_pdf_path = None
-                else:
-                    # Standard summary PDF (no event data)
-                    print("[PDF] No event channel, generating standard summary PDF...")
+
+                # Generate standard summary PDF for pulse experiments or normal experiments
+                # (skip only for event experiments)
+                if not has_event_data or is_pulse_exp:
+                    print("[PDF] Generating standard summary PDF...")
                     pdf_path = base.with_name(base.name + "_summary.pdf")
                     try:
                         self._save_metrics_summary_pdf(
@@ -1963,6 +2143,8 @@ class ExportManager:
                 file_list.append(breaths_path.name)
             if save_events_csv:
                 file_list.append(events_path.name)
+            if save_pdf and pulse_pdf_path:
+                file_list.append(pulse_pdf_path.name)
             if save_pdf and pdf_path:
                 file_list.append(pdf_path.name)
             if save_pdf and event_cta_pdf_path:
@@ -2002,14 +2184,16 @@ class ExportManager:
             sem = np.nan
         return (m, sem)
 
-    def _plot_pulse_cta_overlay(self, ax, kept_sweeps: list, global_s0: float = None):
+    def _plot_pulse_cta_overlay(self, ax_all, ax_eupnea, ax_sniff, kept_sweeps: list, global_s0: float = None):
         """
-        Plot CTA overlay: all sweeps centered on stimulus onset.
+        Plot CTA overlay: 3-panel plot with all sweeps, eupnea-only, and sniffing-only.
 
-        Time window: ±2s around stim onset (adjustable)
+        Time window: ±1s around stim onset
 
         Args:
-            ax: Matplotlib axis to plot on
+            ax_all: Matplotlib axis for all traces
+            ax_eupnea: Matplotlib axis for eupnea traces only
+            ax_sniff: Matplotlib axis for sniffing traces only
             kept_sweeps: List of sweep indices to include
             global_s0: Global stimulus onset time (seconds), or None
         """
@@ -2017,76 +2201,1142 @@ class ExportManager:
 
         st = self.window.state
 
-        # Collect all traces aligned to stim onset
-        aligned_traces = []
+        # Get per-sweep data
+        if st.analyze_chan not in st.sweeps:
+            for ax in [ax_all, ax_eupnea, ax_sniff]:
+                ax.text(0.5, 0.5, 'No analysis channel data available',
+                       ha='center', va='center', transform=ax.transAxes)
+            return
+
+        sweep_data = st.sweeps[st.analyze_chan]  # Shape: (n_samples, n_sweeps)
+        sr_hz = st.sr_hz if st.sr_hz else 1000.0  # Sample rate
+
+        # Downsample for efficiency (target ~200 Hz for visualization)
+        DS_TARGET_HZ = 200.0
+        ds_step = max(1, int(round(sr_hz / DS_TARGET_HZ)))
+
+        # Collect traces separated by breath type
+        aligned_traces_all = []
+        aligned_traces_eupnea = []
+        aligned_traces_sniff = []
+
+        # Collect breath events for overlay (all traces)
+        breath_event_data_all = {
+            'onsets': [],          # Inspiratory onsets
+            'offsets': [],         # Inspiratory offsets (end of inspiration)
+            'peaks': [],           # Inspiratory peaks
+            'expoffs': [],         # Expiratory offsets
+            'expeaks': []          # Expiratory peaks (minima)
+        }
+
+        # Collect latency-to-peak data (time from stim to first inspiratory peak)
+        latencies_to_peak_all = []
+        latencies_to_peak_eupnea = []
+        latencies_to_peak_sniff = []
+
+        print(f"[CTA] Processing {len(kept_sweeps)} sweeps, sr_hz={sr_hz}, ds_step={ds_step}")
 
         for s in kept_sweeps:
             spans = st.stim_spans_by_sweep.get(s, [])
             if not spans:
+                print(f"[CTA] Sweep {s}: No stim spans")
                 continue
 
-            stim_onset = spans[0][0]  # First (and only) pulse onset
+            stim_onset = spans[0][0]  # First (and only) pulse onset (in seconds)
 
-            # Extract window around stim: [onset - 2s, onset + 2s]
-            window_start = stim_onset - 2.0
-            window_end = stim_onset + 2.0
+            # Get this sweep's data
+            if s >= sweep_data.shape[1]:
+                print(f"[CTA] Sweep {s}: Index out of range")
+                continue
+            y_sweep = sweep_data[:, s]
+
+            # Create time vector for this sweep (0 to duration)
+            n_samples = len(y_sweep)
+            t_sweep = np.arange(n_samples) / sr_hz
+
+            print(f"[CTA] Sweep {s}: stim_onset={stim_onset:.2f}s, sweep_dur={t_sweep[-1]:.2f}s")
+
+            # Extract window around stim: [onset - 1s, onset + 1s]
+            window_start = max(0, stim_onset - 1.0)  # Don't go negative
+            window_end = min(t_sweep[-1], stim_onset + 1.0)  # Don't exceed sweep length
 
             # Find indices
-            idx_start = np.searchsorted(st.t, window_start)
-            idx_end = np.searchsorted(st.t, window_end)
+            idx_start = np.searchsorted(t_sweep, window_start)
+            idx_end = np.searchsorted(t_sweep, window_end)
 
             # Bounds check
-            if idx_start >= len(st.t) or idx_end > len(st.t):
+            if idx_start >= len(t_sweep) or idx_end > len(t_sweep) or idx_start >= idx_end:
+                print(f"[CTA] Sweep {s}: Bad indices start={idx_start}, end={idx_end}, len={len(t_sweep)}")
                 continue
 
-            # Extract segment
-            t_segment = st.t[idx_start:idx_end] - stim_onset  # Centered at 0
-            y_segment = st.y[idx_start:idx_end]
+            # Extract and downsample segment
+            t_segment = t_sweep[idx_start:idx_end:ds_step] - stim_onset  # Centered at 0
+            y_segment = y_sweep[idx_start:idx_end:ds_step]
 
-            if len(t_segment) > 0:
-                aligned_traces.append((t_segment, y_segment))
+            print(f"[CTA] Sweep {s}: Extracted {len(t_segment)} samples")
 
-        if not aligned_traces:
-            ax.text(0.5, 0.5, 'No data available for CTA',
-                   ha='center', va='center', transform=ax.transAxes)
+            # Determine if breath before stim is eupneic or sniffing
+            breath_events = st.breath_by_sweep.get(s)
+            is_sniffing_before_stim = False
+            if breath_events is not None:
+                onsets = breath_events.get("onsets", [])
+                if len(onsets) > 0:
+                    onset_times = t_sweep[onsets]
+                    onset_before_mask = onset_times < stim_onset
+                    if np.any(onset_before_mask):
+                        # Find the last breath onset before stim
+                        breath_idx_before = int(np.sum(onset_before_mask)) - 1
+                        is_sniffing_before_stim = self._is_breath_sniffing(s, breath_idx_before, onsets)
+
+            if len(t_segment) > 1:
+                aligned_traces_all.append((t_segment, y_segment, is_sniffing_before_stim))
+                if is_sniffing_before_stim:
+                    aligned_traces_sniff.append((t_segment, y_segment, is_sniffing_before_stim))
+                else:
+                    aligned_traces_eupnea.append((t_segment, y_segment, is_sniffing_before_stim))
+
+            # Collect breath events and latencies from breath AFTER stimulus
+            if breath_events is not None:
+                # Get event indices
+                onsets = breath_events.get("onsets", [])
+                offsets = breath_events.get("offsets", [])  # Inspiratory offsets
+                expoffs = breath_events.get("expoffs", [])  # Expiratory offsets
+                peaks = st.peaks_by_sweep.get(s, np.array([]))  # Inspiratory peaks
+                expeaks = breath_events.get("expeaks", [])  # Expiratory peaks (minima)
+
+                # Find inspiratory onset AFTER stim (start of breath after stim)
+                if len(onsets) > 0:
+                    onset_times = t_sweep[onsets]
+                    onset_after_mask = onset_times > stim_onset
+                    if np.any(onset_after_mask):
+                        t_onset = onset_times[onset_after_mask][0]  # First onset after stim
+                        if -1.0 <= (t_onset - stim_onset) <= 1.0:  # Within window
+                            y_onset = y_sweep[onsets[np.where(onset_after_mask)[0][0]]]
+                            breath_event_data_all['onsets'].append((t_onset - stim_onset, y_onset))
+
+                # Find inspiratory offset AFTER stim
+                if len(offsets) > 0:
+                    offset_times = t_sweep[offsets]
+                    offset_after_mask = offset_times > stim_onset
+                    if np.any(offset_after_mask):
+                        t_offset = offset_times[offset_after_mask][0]  # First offset after stim
+                        if -1.0 <= (t_offset - stim_onset) <= 1.0:
+                            y_offset = y_sweep[offsets[np.where(offset_after_mask)[0][0]]]
+                            breath_event_data_all['offsets'].append((t_offset - stim_onset, y_offset))
+
+                # Find inspiratory peak AFTER stim
+                if len(peaks) > 0:
+                    peak_times = t_sweep[peaks]
+                    peak_after_mask = peak_times > stim_onset
+                    if np.any(peak_after_mask):
+                        t_peak = peak_times[peak_after_mask][0]  # First peak after stim
+                        latency = t_peak - stim_onset  # Latency from stim to peak
+                        latencies_to_peak_all.append(latency)
+                        if is_sniffing_before_stim:
+                            latencies_to_peak_sniff.append(latency)
+                        else:
+                            latencies_to_peak_eupnea.append(latency)
+                        if -1.0 <= latency <= 1.0:
+                            y_peak = y_sweep[peaks[np.where(peak_after_mask)[0][0]]]
+                            breath_event_data_all['peaks'].append((latency, y_peak))
+
+                # Find expiratory offset AFTER stim
+                if len(expoffs) > 0:
+                    expoff_times = t_sweep[expoffs]
+                    expoff_after_mask = expoff_times > stim_onset
+                    if np.any(expoff_after_mask):
+                        t_expoff = expoff_times[expoff_after_mask][0]  # First expoff after stim
+                        if -1.0 <= (t_expoff - stim_onset) <= 1.0:
+                            y_expoff = y_sweep[expoffs[np.where(expoff_after_mask)[0][0]]]
+                            breath_event_data_all['expoffs'].append((t_expoff - stim_onset, y_expoff))
+
+                # Find expiratory peak AFTER stim
+                if len(expeaks) > 0:
+                    expeak_times = t_sweep[expeaks]
+                    expeak_after_mask = expeak_times > stim_onset
+                    if np.any(expeak_after_mask):
+                        t_expeak = expeak_times[expeak_after_mask][0]  # First expeak after stim
+                        if -1.0 <= (t_expeak - stim_onset) <= 1.0:
+                            y_expeak = y_sweep[expeaks[np.where(expeak_after_mask)[0][0]]]
+                            breath_event_data_all['expeaks'].append((t_expeak - stim_onset, y_expeak))
+
+        print(f"[CTA] Successfully aligned {len(aligned_traces_all)} traces (Eupnea: {len(aligned_traces_eupnea)}, Sniff: {len(aligned_traces_sniff)})")
+
+        # Helper function to plot a single panel
+        def plot_cta_panel(ax, traces, latencies, breath_events, title, mean_color='red', show_breath_events=True):
+            """Plot a single CTA panel with traces, mean, and optional breath events."""
+            if not traces:
+                ax.text(0.5, 0.5, 'No data available',
+                       ha='center', va='center', transform=ax.transAxes)
+                return
+
+            # Overlay all traces (semi-transparent gray)
+            for t_seg, y_seg, is_sniffing in traces:
+                ax.plot(t_seg, y_seg, color='gray', alpha=0.3, linewidth=0.5)
+
+            # Compute and plot mean
+            # Interpolate to common time base
+            t_common = np.linspace(-1.0, 1.0, 1000)
+            y_interp_all = []
+            for t_seg, y_seg, is_sniffing in traces:
+                # Only interpolate if we have valid data
+                if len(t_seg) > 1:
+                    y_interp = np.interp(t_common, t_seg, y_seg, left=np.nan, right=np.nan)
+                    y_interp_all.append(y_interp)
+
+            if y_interp_all:
+                y_mean = np.nanmean(y_interp_all, axis=0)
+                y_std = np.nanstd(y_interp_all, axis=0)
+                y_sem = y_std / np.sqrt(len(y_interp_all))
+
+                ax.plot(t_common, y_mean, color=mean_color, linewidth=2,
+                       label=f'Mean (n={len(traces)})')
+                ax.fill_between(t_common, y_mean - y_sem, y_mean + y_sem,
+                               color=mean_color, alpha=0.2, label='±1 SEM')
+
+            # Blue shaded stim region (25ms pulse)
+            ax.axvspan(0, 0.025, color='blue', alpha=0.15, zorder=1)
+
+            # Plot breath event overlays with transparency (only for "All" panel)
+            if show_breath_events:
+                if len(breath_events['onsets']) > 0:
+                    t_onsets, y_onsets = zip(*breath_events['onsets'])
+                    ax.scatter(t_onsets, y_onsets, color='green', marker='o', s=20, alpha=0.4, label='Insp Onset', zorder=5)
+
+                if len(breath_events['offsets']) > 0:
+                    t_offsets, y_offsets = zip(*breath_events['offsets'])
+                    ax.scatter(t_offsets, y_offsets, color='purple', marker='s', s=20, alpha=0.4, label='Insp Offset', zorder=5)
+
+                if len(breath_events['peaks']) > 0:
+                    t_peaks, y_peaks = zip(*breath_events['peaks'])
+                    ax.scatter(t_peaks, y_peaks, color='red', marker='^', s=30, alpha=0.4, label='Insp Peak', zorder=5)
+
+                if len(breath_events['expoffs']) > 0:
+                    t_expoffs, y_expoffs = zip(*breath_events['expoffs'])
+                    ax.scatter(t_expoffs, y_expoffs, color='orange', marker='s', s=20, alpha=0.4, label='Exp Offset', zorder=5)
+
+                if len(breath_events['expeaks']) > 0:
+                    t_expeaks, y_expeaks = zip(*breath_events['expeaks'])
+                    ax.scatter(t_expeaks, y_expeaks, color='cyan', marker='v', s=30, alpha=0.4, label='Exp Peak', zorder=5)
+
+            # Calculate and display latency-to-peak statistics
+            if len(latencies) > 0:
+                latency_mean = float(np.mean(latencies))
+                if len(latencies) >= 2:
+                    latency_std = float(np.std(latencies, ddof=1))
+                    latency_sem = latency_std / np.sqrt(len(latencies))
+                    latency_text = f"Latency: {latency_mean*1000:.1f}ms ± {latency_sem*1000:.1f}ms SEM (±{latency_std*1000:.1f}ms STD, n={len(latencies)})"
+                else:
+                    latency_text = f"Latency: {latency_mean*1000:.1f}ms (n=1)"
+
+                # Add text box with latency info
+                ax.text(0.02, 0.98, latency_text,
+                       transform=ax.transAxes,
+                       fontsize=8,
+                       verticalalignment='top',
+                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+                print(f"[CTA {title}] {latency_text}")
+
+            ax.set_xlabel('Time relative to stim onset (s)', fontsize=9)
+            ax.set_ylabel('Airflow (mV)', fontsize=9)
+            ax.set_title(title, fontsize=10, fontweight='bold')
+            ax.legend(loc='upper right', fontsize=6)
+            ax.grid(True, alpha=0.3)
+            ax.set_xlim(-1.0, 1.0)
+
+        # Plot all three panels
+        plot_cta_panel(ax_all, aligned_traces_all, latencies_to_peak_all, breath_event_data_all,
+                      'CTA - All Traces', mean_color='red', show_breath_events=True)
+        plot_cta_panel(ax_eupnea, aligned_traces_eupnea, latencies_to_peak_eupnea, {},
+                      'CTA - Eupnea Only', mean_color='green', show_breath_events=False)
+        plot_cta_panel(ax_sniff, aligned_traces_sniff, latencies_to_peak_sniff, {},
+                      'CTA - Sniffing Only', mean_color='purple', show_breath_events=False)
+
+    def _plot_pulse_2d_sorted_traces(self, ax, kept_sweeps: list):
+        """
+        Plot 2D phase-sorted aligned traces (simplified version for debugging).
+
+        X-axis: Time (relative to inspiratory onset alignment point)
+        Y-axis: Amplitude
+        Color: Phase (blue = early, red = late)
+
+        Args:
+            ax: Matplotlib 2D axis to plot on
+            kept_sweeps: List of sweep indices to include
+        """
+        import numpy as np
+        from matplotlib import cm
+
+        st = self.window.state
+
+        # Get per-sweep data
+        if st.analyze_chan not in st.sweeps:
+            ax.text(0.5, 0.5, 'No analysis channel data available',
+                     ha='center', va='center', transform=ax.transAxes)
             return
 
-        # Overlay all traces (semi-transparent)
-        for t_seg, y_seg in aligned_traces:
-            ax.plot(t_seg, y_seg, color='gray', alpha=0.3, linewidth=0.5)
+        sweep_data = st.sweeps[st.analyze_chan]
+        sr_hz = st.sr_hz if st.sr_hz else 1000.0
 
-        # Compute and plot mean
-        # Interpolate to common time base
-        t_common = np.linspace(-2.0, 2.0, 1000)
-        y_interp_all = []
-        for t_seg, y_seg in aligned_traces:
-            # Only interpolate if we have valid data
-            if len(t_seg) > 1:
-                y_interp = np.interp(t_common, t_seg, y_seg, left=np.nan, right=np.nan)
-                y_interp_all.append(y_interp)
+        # Downsample for efficiency
+        DS_TARGET_HZ = 200.0
+        ds_step = max(1, int(round(sr_hz / DS_TARGET_HZ)))
 
-        if y_interp_all:
-            y_mean = np.nanmean(y_interp_all, axis=0)
-            y_std = np.nanstd(y_interp_all, axis=0)
+        # Collect traces with phase information
+        traces_with_phase = []
 
-            ax.plot(t_common, y_mean, color='blue', linewidth=2,
-                   label=f'Mean (n={len(aligned_traces)})')
-            ax.fill_between(t_common, y_mean - y_std, y_mean + y_std,
-                           color='blue', alpha=0.2, label='±1 SD')
+        print(f"[2D Phase] Processing {len(kept_sweeps)} sweeps for phase-sorted traces...")
 
-        # Vertical line at stim onset
-        ax.axvline(0, color='red', linestyle='--', linewidth=1.5, label='Stim Onset')
+        for s in kept_sweeps:
+            breath_events = st.breath_by_sweep.get(s)
+            if breath_events is None or len(breath_events) == 0:
+                print(f"[2D Phase] Sweep {s}: No breath events")
+                continue
 
-        ax.set_xlabel('Time relative to stim onset (s)', fontsize=10)
-        ax.set_ylabel('Airflow (mV)', fontsize=10)
-        ax.set_title('Cycle-Triggered Average (CTA) - Aligned to Stim Onset', fontsize=11, fontweight='bold')
-        ax.legend(loc='upper right', fontsize=8)
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim(-2.0, 2.0)
+            spans = st.stim_spans_by_sweep.get(s, [])
+            if not spans:
+                print(f"[2D Phase] Sweep {s}: No stim spans")
+                continue
+
+            stim_onset = spans[0][0]  # Pulse onset time (seconds)
+
+            # Get breath events
+            onsets = breath_events.get("onsets", [])
+            offsets = breath_events.get("offsets", [])  # Inspiratory offsets (end of inspiration)
+            peaks = st.peaks_by_sweep.get(s, np.array([]))  # Inspiratory peaks
+
+            if len(onsets) == 0 or len(offsets) == 0 or len(peaks) == 0:
+                print(f"[2D Phase] Sweep {s}: No onsets/offsets/peaks")
+                continue
+
+            # Get this sweep's data
+            if s >= sweep_data.shape[1]:
+                print(f"[2D Phase] Sweep {s}: Sweep index out of bounds")
+                continue
+            y_sweep = sweep_data[:, s]
+            t_sweep = np.arange(len(y_sweep)) / sr_hz
+
+            # Find inspiratory offset BEFORE stim (alignment point)
+            offset_times = t_sweep[offsets]
+            offset_before_mask = offset_times < stim_onset
+            offset_before_stim = offset_times[offset_before_mask]
+
+            if len(offset_before_stim) == 0:
+                print(f"[2D Phase] Sweep {s}: No inspiratory offset before stim")
+                continue
+
+            t_align = float(offset_before_stim[-1])  # Last inspiratory offset before stim
+            offset_idx_align = int(offsets[np.sum(offset_before_mask) - 1])
+
+            # Find inspiratory peak AFTER stim
+            peak_times = t_sweep[peaks]
+            peak_after_mask = peak_times > stim_onset
+            peak_after_stim = peak_times[peak_after_mask]
+
+            if len(peak_after_stim) == 0:
+                print(f"[2D Phase] Sweep {s}: No inspiratory peak after stim")
+                continue
+
+            peak_indices_after = np.where(peak_after_mask)[0]
+            peak_idx_end = int(peaks[peak_indices_after[0]])  # First peak after stim
+
+            # Calculate phase: time from alignment point to stim
+            phase = float(stim_onset - t_align)  # Time in seconds
+
+            # Extract segment from inspiratory offset to peak after stim
+            idx_start = int(offset_idx_align)
+            idx_end = int(peak_idx_end)
+
+            if idx_start >= idx_end or idx_end > len(y_sweep):
+                print(f"[2D Phase] Sweep {s}: Invalid index range")
+                continue
+
+            t_segment = t_sweep[idx_start:idx_end:ds_step] - t_align  # Relative to alignment
+            y_segment = y_sweep[idx_start:idx_end:ds_step]
+            stim_t_aligned = stim_onset - t_align
+
+            if len(t_segment) > 1:
+                traces_with_phase.append({
+                    'sweep': s,
+                    'phase': phase,
+                    't': t_segment,
+                    'y': y_segment,
+                    'stim_t': stim_t_aligned,
+                })
+                print(f"[2D Phase] Sweep {s}: OK (phase={phase:.3f}s, {len(t_segment)} points)")
+
+        print(f"[2D Phase] Collected {len(traces_with_phase)} traces with phase information")
+
+        if not traces_with_phase:
+            ax.text(0.5, 0.5, 'No data available for phase-sorted traces',
+                     ha='center', va='center', transform=ax.transAxes)
+            return
+
+        # Sort by phase
+        traces_with_phase.sort(key=lambda x: x['phase'])
+
+        # Normalize phases to [0, 1] for coloring
+        phases = np.array([tr['phase'] for tr in traces_with_phase])
+        phase_min, phase_max = phases.min(), phases.max()
+        if phase_max > phase_min:
+            phase_norm = (phases - phase_min) / (phase_max - phase_min)
+        else:
+            phase_norm = np.zeros_like(phases)
+
+        # Colormap for phase gradient
+        cmap = cm.get_cmap('coolwarm')  # Blue (0) → Red (1)
+
+        # Calculate vertical spacing for traces
+        # Find min/max amplitude across all traces to determine spacing
+        all_amplitudes = np.concatenate([trace['y'] for trace in traces_with_phase])
+        amp_range = np.max(all_amplitudes) - np.min(all_amplitudes)
+        vertical_spacing = amp_range * 1.2  # 120% of amplitude range for spacing
+
+        # Plot each trace with vertical offset based on sort order
+        for i, trace in enumerate(traces_with_phase):
+            color = cmap(phase_norm[i])
+            y_offset = i * vertical_spacing
+            ax.plot(trace['t'], trace['y'] + y_offset,
+                   color=color, linewidth=1.0, alpha=0.7)
+
+            # Mark stimulus time with a small vertical tick
+            stim_t = trace['stim_t']
+            y_at_stim = np.interp(stim_t, trace['t'], trace['y']) + y_offset
+            ax.plot(stim_t, y_at_stim, 'r|', markersize=8, markeredgewidth=1.5, alpha=0.6)
+
+        ax.set_xlabel('Time (s) from insp offset', fontsize=9)
+        ax.set_ylabel('Sweep # (sorted by stim phase, bottom=early, top=late)', fontsize=9)
+        ax.set_title(f'Phase-Sorted Aligned Traces (n={len(traces_with_phase)})\nBlue=Early Phase, Red=Late Phase',
+                    fontsize=11, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='x')  # Only show horizontal grid lines
+
+        # Add colorbar for phase
+        from matplotlib.cm import ScalarMappable
+        from matplotlib.colors import Normalize
+        sm = ScalarMappable(cmap=cmap, norm=Normalize(vmin=phase_min, vmax=phase_max))
+        sm.set_array([])
+
+        # Note: colorbar for 2D axes
+        try:
+            import matplotlib.pyplot as plt
+            cbar = plt.colorbar(sm, ax=ax, shrink=0.5, aspect=10, pad=0.1)
+            cbar.set_label('Stim Phase (s from insp offset)', rotation=270, labelpad=15, fontsize=8)
+        except:
+            pass  # Skip colorbar if it fails
+
+    def _plot_pulse_3d_sorted_traces(self, ax, kept_sweeps: list):
+        """
+        Plot 3D phase-sorted aligned traces.
+
+        X-axis: Time (relative to inspiratory onset alignment point)
+        Y-axis: Sweep number (sorted by stim phase)
+        Z-axis: Amplitude
+
+        Args:
+            ax: Matplotlib 3D axis to plot on (must have projection='3d')
+            kept_sweeps: List of sweep indices to include
+        """
+        import numpy as np
+        from matplotlib import cm
+
+        st = self.window.state
+
+        # Get per-sweep data
+        if st.analyze_chan not in st.sweeps:
+            ax.text2D(0.5, 0.5, 'No analysis channel data available',
+                     ha='center', va='center', transform=ax.transAxes)
+            return
+
+        sweep_data = st.sweeps[st.analyze_chan]
+        sr_hz = st.sr_hz if st.sr_hz else 1000.0
+
+        # Downsample for efficiency
+        DS_TARGET_HZ = 200.0
+        ds_step = max(1, int(round(sr_hz / DS_TARGET_HZ)))
+
+        # Collect traces with phase information (same as 2D version)
+        traces_with_phase = []
+
+        print(f"[3D] Processing {len(kept_sweeps)} sweeps for phase-sorted traces...")
+
+        for s in kept_sweeps:
+            breath_events = st.breath_by_sweep.get(s)
+            if breath_events is None or len(breath_events) == 0:
+                print(f"[3D] Sweep {s}: No breath events")
+                continue
+
+            spans = st.stim_spans_by_sweep.get(s, [])
+            if not spans:
+                print(f"[3D] Sweep {s}: No stim spans")
+                continue
+
+            stim_onset = spans[0][0]  # Pulse onset time (seconds)
+
+            # Get breath events
+            onsets = breath_events.get("onsets", [])
+            offsets = breath_events.get("offsets", [])  # Inspiratory offsets (end of inspiration)
+            peaks = st.peaks_by_sweep.get(s, np.array([]))  # Inspiratory peaks
+            expoffs = breath_events.get("expoffs", [])  # Expiratory offsets
+
+            if len(onsets) == 0 or len(offsets) == 0 or len(peaks) == 0 or len(expoffs) == 0:
+                print(f"[3D] Sweep {s}: No onsets/offsets/peaks/expoffs")
+                continue
+
+            # Get this sweep's data
+            if s >= sweep_data.shape[1]:
+                print(f"[3D] Sweep {s}: Sweep index out of bounds")
+                continue
+            y_sweep = sweep_data[:, s]
+            t_sweep = np.arange(len(y_sweep)) / sr_hz
+
+            # Find inspiratory offset BEFORE stim (alignment point)
+            offset_times = t_sweep[offsets]
+            offset_before_mask = offset_times < stim_onset
+            offset_before_stim = offset_times[offset_before_mask]
+
+            if len(offset_before_stim) == 0:
+                print(f"[3D] Sweep {s}: No inspiratory offset before stim")
+                continue
+
+            t_align = float(offset_before_stim[-1])  # Last inspiratory offset before stim
+            offset_idx_align = int(offsets[np.sum(offset_before_mask) - 1])
+
+            # Find first inspiratory peak AFTER stim
+            peak_times = t_sweep[peaks]
+            peak_after_mask = peak_times > stim_onset
+            peak_after_stim = peak_times[peak_after_mask]
+
+            if len(peak_after_stim) == 0:
+                print(f"[3D] Sweep {s}: No inspiratory peak after stim")
+                continue
+
+            first_peak_after_stim_time = peak_after_stim[0]
+
+            # Find first expiratory offset AFTER the first inspiratory peak after stim
+            expoff_times = t_sweep[expoffs]
+            expoff_after_peak_mask = expoff_times > first_peak_after_stim_time
+            expoff_after_peak = expoff_times[expoff_after_peak_mask]
+
+            if len(expoff_after_peak) == 0:
+                print(f"[3D] Sweep {s}: No expiratory offset after peak")
+                continue
+
+            expoff_indices_after = np.where(expoff_after_peak_mask)[0]
+            expoff_idx_end = int(expoffs[expoff_indices_after[0]])  # First expiratory offset after peak
+
+            # Calculate phase: time from alignment point to stim
+            phase = float(stim_onset - t_align)  # Time in seconds
+
+            # Extract segment from inspiratory offset to expiratory offset after peak
+            idx_start = int(offset_idx_align)
+            idx_end = int(expoff_idx_end)
+
+            if idx_start >= idx_end or idx_end > len(y_sweep):
+                print(f"[3D] Sweep {s}: Invalid index range")
+                continue
+
+            t_segment = t_sweep[idx_start:idx_end:ds_step] - t_align  # Relative to alignment
+            y_segment = y_sweep[idx_start:idx_end:ds_step]
+            stim_t_aligned = stim_onset - t_align
+
+            # Determine if breath before stim is eupneic or sniffing
+            onset_times = t_sweep[onsets]
+            onset_before_mask = onset_times < stim_onset
+            is_sniffing_before = False
+            if np.any(onset_before_mask):
+                breath_idx_before = int(np.sum(onset_before_mask)) - 1
+                is_sniffing_before = self._is_breath_sniffing(s, breath_idx_before, onsets)
+
+            if len(t_segment) > 1:
+                traces_with_phase.append({
+                    'sweep': s,
+                    'phase': phase,
+                    't': t_segment,
+                    'y': y_segment,
+                    'stim_t': stim_t_aligned,
+                    'is_sniffing': is_sniffing_before,
+                })
+                breath_type = "sniff" if is_sniffing_before else "eupnea"
+                print(f"[3D] Sweep {s}: OK (phase={phase:.3f}s, {breath_type}, {len(t_segment)} points)")
+
+        print(f"[3D] Collected {len(traces_with_phase)} traces with phase information")
+
+        if not traces_with_phase:
+            ax.text2D(0.5, 0.5, 'No data available for phase-sorted traces',
+                     ha='center', va='center', transform=ax.transAxes)
+            return
+
+        # Sort by breath type FIRST (eupnea=0, sniffing=1), then by phase
+        traces_with_phase.sort(key=lambda x: (x['is_sniffing'], x['phase']))
+
+        # Count eupnea vs sniffing for dividing line
+        n_eupnea = sum(1 for tr in traces_with_phase if not tr['is_sniffing'])
+        n_sniff = len(traces_with_phase) - n_eupnea
+        print(f"[3D] Sorted: {n_eupnea} eupnea, {n_sniff} sniffing")
+
+        # Calculate global z-range across all traces for uniform stim marker height
+        all_y_values = np.concatenate([trace['y'] for trace in traces_with_phase])
+        global_z_min = all_y_values.min()
+        global_z_max = all_y_values.max()
+
+        # Plot each trace in 3D (color by breath type: green=eupnea, purple=sniffing)
+        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+        for i, trace in enumerate(traces_with_phase):
+            # Color by breath type (matching main plotting window)
+            trace_color = 'purple' if trace['is_sniffing'] else 'green'
+
+            # X = time, Y = sweep index (sorted), Z = amplitude
+            ax.plot(trace['t'],
+                   np.ones_like(trace['t']) * i,  # Y = sweep index
+                   trace['y'],  # Z = amplitude
+                   color=trace_color, linewidth=1.0, alpha=0.8)
+
+            # Mark stim time with transparent blue fill (25ms width, no edge lines)
+            stim_t = trace['stim_t']
+            stim_width = 0.025  # 25ms in seconds
+            t_stim_start = stim_t
+            t_stim_end = stim_t + stim_width
+
+            # Create transparent blue curtain spanning full amplitude range
+            verts = [
+                [(t_stim_start, i, global_z_min),
+                 (t_stim_end, i, global_z_min),
+                 (t_stim_end, i, global_z_max),
+                 (t_stim_start, i, global_z_max)]
+            ]
+            poly = Poly3DCollection(verts, alpha=0.15, facecolor='blue', edgecolor='none')
+            ax.add_collection3d(poly)
+
+            # Add color-coded line at t=0, amplitude=0 for breath type
+            # Green for eupnea, purple for sniffing
+            breath_color = 'purple' if trace['is_sniffing'] else 'green'
+            ax.plot([0, 0], [i, i], [0, 0], color=breath_color, marker='o', markersize=3, alpha=0.7)
+
+        ax.set_xlabel('Time (s) from insp offset', fontsize=9)
+        ax.set_ylabel('Sweep # (sorted by breath type, then phase)', fontsize=9)
+        ax.set_zlabel('Amplitude (mV)', fontsize=9)
+        ax.set_title(f'Phase-Sorted Aligned Traces (n={len(traces_with_phase)})\nGreen=Eupnea, Purple=Sniffing',
+                    fontsize=11, fontweight='bold')
+
+    def _plot_pulse_3d_stim_aligned(self, ax, kept_sweeps: list):
+        """
+        Plot 3D phase-sorted aligned traces - ALIGNED TO STIMULUS instead of inspiratory offset.
+
+        Same trace cutout (insp offset to next peak) but centered at t=0 on stimulus.
+
+        Args:
+            ax: Matplotlib 3D axis to plot on (must have projection='3d')
+            kept_sweeps: List of sweep indices to include
+        """
+        import numpy as np
+        from matplotlib import cm
+
+        st = self.window.state
+
+        # Get per-sweep data
+        if st.analyze_chan not in st.sweeps:
+            ax.text2D(0.5, 0.5, 'No analysis channel data available',
+                     ha='center', va='center', transform=ax.transAxes)
+            return
+
+        sweep_data = st.sweeps[st.analyze_chan]
+        sr_hz = st.sr_hz if st.sr_hz else 1000.0
+
+        # Downsample for efficiency
+        DS_TARGET_HZ = 200.0
+        ds_step = max(1, int(round(sr_hz / DS_TARGET_HZ)))
+
+        # Collect traces (same as before but will re-align to stim)
+        traces_with_phase = []
+
+        print(f"[3D Stim-Aligned] Processing {len(kept_sweeps)} sweeps...")
+
+        for s in kept_sweeps:
+            breath_events = st.breath_by_sweep.get(s)
+            if breath_events is None or len(breath_events) == 0:
+                continue
+
+            spans = st.stim_spans_by_sweep.get(s, [])
+            if not spans:
+                continue
+
+            stim_onset = spans[0][0]
+
+            onsets = breath_events.get("onsets", [])
+            offsets = breath_events.get("offsets", [])
+            peaks = st.peaks_by_sweep.get(s, np.array([]))
+            expoffs = breath_events.get("expoffs", [])
+
+            if len(onsets) == 0 or len(offsets) == 0 or len(peaks) == 0 or len(expoffs) == 0:
+                continue
+
+            if s >= sweep_data.shape[1]:
+                continue
+            y_sweep = sweep_data[:, s]
+            t_sweep = np.arange(len(y_sweep)) / sr_hz
+
+            # Find inspiratory offset BEFORE stim
+            offset_times = t_sweep[offsets]
+            offset_before_mask = offset_times < stim_onset
+            offset_before_stim = offset_times[offset_before_mask]
+
+            if len(offset_before_stim) == 0:
+                continue
+
+            t_offset = float(offset_before_stim[-1])
+            offset_idx_align = int(offsets[np.sum(offset_before_mask) - 1])
+
+            # Find first inspiratory peak AFTER stim
+            peak_times = t_sweep[peaks]
+            peak_after_mask = peak_times > stim_onset
+            peak_after_stim = peak_times[peak_after_mask]
+
+            if len(peak_after_stim) == 0:
+                continue
+
+            first_peak_after_stim_time = peak_after_stim[0]
+
+            # Find first expiratory offset AFTER the first inspiratory peak after stim
+            expoff_times = t_sweep[expoffs]
+            expoff_after_peak_mask = expoff_times > first_peak_after_stim_time
+            expoff_after_peak = expoff_times[expoff_after_peak_mask]
+
+            if len(expoff_after_peak) == 0:
+                continue
+
+            expoff_indices_after = np.where(expoff_after_peak_mask)[0]
+            expoff_idx_end = int(expoffs[expoff_indices_after[0]])
+
+            # Calculate phase
+            phase = float(stim_onset - t_offset)
+
+            # Extract segment from inspiratory offset to expiratory offset after peak
+            idx_start = int(offset_idx_align)
+            idx_end = int(expoff_idx_end)
+
+            if idx_start >= idx_end or idx_end > len(y_sweep):
+                continue
+
+            # Align to STIMULUS (t=0 at stim) instead of inspiratory offset
+            t_segment = t_sweep[idx_start:idx_end:ds_step] - stim_onset  # Relative to STIM
+            y_segment = y_sweep[idx_start:idx_end:ds_step]
+            offset_t_aligned = t_offset - stim_onset  # Where offset is relative to stim
+
+            # Determine if breath before stim is eupneic or sniffing
+            onset_times = t_sweep[onsets]
+            onset_before_mask = onset_times < stim_onset
+            is_sniffing_before = False
+            if np.any(onset_before_mask):
+                breath_idx_before = int(np.sum(onset_before_mask)) - 1
+                is_sniffing_before = self._is_breath_sniffing(s, breath_idx_before, onsets)
+
+            if len(t_segment) > 1:
+                traces_with_phase.append({
+                    'sweep': s,
+                    'phase': phase,
+                    't': t_segment,
+                    'y': y_segment,
+                    'offset_t': offset_t_aligned,  # For reference
+                    'is_sniffing': is_sniffing_before,
+                })
+
+        print(f"[3D Stim-Aligned] Collected {len(traces_with_phase)} traces")
+
+        if not traces_with_phase:
+            ax.text2D(0.5, 0.5, 'No data available',
+                     ha='center', va='center', transform=ax.transAxes)
+            return
+
+        # Sort by breath type FIRST (eupnea=0, sniffing=1), then by phase
+        traces_with_phase.sort(key=lambda x: (x['is_sniffing'], x['phase']))
+
+        # Count eupnea vs sniffing
+        n_eupnea = sum(1 for tr in traces_with_phase if not tr['is_sniffing'])
+        n_sniff = len(traces_with_phase) - n_eupnea
+        print(f"[3D Stim-Aligned] Sorted: {n_eupnea} eupnea, {n_sniff} sniffing")
+
+        # Calculate global z-range across all traces for uniform stim marker height
+        all_y_values = np.concatenate([trace['y'] for trace in traces_with_phase])
+        global_z_min = all_y_values.min()
+        global_z_max = all_y_values.max()
+
+        # Plot each trace (color by breath type: green=eupnea, purple=sniffing)
+        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+        for i, trace in enumerate(traces_with_phase):
+            # Color by breath type (matching main plotting window)
+            trace_color = 'purple' if trace['is_sniffing'] else 'green'
+
+            ax.plot(trace['t'],
+                   np.ones_like(trace['t']) * i,
+                   trace['y'],
+                   color=trace_color, linewidth=1.0, alpha=0.8)
+
+            # Mark stim time at t=0 with transparent blue fill (25ms width, no edge lines)
+            stim_width = 0.025
+            t_stim_start = 0.0
+            t_stim_end = stim_width
+
+            # Create transparent blue curtain spanning full amplitude range
+            verts = [
+                [(t_stim_start, i, global_z_min),
+                 (t_stim_end, i, global_z_min),
+                 (t_stim_end, i, global_z_max),
+                 (t_stim_start, i, global_z_max)]
+            ]
+            poly = Poly3DCollection(verts, alpha=0.15, facecolor='blue', edgecolor='none')
+            ax.add_collection3d(poly)
+
+            # Add color-coded line at t=0, amplitude=0 for breath type
+            # Green for eupnea, purple for sniffing
+            breath_color = 'purple' if trace['is_sniffing'] else 'green'
+            ax.plot([0, 0], [i, i], [0, 0], color=breath_color, marker='o', markersize=3, alpha=0.7)
+
+        ax.set_xlabel('Time (s) from stimulus', fontsize=9)
+        ax.set_ylabel('Sweep # (sorted by breath type, then phase)', fontsize=9)
+        ax.set_zlabel('Amplitude (mV)', fontsize=9)
+        ax.set_title(f'Phase-Sorted Traces - Stimulus Aligned (n={len(traces_with_phase)})\nGreen=Eupnea, Purple=Sniffing',
+                    fontsize=11, fontweight='bold')
+
+    def _plot_pulse_probability_curve(self, ax_all, ax_eupnea, ax_sniff, kept_sweeps: list):
+        """
+        Plot probability of next breath occurring as a function of time after previous breath.
+        3-panel layout: All breaths, Eupnea only, Sniffing only.
+
+        Uses all breaths EXCEPT those before and after stimulation to calculate baseline
+        probability curve.
+
+        Args:
+            ax_all: Matplotlib axis for all breaths
+            ax_eupnea: Matplotlib axis for eupnea breaths only
+            ax_sniff: Matplotlib axis for sniffing breaths only
+            kept_sweeps: List of sweep indices to include
+        """
+        import numpy as np
+
+        st = self.window.state
+
+        # Collect inter-breath intervals separated by breath type (excluding stim-affected breaths)
+        intervals_all = []
+        intervals_eupnea = []
+        intervals_sniff = []
+
+        print(f"[Probability] Processing {len(kept_sweeps)} sweeps for inter-breath intervals...")
+
+        for s in kept_sweeps:
+            breath_events = st.breath_by_sweep.get(s)
+            if breath_events is None or len(breath_events) == 0:
+                continue
+
+            spans = st.stim_spans_by_sweep.get(s, [])
+            if not spans:
+                continue
+
+            stim_onset = spans[0][0]  # Pulse onset time (seconds)
+
+            # Get inspiratory offsets
+            offsets = breath_events.get("offsets", [])
+            if len(offsets) < 3:  # Need at least 3 offsets to exclude stim-affected ones
+                continue
+
+            # Get sweep data for time conversion
+            if s >= st.sweeps[st.analyze_chan].shape[1]:
+                continue
+            y_sweep = st.sweeps[st.analyze_chan][:, s]
+            sr_hz = st.sr_hz if st.sr_hz else 1000.0
+            t_sweep = np.arange(len(y_sweep)) / sr_hz
+
+            offset_times = t_sweep[offsets]
+
+            # Find offset before and after stim
+            offset_before_mask = offset_times < stim_onset
+            offset_after_mask = offset_times > stim_onset
+
+            if not offset_before_mask.any() or not offset_after_mask.any():
+                continue
+
+            offset_before_idx = np.where(offset_before_mask)[0][-1]  # Last before stim
+            offset_after_idx = np.where(offset_after_mask)[0][0]  # First after stim
+
+            # Get onsets for breath classification
+            onsets = breath_events.get("onsets", [])
+            if len(onsets) == 0:
+                continue
+
+            # Calculate intervals for all non-stim-affected breaths
+            for i in range(len(offset_times) - 1):
+                # Skip the interval involving the breath before or after stim
+                if i == offset_before_idx or i == offset_after_idx:
+                    continue
+                if i + 1 == offset_before_idx or i + 1 == offset_after_idx:
+                    continue
+
+                interval = offset_times[i + 1] - offset_times[i]
+                if 0.1 < interval < 10.0:  # Sanity check (100ms to 10s)
+                    intervals_all.append(interval)
+
+                    # Classify by breath type (based on the breath at index i)
+                    is_sniffing = self._is_breath_sniffing(s, i, onsets)
+                    if is_sniffing:
+                        intervals_sniff.append(interval)
+                    else:
+                        intervals_eupnea.append(interval)
+
+        print(f"[Probability] Collected {len(intervals_all)} inter-breath intervals (Eupnea: {len(intervals_eupnea)}, Sniff: {len(intervals_sniff)})")
+
+        # Collect stimulated breath timing data separated by breath type
+        stim_breath_data_all = []  # (stim_time_from_prev_offset, breath_time_from_prev_offset, is_sniffing)
+        stim_breath_data_eupnea = []  # (stim_time, breath_time, is_sniffing=False)
+        stim_breath_data_sniff = []  # (stim_time, breath_time, is_sniffing=True)
+
+        for s in kept_sweeps:
+            breath_events = st.breath_by_sweep.get(s)
+            if breath_events is None or len(breath_events) == 0:
+                continue
+
+            spans = st.stim_spans_by_sweep.get(s, [])
+            if not spans:
+                continue
+
+            stim_onset = spans[0][0]
+
+            # Get inspiratory offsets
+            offsets = breath_events.get("offsets", [])
+            if len(offsets) < 2:
+                continue
+
+            # Get sweep data
+            if s >= st.sweeps[st.analyze_chan].shape[1]:
+                continue
+            y_sweep = st.sweeps[st.analyze_chan][:, s]
+            sr_hz = st.sr_hz if st.sr_hz else 1000.0
+            t_sweep = np.arange(len(y_sweep)) / sr_hz
+
+            offset_times = t_sweep[offsets]
+
+            # Find offset before stim
+            offset_before_mask = offset_times < stim_onset
+            if not offset_before_mask.any():
+                continue
+
+            offset_before_idx = np.where(offset_before_mask)[0][-1]
+            t_prev_offset = offset_times[offset_before_idx]
+
+            # Find offset after stim
+            offset_after_mask = offset_times > stim_onset
+            if not offset_after_mask.any():
+                continue
+
+            offset_after_idx = np.where(offset_after_mask)[0][0]
+            t_next_offset = offset_times[offset_after_idx]
+
+            # Calculate timing relative to previous offset
+            stim_time = stim_onset - t_prev_offset
+            breath_time = t_next_offset - t_prev_offset
+
+            if 0 < stim_time < 10.0 and 0 < breath_time < 10.0:
+                # Classify by breath type (based on breath before stim)
+                onsets = breath_events.get("onsets", [])
+                is_sniffing = False
+                if len(onsets) > 0:
+                    onset_times_sweep = t_sweep[onsets]
+                    onset_before_mask_sweep = onset_times_sweep < stim_onset
+                    if np.any(onset_before_mask_sweep):
+                        breath_idx_before = int(np.sum(onset_before_mask_sweep)) - 1
+                        is_sniffing = self._is_breath_sniffing(s, breath_idx_before, onsets)
+
+                stim_breath_data_all.append((stim_time, breath_time, is_sniffing))
+
+                if is_sniffing:
+                    stim_breath_data_sniff.append((stim_time, breath_time, is_sniffing))
+                else:
+                    stim_breath_data_eupnea.append((stim_time, breath_time, is_sniffing))
+
+        print(f"[Probability] Collected {len(stim_breath_data_all)} stimulated breath timings (Eupnea: {len(stim_breath_data_eupnea)}, Sniff: {len(stim_breath_data_sniff)})")
+
+        # Determine shared bin edges and limits
+        all_intervals = intervals_all + intervals_eupnea + intervals_sniff
+        if len(all_intervals) < 10:
+            for ax in [ax_all, ax_eupnea, ax_sniff]:
+                ax.text(0.5, 0.5, 'Insufficient data',
+                       ha='center', va='center', transform=ax.transAxes)
+            return
+
+        all_intervals_arr = np.array(all_intervals)
+        shared_bin_edges = np.linspace(0, np.percentile(all_intervals_arr, 99), 50)
+        bin_width = shared_bin_edges[1] - shared_bin_edges[0]
+        bin_centers = (shared_bin_edges[:-1] + shared_bin_edges[1:]) / 2
+
+        # Calculate histograms (counts, not density)
+        counts_all, _ = np.histogram(intervals_all, bins=shared_bin_edges)
+        counts_eupnea, _ = np.histogram(intervals_eupnea, bins=shared_bin_edges)
+        counts_sniff, _ = np.histogram(intervals_sniff, bins=shared_bin_edges)
+
+        # Sample counts for labels
+        n_all = len(intervals_all)
+        n_eupnea = len(intervals_eupnea)
+        n_sniff = len(intervals_sniff)
+
+        # Find max count for shared y-axis
+        max_count = max(counts_all.max(),
+                       counts_eupnea.max() if len(counts_eupnea) > 0 else 0,
+                       counts_sniff.max() if len(counts_sniff) > 0 else 0)
+
+        # Helper function to plot overlaid panel (panel 1)
+        def plot_all_panel(ax):
+            """Plot panel 1 with all three histograms overlaid."""
+            # Plot all breaths as black line (no fill)
+            ax.plot(bin_centers, counts_all, 'k-', linewidth=2, label=f'All (n={n_all})', zorder=3)
+
+            # Plot eupnea as green filled curve
+            ax.fill_between(bin_centers, 0, counts_eupnea, color='green', alpha=0.3, label=f'Eupnea (n={n_eupnea})', zorder=2)
+            ax.plot(bin_centers, counts_eupnea, color='green', linewidth=1, alpha=0.7, zorder=2)
+
+            # Plot sniffing as purple filled curve
+            ax.fill_between(bin_centers, 0, counts_sniff, color='purple', alpha=0.3, label=f'Sniffing (n={n_sniff})', zorder=1)
+            ax.plot(bin_centers, counts_sniff, color='purple', linewidth=1, alpha=0.7, zorder=1)
+
+            # Cumulative probabilities on secondary axis
+            ax2 = ax.twinx()
+            cumul_all = np.cumsum(counts_all) / counts_all.sum() if counts_all.sum() > 0 else np.zeros_like(counts_all)
+            cumul_eupnea = np.cumsum(counts_eupnea) / counts_eupnea.sum() if counts_eupnea.sum() > 0 else np.zeros_like(counts_eupnea)
+            cumul_sniff = np.cumsum(counts_sniff) / counts_sniff.sum() if counts_sniff.sum() > 0 else np.zeros_like(counts_sniff)
+
+            ax2.plot(bin_centers, cumul_all, 'k--', linewidth=1.5, label='Cumul All', alpha=0.7)
+            ax2.plot(bin_centers, cumul_eupnea, color='green', linestyle='--', linewidth=1.5, label='Cumul Eupnea', alpha=0.7)
+            ax2.plot(bin_centers, cumul_sniff, color='purple', linestyle='--', linewidth=1.5, label='Cumul Sniffing', alpha=0.7)
+
+            ax2.set_ylabel('Cumulative Probability', fontsize=8)
+            ax2.set_ylim(0, 1.0)
+            ax2.tick_params(labelsize=7)
+            ax2.grid(False)
+
+            # Create histogram for post-stim breath intervals (separated by breath type)
+            post_stim_times_eupnea = [bt for st, bt, is_sniff in stim_breath_data_all if not is_sniff]
+            post_stim_times_sniff = [bt for st, bt, is_sniff in stim_breath_data_all if is_sniff]
+
+            if post_stim_times_eupnea:
+                counts_post_eupnea, _ = np.histogram(post_stim_times_eupnea, bins=shared_bin_edges)
+                ax.fill_between(bin_centers, 0, counts_post_eupnea, color='green',
+                               alpha=0.15, edgecolor='green', linewidth=1, linestyle=':', label='Post-Stim Eupnea')
+
+            if post_stim_times_sniff:
+                counts_post_sniff, _ = np.histogram(post_stim_times_sniff, bins=shared_bin_edges)
+                ax.fill_between(bin_centers, 0, counts_post_sniff, color='purple',
+                               alpha=0.15, edgecolor='purple', linewidth=1, linestyle=':', label='Post-Stim Sniff')
+
+            # Plot stim markers color-coded and sorted by breath type
+            if stim_breath_data_all:
+                # Sort by breath type first (eupnea=0, sniff=1), then by stim_time
+                stim_sorted = sorted(stim_breath_data_all, key=lambda x: (x[2], x[0]))
+
+                # Calculate spacing to fit within plot
+                n_markers = len(stim_sorted)
+                available_height = max_count * 0.4  # Use 40% of max for markers
+                y_spacing = available_height / max(n_markers, 1)
+                y_base = max_count * 1.05
+
+                for i, (stim_time, breath_time, is_sniffing) in enumerate(stim_sorted):
+                    y_pos = y_base + (i * y_spacing)
+                    breath_color = 'purple' if is_sniffing else 'green'
+
+                    ax.plot(stim_time, y_pos, 'o', color='blue', markersize=3, alpha=0.7, zorder=10)
+                    ax.plot(breath_time, y_pos, 'o', color=breath_color, markersize=3, alpha=0.7, zorder=10)
+                    ax.plot([stim_time, breath_time], [y_pos, y_pos], '-', color=breath_color,
+                           linewidth=0.6, alpha=0.5, zorder=9)
+
+            ax.set_xlabel('Time since previous insp offset (s)', fontsize=8)
+            ax.set_ylabel('Count', fontsize=8)
+            ax.set_title('Baseline Breath Probability - All Breaths', fontsize=9, fontweight='bold')
+            ax.legend(loc='upper left', fontsize=6)
+            ax.set_ylim(0, max_count * 1.6)  # Increased to fit markers
+            ax.set_xlim(shared_bin_edges[0], shared_bin_edges[-1])
+            ax.grid(True, alpha=0.3, axis='y')
+            ax.tick_params(labelsize=7)
+
+        # Helper function for single-type panels (panels 2 and 3)
+        def plot_single_panel(ax, intervals, stim_data, title, color):
+            """Plot a single breath type panel."""
+            if len(intervals) < 10:
+                ax.text(0.5, 0.5, 'Insufficient data', ha='center', va='center', transform=ax.transAxes)
+                return
+
+            # Calculate counts
+            counts, _ = np.histogram(intervals, bins=shared_bin_edges)
+            n_intervals = len(intervals)
+
+            # Plot as filled transparent curve (matching panel 1 style)
+            ax.fill_between(bin_centers, 0, counts, color=color, alpha=0.3, label=f'{title.split("-")[1].strip()} (n={n_intervals})')
+            ax.plot(bin_centers, counts, color=color, linewidth=1.5, alpha=0.7)
+
+            # Cumulative probability
+            ax2 = ax.twinx()
+            cumul = np.cumsum(counts) / counts.sum() if counts.sum() > 0 else np.zeros_like(counts)
+            ax2.plot(bin_centers, cumul, color=color, linestyle='--', linewidth=2)
+            ax2.set_ylabel('Cumulative Probability', fontsize=8, color=color)
+            ax2.tick_params(axis='y', labelcolor=color, labelsize=7)
+            ax2.set_ylim(0, 1.0)
+            ax2.grid(False)
+
+            # Create histogram for post-stim breath intervals
+            if stim_data:
+                post_stim_times = [bt for st, bt, is_sniff in stim_data]
+                counts_post, _ = np.histogram(post_stim_times, bins=shared_bin_edges)
+                n_post = len(post_stim_times)
+                ax.fill_between(bin_centers, 0, counts_post, color=color,
+                               alpha=0.15, edgecolor=color, linewidth=1, linestyle=':', label=f'Post-Stim (n={n_post})')
+
+            # Plot stim markers sorted by stim time
+            if stim_data:
+                stim_sorted = sorted(stim_data, key=lambda x: x[0])
+
+                # Calculate spacing to fit within plot
+                n_markers = len(stim_sorted)
+                available_height = max_count * 0.4
+                y_spacing = available_height / max(n_markers, 1)
+                y_base = max_count * 1.05
+
+                for i, (stim_time, breath_time, is_sniffing) in enumerate(stim_sorted):
+                    y_pos = y_base + (i * y_spacing)
+                    ax.plot(stim_time, y_pos, 'o', color='blue', markersize=3, alpha=0.7, zorder=10)
+                    ax.plot(breath_time, y_pos, 'o', color=color, markersize=3, alpha=0.7, zorder=10)
+                    ax.plot([stim_time, breath_time], [y_pos, y_pos], '-', color=color,
+                           linewidth=0.6, alpha=0.5, zorder=9)
+
+            # Stats
+            intervals_arr = np.array(intervals)
+            mean_int = float(np.mean(intervals_arr))
+            std_int = float(np.std(intervals_arr))
+            stats_text = (f'n={n_intervals}\n'
+                         f'Mean: {mean_int:.2f} s\n'
+                         f'SD: {std_int:.2f} s\n'
+                         f'Stim: n={len(stim_data)}')
+            ax.text(0.98, 0.98, stats_text, transform=ax.transAxes,
+                   fontsize=7, va='top', ha='right',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+            ax.set_xlabel('Time since previous insp offset (s)', fontsize=8)
+            ax.set_ylabel('Count', fontsize=8)
+            ax.set_title(title, fontsize=9, fontweight='bold')
+            ax.set_ylim(0, max_count * 1.5)
+            ax.set_xlim(shared_bin_edges[0], shared_bin_edges[-1])
+            ax.grid(True, alpha=0.3, axis='y')
+            ax.tick_params(labelsize=7)
+            if ax.get_legend_handles_labels()[0]:  # Only show legend if there are items
+                ax.legend(loc='upper left', fontsize=6)
+
+        # Plot all three panels
+        plot_all_panel(ax_all)
+        plot_single_panel(ax_eupnea, intervals_eupnea, stim_breath_data_eupnea,
+                         'Baseline Breath Probability - Eupnea Only', 'green')
+        plot_single_panel(ax_sniff, intervals_sniff, stim_breath_data_sniff,
+                         'Baseline Breath Probability - Sniffing Only', 'purple')
 
     def _generate_pulse_cta_test_figure(self, kept_sweeps: list):
         """
-        Generate a standalone test figure with just the CTA overlay plot.
+        Generate a standalone test figure with 3-panel CTA overlay plot.
 
         This is a temporary helper for Phase 1 testing before full integration.
 
@@ -2098,14 +3348,137 @@ class ExportManager:
         """
         import matplotlib.pyplot as plt
 
-        fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-        self._plot_pulse_cta_overlay(ax, kept_sweeps, global_s0=None)
+        fig, (ax_all, ax_eupnea, ax_sniff) = plt.subplots(1, 3, figsize=(18, 5))
+        self._plot_pulse_cta_overlay(ax_all, ax_eupnea, ax_sniff, kept_sweeps, global_s0=None)
         fig.tight_layout()
 
         return fig
 
+    def _generate_pulse_2d_test_figure(self, kept_sweeps: list):
+        """
+        Generate a standalone test figure with just the 2D phase-sorted traces.
 
+        Args:
+            kept_sweeps: List of sweep indices to include
 
+        Returns:
+            matplotlib Figure object
+        """
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+        self._plot_pulse_2d_sorted_traces(ax, kept_sweeps)
+        fig.tight_layout()
+
+        return fig
+
+    def _generate_pulse_3d_test_figure(self, kept_sweeps: list):
+        """
+        Generate a standalone test figure with the 3D phase-sorted traces.
+
+        Args:
+            kept_sweeps: List of sweep indices to include
+
+        Returns:
+            matplotlib Figure object
+        """
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        self._plot_pulse_3d_sorted_traces(ax, kept_sweeps)
+        fig.tight_layout()
+
+        return fig
+
+    def _generate_pulse_3d_stim_aligned_test_figure(self, kept_sweeps: list):
+        """
+        Generate a standalone test figure with the 3D phase-sorted traces (stimulus-aligned).
+
+        Args:
+            kept_sweeps: List of sweep indices to include
+
+        Returns:
+            matplotlib Figure object
+        """
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        self._plot_pulse_3d_stim_aligned(ax, kept_sweeps)
+        fig.tight_layout()
+
+        return fig
+
+    def _generate_pulse_probability_test_figure(self, kept_sweeps: list):
+        """
+        Generate a standalone test figure with 3-panel baseline breath probability curves.
+
+        Args:
+            kept_sweeps: List of sweep indices to include
+
+        Returns:
+            matplotlib Figure object
+        """
+        import matplotlib.pyplot as plt
+
+        fig, (ax_all, ax_eupnea, ax_sniff) = plt.subplots(1, 3, figsize=(18, 6))
+        self._plot_pulse_probability_curve(ax_all, ax_eupnea, ax_sniff, kept_sweeps)
+        fig.tight_layout()
+
+        return fig
+
+    def _save_pulse_analysis_pdf(self, out_path, kept_sweeps: list):
+        """
+        Generate and save pulse analysis PDF with 4 pages:
+        - Page 1: CTA overlay (3-panel)
+        - Page 2: 3D phase-sorted traces (offset-aligned)
+        - Page 3: 3D phase-sorted traces (stim-aligned)
+        - Page 4: Probability curves (3-panel)
+
+        Args:
+            out_path: Path to save PDF
+            kept_sweeps: List of sweep indices to include
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_pdf import PdfPages
+
+        print(f"[Pulse PDF] Generating pulse analysis PDF for {len(kept_sweeps)} sweeps...")
+
+        # Generate all 4 figures
+        try:
+            print("[Pulse PDF] Generating CTA figure...")
+            fig_cta = self._generate_pulse_cta_test_figure(kept_sweeps)
+
+            print("[Pulse PDF] Generating 3D offset-aligned figure...")
+            fig_3d_offset = self._generate_pulse_3d_test_figure(kept_sweeps)
+
+            print("[Pulse PDF] Generating 3D stim-aligned figure...")
+            fig_3d_stim = self._generate_pulse_3d_stim_aligned_test_figure(kept_sweeps)
+
+            print("[Pulse PDF] Generating probability curves...")
+            fig_prob = self._generate_pulse_probability_test_figure(kept_sweeps)
+
+            # Save to PDF
+            with PdfPages(out_path) as pdf:
+                pdf.savefig(fig_cta, dpi=150)
+                pdf.savefig(fig_3d_offset, dpi=150)
+                pdf.savefig(fig_3d_stim, dpi=150)
+                pdf.savefig(fig_prob, dpi=150)
+
+            # Close figures
+            plt.close(fig_cta)
+            plt.close(fig_3d_offset)
+            plt.close(fig_3d_stim)
+            plt.close(fig_prob)
+
+            print(f"[Pulse PDF] ✓ Pulse analysis PDF saved to {out_path.name}")
+
+        except Exception as e:
+            print(f"[Pulse PDF] ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def _save_metrics_summary_pdf(
         self,
@@ -2404,21 +3777,81 @@ class ExportManager:
 
                 if len(groups):
                     combined = np.concatenate(groups)
-                    edges = np.histogram_bin_edges(combined, bins="auto")
-                    centers = 0.5 * (edges[:-1] + edges[1:])
+                    # Remove non-finite values before calculating bin edges
+                    combined_finite = combined[np.isfinite(combined)]
 
-                    def _plot_line(vals, lbl, style_kw):
-                        vals = np.asarray(vals, dtype=float)
-                        if vals.size == 0:
-                            return
-                        dens, _ = np.histogram(vals, bins=edges, density=True)
-                        ax3.plot(centers, dens, **style_kw, label=lbl)
+                    # Only proceed if we have sufficient data for meaningful histogram
+                    if combined_finite.size >= 2:
+                        try:
+                            # Check if there's sufficient variation in the data
+                            if np.std(combined_finite) < 1e-10:
+                                # All values are essentially identical - use fixed bins around that value
+                                mean_val = np.mean(combined_finite)
+                                edges = np.linspace(mean_val - 0.1, mean_val + 0.1, 10)
+                            else:
+                                edges = np.histogram_bin_edges(combined_finite, bins="auto")
 
-                    _plot_line(hist_vals[k]["all"], "All", dict(lw=1.8))
-                    if have_stim:
-                        _plot_line(hist_vals[k]["baseline"], "Baseline", dict(lw=1.6))
-                        _plot_line(hist_vals[k]["stim"],     "Stim",     dict(lw=1.6, ls="--"))
-                        _plot_line(hist_vals[k]["post"],     "Post",     dict(lw=1.6, ls=":"))
+                            centers = 0.5 * (edges[:-1] + edges[1:])
+
+                            # Get total count for scaling sub-histograms
+                            vals_all = np.asarray(hist_vals[k]["all"], dtype=float)
+                            vals_all_finite = vals_all[np.isfinite(vals_all)]
+                            n_total = len(vals_all_finite)
+
+                            def _plot_histogram(vals, lbl, color, fill=False, line_style='-', scale_to_total=False, linewidth=1.5):
+                                """
+                                Plot histogram as line or filled curve.
+
+                                Args:
+                                    scale_to_total: If True, scale density by (n_vals / n_total) so that
+                                                   the sub-histograms are proportional to the "All" histogram
+                                    linewidth: Line width for the outline
+                                """
+                                vals = np.asarray(vals, dtype=float)
+                                vals_finite = vals[np.isfinite(vals)]
+                                if vals_finite.size == 0:
+                                    return
+                                try:
+                                    # Add count to label
+                                    label_with_count = f"{lbl} (n={len(vals_finite)})"
+
+                                    # Calculate density
+                                    dens, _ = np.histogram(vals_finite, bins=edges, density=True)
+
+                                    # Scale density if requested (for baseline/stim/post relative to "All")
+                                    if scale_to_total and n_total > 0:
+                                        scale_factor = len(vals_finite) / n_total
+                                        dens = dens * scale_factor
+
+                                    if fill:
+                                        # Filled transparent curve with solid outline
+                                        ax3.fill_between(centers, 0, dens, color=color, alpha=0.3, label=label_with_count)
+                                        ax3.plot(centers, dens, color=color, linewidth=linewidth, alpha=0.7, linestyle=line_style)
+                                    else:
+                                        # Line only (no fill)
+                                        ax3.plot(centers, dens, color=color, linewidth=1.8, linestyle=line_style, label=label_with_count)
+                                except (ValueError, RuntimeWarning) as e:
+                                    # Skip plotting this line if histogram fails
+                                    print(f"[Export] Warning: Could not plot histogram for {lbl}: {e}")
+                                    pass
+
+                            # Plot "All" as black line only (no fill) - standard density
+                            _plot_histogram(hist_vals[k]["all"], "All", color='black', fill=False, scale_to_total=False)
+
+                            # Plot baseline, post, then stim as filled histograms (stim last = on top)
+                            # Stim gets thicker line to stand out
+                            if have_stim:
+                                _plot_histogram(hist_vals[k]["baseline"], "Baseline", color='gray', fill=True, scale_to_total=True, linewidth=1.5)
+                                _plot_histogram(hist_vals[k]["post"], "Post", color='orange', fill=True, scale_to_total=True, linewidth=1.5)
+                                _plot_histogram(hist_vals[k]["stim"], "Stim", color='blue', fill=True, scale_to_total=True, linewidth=2.0)
+                        except Exception as e:
+                            # If histogram generation fails entirely, show error message on plot
+                            ax3.text(0.5, 0.5, f'Histogram error:\n{str(e)}',
+                                   ha='center', va='center', transform=ax3.transAxes, fontsize=8)
+                    else:
+                        # Insufficient data for histogram
+                        ax3.text(0.5, 0.5, 'Insufficient data\nfor histogram',
+                               ha='center', va='center', transform=ax3.transAxes, fontsize=8)
 
                 ax3.set_title(f"{label} — distribution (density){title_suffix}", fontsize=9, pad=title_pad)
                 ax3.set_ylabel("Density", fontsize=8)
@@ -2956,10 +4389,21 @@ class ExportManager:
 
             if during.size > 0 and outside.size > 0:
                 all_vals = np.concatenate([during, outside])
-                bins = np.histogram_bin_edges(all_vals[np.isfinite(all_vals)], bins=100)
+                all_vals_finite = all_vals[np.isfinite(all_vals)]
 
-                ax3.hist(outside, bins=bins, alpha=0.6, color='blue', label=f'Outside Events (n={len(outside)})', density=True)
-                ax3.hist(during, bins=bins, alpha=0.6, color='orange', label=f'During Events (n={len(during)})', density=True)
+                # Check if we have sufficient data for histogram
+                if all_vals_finite.size >= 2 and np.std(all_vals_finite) > 1e-10:
+                    try:
+                        bins = np.histogram_bin_edges(all_vals_finite, bins=100)
+
+                        ax3.hist(outside, bins=bins, alpha=0.6, color='blue', label=f'Outside Events (n={len(outside)})', density=True)
+                        ax3.hist(during, bins=bins, alpha=0.6, color='orange', label=f'During Events (n={len(during)})', density=True)
+                    except (ValueError, RuntimeWarning) as e:
+                        ax3.text(0.5, 0.5, f'Histogram error:\n{str(e)}',
+                               ha='center', va='center', transform=ax3.transAxes, fontsize=8)
+                else:
+                    ax3.text(0.5, 0.5, 'Insufficient variation\nin data for histogram',
+                           ha='center', va='center', transform=ax3.transAxes, fontsize=8)
 
                 if len(during) > 1 and len(outside) > 1:
                     t_stat, p_val = stats.ttest_ind(during, outside, nan_policy='omit')
@@ -2989,6 +4433,532 @@ class ExportManager:
 
         plt.tight_layout()
         return fig
+
+    def _show_pulse_4page_preview(self, fig_cta, fig_3d_offset, fig_3d_stim, fig_prob):
+        """Display 4-page preview dialog: CTA + 3D (offset-aligned) + 3D (stim-aligned) + Probability."""
+        import matplotlib.pyplot as plt
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea, QWidget
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
+        from PyQt6.QtCore import Qt, QEvent, QObject
+        from PyQt6.QtWidgets import QSizePolicy, QStackedWidget
+        import time
+
+        dialog = QDialog(self.window)
+        dialog.setWindowTitle("Pulse Analysis Preview")
+        dialog.resize(1300, 900)
+
+        main_layout = QVBoxLayout(dialog)
+
+        # Page selector controls
+        control_layout = QHBoxLayout()
+        page_label = QLabel("Page 1 of 4 (CTA Overlay)")
+        prev_btn = QPushButton("← Previous")
+        next_btn = QPushButton("Next →")
+        close_btn = QPushButton("Close")
+
+        control_layout.addWidget(prev_btn)
+        control_layout.addWidget(page_label)
+        control_layout.addWidget(next_btn)
+        control_layout.addStretch()
+        control_layout.addWidget(close_btn)
+
+        main_layout.addLayout(control_layout)
+
+        # Scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
+
+        # Create canvases and toolbars for each figure
+        def create_canvas_with_toolbar(fig):
+            """Create a widget containing a canvas and navigation toolbar."""
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(0, 0, 0, 0)
+
+            canvas = FigureCanvas(fig)
+            toolbar = NavigationToolbar2QT(canvas, container)
+
+            layout.addWidget(toolbar)
+            layout.addWidget(canvas)
+
+            canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            canvas.setMinimumWidth(800)
+
+            return container, canvas
+
+        # Create page widgets with toolbars
+        container_cta, canvas_cta = create_canvas_with_toolbar(fig_cta)
+        container_3d_offset, canvas_3d_offset = create_canvas_with_toolbar(fig_3d_offset)
+        container_3d_stim, canvas_3d_stim = create_canvas_with_toolbar(fig_3d_stim)
+        container_prob, canvas_prob = create_canvas_with_toolbar(fig_prob)
+
+        # Stacked widget
+        canvas_stack = QStackedWidget()
+        canvas_stack.addWidget(container_cta)         # index 0
+        canvas_stack.addWidget(container_3d_offset)   # index 1
+        canvas_stack.addWidget(container_3d_stim)     # index 2
+        canvas_stack.addWidget(container_prob)        # index 3
+        canvas_stack.setCurrentIndex(0)
+
+        # Event filter for wheel scrolling
+        class WheelEventFilter:
+            def __init__(self, scroll_area):
+                self.scroll_area = scroll_area
+
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.Type.Wheel:
+                    scrollbar = self.scroll_area.verticalScrollBar()
+                    scrollbar.setValue(scrollbar.value() - event.angleDelta().y())
+                    return True
+                return False
+
+        wheel_filter = WheelEventFilter(scroll_area)
+
+        class EventFilterObject(QObject):
+            def __init__(self, filter_func):
+                super().__init__()
+                self.filter_func = filter_func
+
+            def eventFilter(self, obj, event):
+                return self.filter_func(obj, event)
+
+        filter_obj = EventFilterObject(wheel_filter.eventFilter)
+        canvas_cta.installEventFilter(filter_obj)
+        canvas_3d_offset.installEventFilter(filter_obj)
+        canvas_3d_stim.installEventFilter(filter_obj)
+        canvas_prob.installEventFilter(filter_obj)
+
+        scroll_area.setWidget(canvas_stack)
+        main_layout.addWidget(scroll_area)
+
+        # Navigation
+        current_page = [1]
+
+        def update_page():
+            labels = [
+                "Page 1 of 4 (CTA Overlay)",
+                "Page 2 of 4 (3D Phase-Sorted - Offset Aligned)",
+                "Page 3 of 4 (3D Phase-Sorted - Stimulus Aligned)",
+                "Page 4 of 4 (Baseline Breath Probability)"
+            ]
+            idx = current_page[0] - 1
+            canvas_stack.setCurrentIndex(idx)
+            page_label.setText(labels[idx])
+            prev_btn.setEnabled(current_page[0] > 1)
+            next_btn.setEnabled(current_page[0] < 4)
+            scroll_area.verticalScrollBar().setValue(0)
+
+        def go_prev():
+            current_page[0] = max(1, current_page[0] - 1)
+            update_page()
+
+        def go_next():
+            current_page[0] = min(4, current_page[0] + 1)
+            update_page()
+
+        prev_btn.clicked.connect(go_prev)
+        next_btn.clicked.connect(go_next)
+        close_btn.clicked.connect(dialog.close)
+
+        update_page()
+
+        # Show timing message
+        if hasattr(self, '_preview_start_time'):
+            t_elapsed = time.time() - self._preview_start_time
+            self.window._log_status_message(f"✓ Pulse analysis preview generated ({t_elapsed:.1f}s)", 5000)
+
+        # Clean up figures when dialog closes
+        def cleanup():
+            plt.close(fig_cta)
+            plt.close(fig_3d_offset)
+            plt.close(fig_3d_stim)
+            plt.close(fig_prob)
+
+        dialog.finished.connect(cleanup)
+
+        # Show dialog non-modally so standard preview can be generated in parallel
+        dialog.show()
+
+    def _show_pulse_3page_preview(self, fig_cta, fig_3d, fig_prob):
+        """Display 3-page preview dialog: CTA + 3D phase-sorted + Probability curve."""
+        import matplotlib.pyplot as plt
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        from PyQt6.QtCore import Qt, QEvent, QObject
+        from PyQt6.QtWidgets import QSizePolicy, QStackedWidget
+        import time
+
+        dialog = QDialog(self.window)
+        dialog.setWindowTitle("Pulse Analysis Preview")
+        dialog.resize(1300, 900)
+
+        main_layout = QVBoxLayout(dialog)
+
+        # Page selector controls
+        control_layout = QHBoxLayout()
+        page_label = QLabel("Page 1 of 3 (CTA Overlay)")
+        prev_btn = QPushButton("← Previous")
+        next_btn = QPushButton("Next →")
+        close_btn = QPushButton("Close")
+
+        control_layout.addWidget(prev_btn)
+        control_layout.addWidget(page_label)
+        control_layout.addWidget(next_btn)
+        control_layout.addStretch()
+        control_layout.addWidget(close_btn)
+
+        main_layout.addLayout(control_layout)
+
+        # Scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
+
+        # Canvases
+        canvas_cta = FigureCanvas(fig_cta)
+        canvas_3d = FigureCanvas(fig_3d)
+        canvas_prob = FigureCanvas(fig_prob)
+
+        for canvas in [canvas_cta, canvas_3d, canvas_prob]:
+            canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            canvas.setMinimumWidth(800)
+
+        # Stacked widget
+        canvas_stack = QStackedWidget()
+        canvas_stack.addWidget(canvas_cta)   # index 0
+        canvas_stack.addWidget(canvas_3d)    # index 1
+        canvas_stack.addWidget(canvas_prob)  # index 2
+        canvas_stack.setCurrentIndex(0)
+
+        # Event filter for wheel scrolling
+        class WheelEventFilter:
+            def __init__(self, scroll_area):
+                self.scroll_area = scroll_area
+
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.Type.Wheel:
+                    scrollbar = self.scroll_area.verticalScrollBar()
+                    scrollbar.setValue(scrollbar.value() - event.angleDelta().y())
+                    return True
+                return False
+
+        wheel_filter = WheelEventFilter(scroll_area)
+
+        class EventFilterObject(QObject):
+            def __init__(self, filter_func):
+                super().__init__()
+                self.filter_func = filter_func
+
+            def eventFilter(self, obj, event):
+                return self.filter_func(obj, event)
+
+        filter_obj = EventFilterObject(wheel_filter.eventFilter)
+        canvas_cta.installEventFilter(filter_obj)
+        canvas_3d.installEventFilter(filter_obj)
+        canvas_prob.installEventFilter(filter_obj)
+
+        scroll_area.setWidget(canvas_stack)
+        main_layout.addWidget(scroll_area)
+
+        # Navigation
+        current_page = [1]
+
+        def update_page():
+            labels = [
+                "Page 1 of 3 (CTA Overlay)",
+                "Page 2 of 3 (3D Phase-Sorted Traces)",
+                "Page 3 of 3 (Baseline Breath Probability)"
+            ]
+            idx = current_page[0] - 1
+            canvas_stack.setCurrentIndex(idx)
+            page_label.setText(labels[idx])
+            prev_btn.setEnabled(current_page[0] > 1)
+            next_btn.setEnabled(current_page[0] < 3)
+            scroll_area.verticalScrollBar().setValue(0)
+
+        def go_prev():
+            current_page[0] = max(1, current_page[0] - 1)
+            update_page()
+
+        def go_next():
+            current_page[0] = min(3, current_page[0] + 1)
+            update_page()
+
+        prev_btn.clicked.connect(go_prev)
+        next_btn.clicked.connect(go_next)
+        close_btn.clicked.connect(dialog.close)
+
+        update_page()
+
+        # Show timing message
+        if hasattr(self, '_preview_start_time'):
+            t_elapsed = time.time() - self._preview_start_time
+            self.window._log_status_message(f"✓ Pulse analysis preview generated ({t_elapsed:.1f}s)", 5000)
+
+        # Show dialog modally
+        dialog.exec()
+
+        # Clean up
+        plt.close(fig_cta)
+        plt.close(fig_3d)
+        plt.close(fig_prob)
+
+    def _show_pulse_2page_preview(self, fig_cta, fig_3d):
+        """Display 2-page preview dialog: CTA + 3D phase-sorted traces."""
+        import matplotlib.pyplot as plt
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        from PyQt6.QtCore import Qt, QEvent, QObject
+        from PyQt6.QtWidgets import QSizePolicy, QStackedWidget
+        import time
+
+        dialog = QDialog(self.window)
+        dialog.setWindowTitle("Pulse Analysis Preview")
+        dialog.resize(1300, 900)
+
+        main_layout = QVBoxLayout(dialog)
+
+        # Page selector controls
+        control_layout = QHBoxLayout()
+        page_label = QLabel("Page 1 of 2 (CTA Overlay)")  # Will be updated by update_page()
+        prev_btn = QPushButton("← Previous")
+        next_btn = QPushButton("Next →")
+        close_btn = QPushButton("Close")
+
+        control_layout.addWidget(prev_btn)
+        control_layout.addWidget(page_label)
+        control_layout.addWidget(next_btn)
+        control_layout.addStretch()
+        control_layout.addWidget(close_btn)
+
+        main_layout.addLayout(control_layout)
+
+        # Scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
+
+        # Canvases
+        canvas_cta = FigureCanvas(fig_cta)
+        canvas_3d = FigureCanvas(fig_3d)
+
+        for canvas in [canvas_cta, canvas_3d]:
+            canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            canvas.setMinimumWidth(800)
+
+        # Stacked widget
+        canvas_stack = QStackedWidget()
+        canvas_stack.addWidget(canvas_cta)  # index 0
+        canvas_stack.addWidget(canvas_3d)   # index 1
+        canvas_stack.setCurrentIndex(0)
+
+        # Event filter for wheel scrolling
+        class WheelEventFilter:
+            def __init__(self, scroll_area):
+                self.scroll_area = scroll_area
+
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.Type.Wheel:
+                    scrollbar = self.scroll_area.verticalScrollBar()
+                    scrollbar.setValue(scrollbar.value() - event.angleDelta().y())
+                    return True
+                return False
+
+        wheel_filter = WheelEventFilter(scroll_area)
+
+        class EventFilterObject(QObject):
+            def __init__(self, filter_func):
+                super().__init__()
+                self.filter_func = filter_func
+
+            def eventFilter(self, obj, event):
+                return self.filter_func(obj, event)
+
+        filter_obj = EventFilterObject(wheel_filter.eventFilter)
+        canvas_cta.installEventFilter(filter_obj)
+        canvas_3d.installEventFilter(filter_obj)
+
+        scroll_area.setWidget(canvas_stack)
+        main_layout.addWidget(scroll_area)
+
+        # Navigation
+        current_page = [1]
+
+        def update_page():
+            labels = [
+                "Page 1 of 2 (CTA Overlay)",
+                "Page 2 of 2 (3D Phase-Sorted Traces)"
+            ]
+            idx = current_page[0] - 1
+            canvas_stack.setCurrentIndex(idx)
+            page_label.setText(labels[idx])
+            prev_btn.setEnabled(current_page[0] > 1)
+            next_btn.setEnabled(current_page[0] < 2)
+            scroll_area.verticalScrollBar().setValue(0)
+
+        def go_prev():
+            current_page[0] = max(1, current_page[0] - 1)
+            update_page()
+
+        def go_next():
+            current_page[0] = min(2, current_page[0] + 1)
+            update_page()
+
+        prev_btn.clicked.connect(go_prev)
+        next_btn.clicked.connect(go_next)
+        close_btn.clicked.connect(dialog.close)
+
+        update_page()
+
+        # Show timing message
+        if hasattr(self, '_preview_start_time'):
+            t_elapsed = time.time() - self._preview_start_time
+            self.window._log_status_message(f"✓ Pulse analysis generated ({t_elapsed:.1f}s)", 5000)
+
+        dialog.exec()
+
+        # Cleanup
+        plt.close(fig_cta)
+        plt.close(fig_3d)
+
+    def _show_summary_preview_dialog_with_pulse(self, fig_pulse, fig1, fig2, fig3):
+        """Display interactive preview dialog with 4 pages: pulse CTA + 3 standard pages."""
+        import matplotlib.pyplot as plt
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        from PyQt6.QtCore import Qt, QEvent, QObject
+        from PyQt6.QtWidgets import QSizePolicy, QStackedWidget
+        import time
+
+        # -------------------- Display in dialog --------------------
+        dialog = QDialog(self.window)
+        dialog.setWindowTitle("Summary Preview - Pulse Experiment")
+        dialog.resize(1300, 900)
+
+        main_layout = QVBoxLayout(dialog)
+
+        # Page selector controls at top
+        control_layout = QHBoxLayout()
+        page_label = QLabel("Page 1 of 4 (Pulse CTA)")
+        prev_btn = QPushButton("← Previous")
+        next_btn = QPushButton("Next →")
+        close_btn = QPushButton("Close")
+
+        control_layout.addWidget(prev_btn)
+        control_layout.addWidget(page_label)
+        control_layout.addWidget(next_btn)
+        control_layout.addStretch()
+        control_layout.addWidget(close_btn)
+
+        main_layout.addLayout(control_layout)
+
+        # Create scroll area for the canvas
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
+
+        # Canvas for each figure
+        canvas_pulse = FigureCanvas(fig_pulse)
+        canvas1 = FigureCanvas(fig1)
+        canvas2 = FigureCanvas(fig2)
+        canvas3 = FigureCanvas(fig3)
+
+        # Set size policies
+        for canvas in [canvas_pulse, canvas1, canvas2, canvas3]:
+            canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            canvas.setMinimumWidth(800)
+
+        # Create stacked widget
+        canvas_stack = QStackedWidget()
+        canvas_stack.addWidget(canvas_pulse)  # index 0
+        canvas_stack.addWidget(canvas1)       # index 1
+        canvas_stack.addWidget(canvas2)       # index 2
+        canvas_stack.addWidget(canvas3)       # index 3
+        canvas_stack.setCurrentIndex(0)
+
+        # Install event filter for wheel scrolling
+        class WheelEventFilter:
+            def __init__(self, scroll_area):
+                self.scroll_area = scroll_area
+
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.Type.Wheel:
+                    scrollbar = self.scroll_area.verticalScrollBar()
+                    scrollbar.setValue(scrollbar.value() - event.angleDelta().y())
+                    return True
+                return False
+
+        wheel_filter = WheelEventFilter(scroll_area)
+
+        class EventFilterObject(QObject):
+            def __init__(self, filter_func):
+                super().__init__()
+                self.filter_func = filter_func
+
+            def eventFilter(self, obj, event):
+                return self.filter_func(obj, event)
+
+        filter_obj = EventFilterObject(wheel_filter.eventFilter)
+        canvas_pulse.installEventFilter(filter_obj)
+        canvas1.installEventFilter(filter_obj)
+        canvas2.installEventFilter(filter_obj)
+        canvas3.installEventFilter(filter_obj)
+
+        scroll_area.setWidget(canvas_stack)
+        main_layout.addWidget(scroll_area)
+
+        # Page navigation
+        current_page = [1]
+
+        def update_page():
+            labels = [
+                "Page 1 of 4 (Pulse CTA)",
+                "Page 2 of 4 (Raw Metrics)",
+                "Page 3 of 4 (Normalized - Time-based)",
+                "Page 4 of 4 (Normalized - Eupnea-based)"
+            ]
+            idx = current_page[0] - 1
+            canvas_stack.setCurrentIndex(idx)
+            page_label.setText(labels[idx])
+            prev_btn.setEnabled(current_page[0] > 1)
+            next_btn.setEnabled(current_page[0] < 4)
+            scroll_area.verticalScrollBar().setValue(0)
+
+        def go_prev():
+            current_page[0] = max(1, current_page[0] - 1)
+            update_page()
+
+        def go_next():
+            current_page[0] = min(4, current_page[0] + 1)
+            update_page()
+
+        prev_btn.clicked.connect(go_prev)
+        next_btn.clicked.connect(go_next)
+        close_btn.clicked.connect(dialog.close)
+
+        update_page()
+
+        # Show timing message
+        if hasattr(self, '_preview_start_time'):
+            t_elapsed = time.time() - self._preview_start_time
+            self.window._log_status_message(f"✓ Summary generated ({t_elapsed:.1f}s)", 5000)
+
+        dialog.exec()
+
+        # Cleanup
+        plt.close(fig_pulse)
+        plt.close(fig1)
+        plt.close(fig2)
+        plt.close(fig3)
 
     def _show_simple_figure_preview(self, fig, title="Preview"):
         """
@@ -3045,6 +5015,7 @@ class ExportManager:
         """Display interactive preview dialog with the three summary figures."""
         import matplotlib.pyplot as plt
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea
+        from PyQt6.QtCore import QObject, QEvent, Qt
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
         # Generate figures using the same method that saves PDFs, but get figures back instead
@@ -3095,9 +5066,22 @@ class ExportManager:
         canvas2 = FigureCanvas(fig2)
         canvas3 = FigureCanvas(fig3)
 
+        # Disconnect matplotlib's scroll event handler to prevent zoom conflicts
+        # This allows our event filter to handle scrolling instead
+        for canvas in [canvas1, canvas2, canvas3]:
+            # Disconnect scroll_event callbacks if they exist
+            try:
+                if hasattr(canvas, 'callbacks') and hasattr(canvas.callbacks, 'callbacks'):
+                    if 'scroll_event' in canvas.callbacks.callbacks:
+                        # Get list of callback IDs for scroll events
+                        scroll_cids = list(canvas.callbacks.callbacks.get('scroll_event', {}).keys())
+                        for cid in scroll_cids:
+                            canvas.mpl_disconnect(cid)
+            except Exception as e:
+                print(f"[Preview] Could not disconnect scroll events: {e}")
+
         # Set size policies to allow width scaling but keep height fixed
         from PyQt6.QtWidgets import QSizePolicy
-        from PyQt6.QtCore import QEvent
         for canvas in [canvas1, canvas2, canvas3]:
             canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             canvas.setMinimumWidth(800)  # Minimum width
@@ -3110,34 +5094,24 @@ class ExportManager:
         canvas_stack.addWidget(canvas3)  # index 2
         canvas_stack.setCurrentIndex(0)  # Start with page 1
 
-        # Install event filter on canvases to forward wheel events to scroll area
-        class WheelEventFilter:
-            def __init__(self, scroll_area):
-                self.scroll_area = scroll_area
-
-            def eventFilter(self, obj, event):
-                if event.type() == QEvent.Type.Wheel:
-                    # Forward wheel event to scroll area's viewport
-                    scrollbar = self.scroll_area.verticalScrollBar()
-                    scrollbar.setValue(scrollbar.value() - event.angleDelta().y())
+        # Add eventFilter method to dialog to forward wheel events to scroll area
+        # This matches the pattern used in GMM dialog which works correctly
+        def eventFilter_for_dialog(obj, event):
+            if event.type() == QEvent.Type.Wheel:
+                # Check if event is from any of the canvases
+                if obj in [canvas1, canvas2, canvas3]:
+                    # Forward wheel event to scroll area
+                    scroll_area.verticalScrollBar().setValue(
+                        scroll_area.verticalScrollBar().value() - event.angleDelta().y() // 2
+                    )
                     return True  # Event handled
-                return False  # Let other events pass through
+            return False  # Let other events pass through
 
-        wheel_filter = WheelEventFilter(scroll_area)
-        from PyQt6.QtCore import QObject
-
-        class EventFilterObject(QObject):
-            def __init__(self, filter_func):
-                super().__init__()
-                self.filter_func = filter_func
-
-            def eventFilter(self, obj, event):
-                return self.filter_func(obj, event)
-
-        filter_obj = EventFilterObject(wheel_filter.eventFilter)
-        canvas1.installEventFilter(filter_obj)
-        canvas2.installEventFilter(filter_obj)
-        canvas3.installEventFilter(filter_obj)
+        # Install dialog as event filter on all canvases
+        dialog.eventFilter = eventFilter_for_dialog
+        canvas1.installEventFilter(dialog)
+        canvas2.installEventFilter(dialog)
+        canvas3.installEventFilter(dialog)
 
         # Put the stacked widget in the scroll area
         scroll_area.setWidget(canvas_stack)
@@ -3184,12 +5158,16 @@ class ExportManager:
             t_elapsed = time.time() - self._preview_start_time
             self.window._log_status_message(f"✓ Summary generated ({t_elapsed:.1f}s)", 5000)
 
-        dialog.exec()
+        # Clean up figures when dialog closes
+        def cleanup():
+            plt.close(fig1)
+            plt.close(fig2)
+            plt.close(fig3)
 
-        # Cleanup
-        plt.close(fig1)
-        plt.close(fig2)
-        plt.close(fig3)
+        dialog.finished.connect(cleanup)
+
+        # Show dialog non-modally so both pulse and standard previews can be viewed side-by-side
+        dialog.show()
 
 
 

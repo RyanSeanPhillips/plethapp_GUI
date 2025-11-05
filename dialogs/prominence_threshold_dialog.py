@@ -37,7 +37,7 @@ class ProminenceThresholdDialog(QDialog):
 
         # Cached peak detection
         self.all_peaks = None
-        self.all_prominences = None
+        self.all_peak_heights = None
 
         # Auto-calculated threshold
         self.auto_threshold = None
@@ -233,11 +233,12 @@ class ProminenceThresholdDialog(QDialog):
         try:
             min_dist_samples = int(self.current_min_dist * self.sr_hz)
 
-            # Find ALL peaks with very low prominence
-            peaks, props = find_peaks(self.y_data, prominence=0.001, distance=min_dist_samples)
+            # Find ALL peaks with very low prominence AND above baseline (height > 0)
+            # height=0 filters out rebound peaks below baseline, giving cleaner 2-population model
+            peaks, props = find_peaks(self.y_data, height=0, prominence=0.001, distance=min_dist_samples)
 
             self.all_peaks = peaks
-            self.all_prominences = props['prominences']
+            self.all_peak_heights = self.y_data[peaks]  # Use peak heights instead of prominences
 
             t_elapsed = time.time() - t_start
             print(f"[Prominence Dialog] Found {len(self.all_peaks)} peaks in {t_elapsed:.2f}s")
@@ -250,19 +251,19 @@ class ProminenceThresholdDialog(QDialog):
             traceback.print_exc()
 
     def _calculate_otsu_threshold(self):
-        """Calculate optimal prominence threshold using Otsu's method."""
-        if self.all_prominences is None or len(self.all_prominences) < 10:
+        """Calculate optimal height threshold using Otsu's method."""
+        if self.all_peak_heights is None or len(self.all_peak_heights) < 10:
             return
 
         try:
-            prominences = self.all_prominences
+            peak_heights = self.all_peak_heights
 
-            # Normalize prominences to [0, 255] for Otsu
-            prom_norm = ((prominences - prominences.min()) /
-                        (prominences.max() - prominences.min()) * 255).astype(np.uint8)
+            # Normalize peak heights to [0, 255] for Otsu
+            heights_norm = ((peak_heights - peak_heights.min()) /
+                        (peak_heights.max() - peak_heights.min()) * 255).astype(np.uint8)
 
             # Compute histogram
-            hist, bin_edges = np.histogram(prom_norm, bins=256, range=(0, 256))
+            hist, bin_edges = np.histogram(heights_norm, bins=256, range=(0, 256))
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
             # Otsu's method: maximize inter-class variance
@@ -281,20 +282,20 @@ class ProminenceThresholdDialog(QDialog):
 
             # Convert back to original scale
             self.auto_threshold = float((optimal_thresh_norm / 255.0 *
-                            (prominences.max() - prominences.min()) +
-                            prominences.min()))
+                            (peak_heights.max() - peak_heights.min()) +
+                            peak_heights.min()))
 
             # Store maximum variance for quality assessment
             self.max_inter_class_variance = float(np.max(variance))
 
             # Store inter-class variance curve for plotting
             # Convert bin_centers back to original scale for x-axis
-            thresh_values = bin_centers[:-1] / 255.0 * (prominences.max() - prominences.min()) + prominences.min()
+            thresh_values = bin_centers[:-1] / 255.0 * (peak_heights.max() - peak_heights.min()) + peak_heights.min()
             self.inter_class_variance_curve = (thresh_values, variance)
 
             self.current_threshold = self.auto_threshold
 
-            print(f"[Otsu] Auto-detected prominence threshold: {self.auto_threshold:.4f}")
+            print(f"[Otsu] Auto-detected height threshold: {self.auto_threshold:.4f}")
             self.lbl_threshold.setText(f"{self.auto_threshold:.4f}")
 
             # Also populate the height threshold field with the same value
@@ -319,7 +320,7 @@ class ProminenceThresholdDialog(QDialog):
         self._plot_histogram()
 
     def _plot_histogram(self):
-        """Plot prominence histogram with draggable threshold lines."""
+        """Plot peak height histogram with draggable threshold lines."""
         try:
             self.fig.clear()
             ax1 = self.fig.add_subplot(111)
@@ -333,28 +334,30 @@ class ProminenceThresholdDialog(QDialog):
             ax1.tick_params(axis='x', colors='#d4d4d4')
             ax1.tick_params(axis='y', colors='#d4d4d4')
 
-            if self.all_prominences is None:
+            if self.all_peak_heights is None:
                 ax1.text(0.5, 0.5, 'No data available', ha='center', va='center', color='#d4d4d4')
                 self.canvas.draw()
                 return
 
-            prominences = self.all_prominences
+            peak_heights = self.all_peak_heights
 
             # Plot histogram with MORE BINS (100 instead of 50)
-            n, bins, patches = ax1.hist(prominences, bins=100, color='steelblue',
-                                       alpha=0.7, edgecolor='#1e1e1e', label='Prominence Distribution')
+            n, bins, patches = ax1.hist(peak_heights, bins=100, color='steelblue',
+                                       alpha=0.7, edgecolor='#1e1e1e', label='Peak Height Distribution')
 
-            # Color bars based on threshold
+            # Color bars based on threshold (gray = below, red = above)
             if self.current_threshold is not None:
                 for i, patch in enumerate(patches):
                     if bins[i] < self.current_threshold:
-                        patch.set_facecolor('#cc8866')  # Orange for "noise"
+                        patch.set_facecolor('gray')  # Gray for "noise"
+                        patch.set_alpha(0.5)
                     else:
-                        patch.set_facecolor('#6699cc')  # Blue for "breaths"
+                        patch.set_facecolor('red')  # Red for "breaths"
+                        patch.set_alpha(0.5)
 
-            ax1.set_xlabel('Prominence', fontsize=11, color='#d4d4d4')
+            ax1.set_xlabel('Peak Height', fontsize=11, color='#d4d4d4')
             ax1.set_ylabel('Frequency (count)', fontsize=11, color='#d4d4d4')
-            ax1.set_title('Peak Prominence Distribution (Otsu\'s Method)', fontsize=12,
+            ax1.set_title('Peak Height Distribution (Otsu\'s Method)', fontsize=12,
                          fontweight='bold', color='#d4d4d4')
             ax1.grid(True, alpha=0.2, axis='y', color='#666666')
 
@@ -377,8 +380,8 @@ class ProminenceThresholdDialog(QDialog):
 
             if self.y2_mode == "peak_count":
                 # Compute peak count vs threshold
-                thresh_range = np.linspace(prominences.min(), prominences.max(), 100)
-                peak_counts = [np.sum(prominences >= t) for t in thresh_range]
+                thresh_range = np.linspace(peak_heights.min(), peak_heights.max(), 100)
+                peak_counts = [np.sum(peak_heights >= t) for t in thresh_range]
 
                 ax2.plot(thresh_range, peak_counts, color='#66cc66', linewidth=2, alpha=0.6,
                         label='Peaks Above Threshold')
@@ -387,7 +390,7 @@ class ProminenceThresholdDialog(QDialog):
 
                 # Mark current peak count (no horizontal line to avoid obscuring label)
                 if self.current_threshold is not None:
-                    current_count = np.sum(prominences >= self.current_threshold)
+                    current_count = np.sum(peak_heights >= self.current_threshold)
                     ax2.plot(self.current_threshold, current_count, 'ro', markersize=8)
                     ax2.text(self.current_threshold, current_count, f'  {current_count} peaks',
                             va='center', fontsize=9, color='#ff6666')

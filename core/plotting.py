@@ -80,6 +80,10 @@ class PlotHost(QWidget):
 
         # Line for height threshold visualization
         self.threshold_line = None
+        self._dragging_threshold = False  # Track if threshold line is being dragged
+        self._threshold_drag_cid_motion = None
+        self._threshold_drag_cid_release = None
+        self._threshold_histogram = None  # Histogram shown during threshold dragging
 
         #Continuious Breath metrics
         self.ax_y2 = None
@@ -510,16 +514,19 @@ class PlotHost(QWidget):
             return
 
         if self.threshold_line is None or self.threshold_line.axes is not ax:
-            # Create new line
+            # Create new line (make it pickable for dragging)
             self.threshold_line = ax.axhline(
                 threshold_value,
-                linestyle="--",
-                linewidth=1.2,
+                linestyle=(0, (3, 3)),  # Smaller dashes: (offset, (on, off))
+                linewidth=1.2,  # Thinner
                 color="red",
-                alpha=0.7,
+                alpha=0.8,
                 zorder=2,
-                label="Height Threshold"
+                label="Height Threshold",
+                picker=5  # Pickable within 5 pixels
             )
+            # Connect pick event for dragging
+            self.canvas.mpl_connect('pick_event', self._on_threshold_pick)
         else:
             # Update existing line
             self.threshold_line.set_ydata([threshold_value, threshold_value])
@@ -534,6 +541,163 @@ class PlotHost(QWidget):
             except Exception:
                 pass
             self.threshold_line = None
+            self.canvas.draw_idle()
+
+    def _on_threshold_pick(self, event):
+        """Handle pick event on threshold line to start dragging."""
+        if event.artist == self.threshold_line:
+            self._dragging_threshold = True
+            # Connect motion and release events for dragging
+            if self._threshold_drag_cid_motion is None:
+                self._threshold_drag_cid_motion = self.canvas.mpl_connect(
+                    'motion_notify_event', self._on_threshold_drag
+                )
+            if self._threshold_drag_cid_release is None:
+                self._threshold_drag_cid_release = self.canvas.mpl_connect(
+                    'button_release_event', self._on_threshold_release
+                )
+            # Change cursor to indicate dragging
+            from PyQt6.QtCore import Qt
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+
+            # Show histogram of all peak heights
+            self._show_peak_height_histogram()
+
+    def _on_threshold_drag(self, event):
+        """Handle mouse motion while dragging threshold line."""
+        if not self._dragging_threshold or event.inaxes is None:
+            return
+
+        # Update threshold line position
+        new_threshold = event.ydata
+        if new_threshold is not None and new_threshold > 0:
+            self.threshold_line.set_ydata([new_threshold, new_threshold])
+
+            # Find main window by walking up parent chain
+            main_window = self._find_main_window()
+            if main_window:
+                # Block signals to prevent feedback loop
+                main_window.PeakPromValueSpinBox.blockSignals(True)
+                main_window.PeakPromValueSpinBox.setValue(new_threshold)
+                main_window.PeakPromValueSpinBox.blockSignals(False)
+                # Update stored threshold
+                main_window.peak_height_threshold = new_threshold
+
+                # Update histogram colors based on new threshold
+                self._clear_peak_height_histogram()
+                self._show_peak_height_histogram()
+
+            self.canvas.draw_idle()
+
+    def _on_threshold_release(self, event):
+        """Handle mouse release to stop dragging threshold line."""
+        if self._dragging_threshold:
+            self._dragging_threshold = False
+            # Restore cursor
+            from PyQt6.QtCore import Qt
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            # Clear histogram
+            self._clear_peak_height_histogram()
+            # Enable Apply button
+            main_window = self._find_main_window()
+            if main_window:
+                main_window.ApplyPeakFindPushButton.setEnabled(True)
+
+    def _find_main_window(self):
+        """Walk up parent chain to find the main window (has PeakPromValueSpinBox attribute)."""
+        widget = self
+        while widget is not None:
+            if hasattr(widget, 'PeakPromValueSpinBox'):
+                return widget
+            widget = widget.parent()
+        return None
+
+    def _show_peak_height_histogram(self):
+        """Show a horizontal histogram of all peak heights while dragging threshold."""
+        try:
+            if not self.fig.axes:
+                return
+
+            ax = self.fig.axes[0]
+            main_window = self._find_main_window()
+
+            if not main_window or not hasattr(main_window, 'state'):
+                return
+
+            import numpy as np
+
+            # Use peak heights from auto-detect (already calculated, no recalculation needed)
+            if not hasattr(main_window, 'all_peak_heights') or main_window.all_peak_heights is None:
+                print("[Histogram] No peak heights available - run auto-detect first")
+                return
+
+            peak_heights = main_window.all_peak_heights
+            print(f"[Histogram] Using {len(peak_heights)} peak heights from auto-detect")
+
+            # Get current x-axis limits to position histogram at left edge
+            xlim = ax.get_xlim()
+            x_min = xlim[0]
+            x_range = xlim[1] - xlim[0]
+
+            # Get current threshold for coloring
+            current_threshold = getattr(main_window, 'peak_height_threshold', None)
+            if current_threshold is None:
+                return
+
+            # Create histogram data
+            counts, bins = np.histogram(peak_heights, bins=50)
+            bin_centers = (bins[:-1] + bins[1:]) / 2
+
+            # Scale histogram to 10% of x-axis range
+            max_count = np.max(counts)
+            if max_count > 0:
+                scale_factor = (0.1 * x_range) / max_count
+                scaled_counts = counts * scale_factor
+
+                # Plot as line with fills
+                # Split into below and above threshold
+                below_mask = bin_centers < current_threshold
+                above_mask = bin_centers >= current_threshold
+
+                # Gray fill for below threshold
+                if np.any(below_mask):
+                    line_below = ax.plot(x_min + scaled_counts[below_mask], bin_centers[below_mask],
+                                        'k-', linewidth=1.0, alpha=0.8, zorder=2)[0]
+                    fill_below = ax.fill_betweenx(bin_centers[below_mask],
+                                                  x_min, x_min + scaled_counts[below_mask],
+                                                  alpha=0.3, color='gray', zorder=1)
+                    self._threshold_histogram = [line_below, fill_below]
+                else:
+                    self._threshold_histogram = []
+
+                # Red fill for above threshold
+                if np.any(above_mask):
+                    line_above = ax.plot(x_min + scaled_counts[above_mask], bin_centers[above_mask],
+                                        'k-', linewidth=1.0, alpha=0.8, zorder=2)[0]
+                    fill_above = ax.fill_betweenx(bin_centers[above_mask],
+                                                  x_min, x_min + scaled_counts[above_mask],
+                                                  alpha=0.3, color='red', zorder=1)
+                    if self._threshold_histogram is None:
+                        self._threshold_histogram = []
+                    self._threshold_histogram.extend([line_above, fill_above])
+
+            print(f"[Histogram] Created line histogram with colored fills")
+            self.canvas.draw_idle()
+
+        except Exception as e:
+            print(f"[Histogram] Error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _clear_peak_height_histogram(self):
+        """Remove the peak height histogram."""
+        if self._threshold_histogram is not None:
+            for artist in self._threshold_histogram:
+                try:
+                    artist.remove()
+                except:
+                    pass
+            self._threshold_histogram = None
             self.canvas.draw_idle()
 
     #                         t_on=None, y_on=None,

@@ -4,6 +4,124 @@ This document describes recently implemented features, including implementation 
 
 ---
 
+## Version 1.0.10 Feature Updates (2025-01-05)
+
+A comprehensive set of improvements focused on data quality control, UI refinement, and peak detection accuracy.
+
+### Omit Region Functionality
+
+Advanced artifact/noise exclusion with visual feedback and metric integration.
+
+#### Features
+- **Region-based omission**: Click-drag to mark artifacts for exclusion from analysis
+- **Modifier keys**:
+  - Default click: Create/adjust omit region (click-drag)
+  - Shift+click: Delete omit region
+  - Ctrl+Shift+click: Toggle full sweep omission
+- **Visual feedback**: Gray overlays with "omitted" labels
+- **Breath feature dimming**: Peaks, onsets, offsets render in gray within omitted regions
+- **Manual snap**: Press 'R' key to snap regions to breath onset boundaries (onset-to-onset)
+- **Y-range adjustment**: Excluded from autoscaling (prevents artifacts from distorting view)
+- **Metrics integration**:
+  - NaN masking applied to metric traces
+  - Omitted breaths excluded from CSV export
+  - Per-sweep caching for performance (20× faster)
+- **Auto-clear**: Omitted regions clear when changing files or channels
+
+#### Implementation Details
+
+**Button**: `OmitSweepButton` in Peak Detection groupbox
+**Mode Management**: `editing/editing_modes.py` (`_enter_omit_region_mode()`, lines ~1616-1682)
+**State Storage**:
+```python
+state.omitted_sweeps: set[int]  # Full sweep omissions
+state.omitted_ranges: dict[int, list[tuple[int, int]]]  # Partial regions (sample indices)
+```
+
+**Visualization**: `plotting/plot_manager.py`
+- `_draw_omitted_regions()` (lines ~612-683): Gray overlays + labels
+- `_set_ylim_excluding_omitted()` (lines ~118-176): Y-range calculation
+- `_is_peak_in_omitted_region()` (lines ~601-611): Helper for gray rendering
+
+**Metrics Integration**: `export/export_manager.py`
+- `create_omitted_mask()` (lines ~49-71): NaN mask generation
+- `is_sample_in_omitted_region()` (lines ~30-47): Breath filtering
+- Per-sweep mask caching (lines ~941-950): 20× performance improvement
+
+**Keyboard Handler**: `editing_modes.py` (`_on_omit_region_key_press()`, lines ~1837-1847)
+
+---
+
+### Improved Peak Detection Threshold Controls
+
+Interactive threshold adjustment with visual feedback and fine-grained control.
+
+#### Features
+- **Draggable threshold line**: Click and drag the red dashed line to adjust prominence threshold
+- **Real-time sync**:
+  - Drag line → spinbox updates
+  - Spinbox changes → line updates
+  - Both methods update Apply button
+- **Fine-grained spinbox**: 0.01 increments (second decimal place)
+  - Min: 0.0001, Max: 1000.0
+  - 4 decimal places displayed
+- **Thicker, more visible line**: 2.5 linewidth (up from 1.2)
+- **Persistent visibility**: Threshold line stays visible after clicking Apply
+- **Better auto-threshold**: Added `height=0` parameter to Otsu's method
+  - Filters out rebound peaks below baseline
+  - Cleaner 2-population model (noise vs. breaths)
+
+#### Implementation Details
+
+**UI Component**: `PeakPromValueSpinBox` (QDoubleSpinBox)
+**Configuration**: `main.py` (lines ~230-234)
+```python
+self.PeakPromValueSpinBox.setSingleStep(0.01)
+self.PeakPromValueSpinBox.setDecimals(4)
+self.PeakPromValueSpinBox.setMinimum(0.0001)
+self.PeakPromValueSpinBox.setMaximum(1000.0)
+```
+
+**Threshold Line**: `core/plotting.py`
+- `update_threshold_line()` (lines ~501-533): Create/update draggable line
+- `_on_threshold_pick()` (lines ~545-560): Start drag
+- `_on_threshold_drag()` (lines ~562-581): Handle dragging + spinbox update
+- `_on_threshold_release()` (lines ~583-593): End drag + enable Apply
+- `_find_main_window()` (lines ~595-602): Parent chain walking
+
+**Auto-threshold Enhancement**:
+- `dialogs/prominence_threshold_dialog.py` (line ~238): Added `height=0`
+- `main.py` (line ~1984): Added `height=0` to silent auto-detect
+
+**Simplified Refresh**: `plotting/plot_manager.py` (lines ~806-816)
+```python
+def refresh_threshold_lines(self):
+    """Use unified PlotHost threshold system."""
+    threshold_value = getattr(self.window, "peak_height_threshold", None)
+    if threshold_value is not None:
+        self.plot_host.update_threshold_line(threshold_value)
+```
+
+---
+
+### Summary Preview Scrolling Fix
+
+Restored mouse wheel scrolling in summary plot preview dialogs.
+
+#### Issue
+After implementing threshold dragging in PlotHost, matplotlib canvas scroll events were being consumed before reaching the scroll area, preventing mouse wheel scrolling in preview dialogs.
+
+#### Solution
+Matched the event filter pattern from GMM dialog (which worked correctly):
+- Attached `eventFilter` directly to dialog (not separate QObject)
+- Checked if event originated from canvas before handling
+- Forwarded wheel events to scroll area's vertical scrollbar
+- Used `delta // 2` for smooth scrolling
+
+**Location**: `export/export_manager.py` (lines ~5097-5114)
+
+---
+
 ## Spectral Analysis Window (2025-10-02)
 
 A comprehensive spectral analysis tool for identifying and filtering oscillatory noise contamination.

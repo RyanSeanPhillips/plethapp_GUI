@@ -59,12 +59,13 @@ class FirstLaunchDialog(QDialog):
 
         # What's New section
         whats_new = QLabel(
-            "<p style='font-size: 11pt; color: #2a7fff; font-weight: bold;'>What's New in v1.0.9:</p>"
+            "<p style='font-size: 11pt; color: #2a7fff; font-weight: bold;'>What's New in v1.0.10:</p>"
             "<ul style='font-size: 10pt; margin-left: 25px;'>"
-            "<li>Session save/load - Resume previous analyses</li>"
-            "<li>Auto-threshold detection - One-click peak detection</li>"
-            "<li>Comprehensive help guide (Press F1)</li>"
-            "<li>Anonymous usage tracking to improve PlethApp</li>"
+            "<li><b>Omit Regions:</b> Mark artifacts/noise to exclude from analysis</li>"
+            "<li><b>Improved Peak Detection:</b> Better auto-thresholding with baseline filtering</li>"
+            "<li><b>Draggable Threshold:</b> Click and drag the red line to adjust threshold</li>"
+            "<li><b>Fine-tuned Controls:</b> Prominence spinbox with 0.01 increments</li>"
+            "<li><b>Pulse Analysis:</b> 25ms stimulus + PRC (⚠ in development)</li>"
             "</ul>"
         )
         whats_new.setWordWrap(True)

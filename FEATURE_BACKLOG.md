@@ -41,6 +41,12 @@ This document tracks planned features, enhancements, and long-term development g
 ### 🎯 High Priority (Next Up)
 - [ ] **Relative metrics (z-scores) for ML features** (2-3 hours) ← ML FOUNDATION
 - [ ] **Auto-threshold selection with ML auto-labeling** (3-4 hours) ← ML FOUNDATION
+- [ ] **Real-time breath feature display during threshold dragging** (4-5 hours) ← ML + UX ENHANCEMENT
+  - Pre-calculate breath features (onsets/offsets/expmins) for ALL peaks during auto-detect
+  - Show/hide breath markers in real-time as threshold is dragged
+  - Provides instant visual feedback for threshold validation
+  - Stores ML-ready features for all breath candidates (good and bad)
+  - Zero recalculation during drag - pure filtering operation
 - [ ] Display mode toggles for breathing states - background vs line (4-5 hours)
 
 ### 📋 Medium Priority (Scientific Features)

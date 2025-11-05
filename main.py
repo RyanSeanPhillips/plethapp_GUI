@@ -221,8 +221,17 @@ class MainWindow(QMainWindow):
         self.ApplyPeakFindPushButton.setEnabled(False)  # stays disabled until prominence detected
         self.ApplyPeakFindPushButton.clicked.connect(self._apply_peak_detection)
 
-        # Re-enable Apply button when user manually edits prominence
-        self.PeakPromValue.editingFinished.connect(lambda: self.ApplyPeakFindPushButton.setEnabled(True) if self.state.analyze_chan else None)
+        # Re-enable Apply button when user manually edits prominence (use spinbox)
+        self.PeakPromValueSpinBox.valueChanged.connect(lambda: self.ApplyPeakFindPushButton.setEnabled(True) if self.state.analyze_chan else None)
+
+        # Connect spinbox to update threshold line on main plot
+        self.PeakPromValueSpinBox.valueChanged.connect(self._on_prominence_spinbox_changed)
+
+        # Configure spinbox for fine-grained control (0.01 increments for second decimal place)
+        self.PeakPromValueSpinBox.setSingleStep(0.01)
+        self.PeakPromValueSpinBox.setDecimals(4)  # Show 4 decimal places
+        self.PeakPromValueSpinBox.setMinimum(0.0001)  # Minimum prominence value
+        self.PeakPromValueSpinBox.setMaximum(1000.0)  # Maximum prominence value
 
         # Store peak detection parameters (auto-populated when channel selected)
         self.peak_prominence = None
@@ -261,6 +270,7 @@ class MainWindow(QMainWindow):
         self._sigh_artists = []         # matplotlib artists for sigh overlay
 
         # --- Wire omit button ---
+        self.OmitSweepButton.setCheckable(True)
         self.OmitSweepButton.clicked.connect(self.on_omit_sweep_clicked)
 
 
@@ -323,9 +333,16 @@ class MainWindow(QMainWindow):
         # Linux/Mac:
         #   PLETHAPP_TESTING=1 python run_debug.py
         print(f"[DEBUG] PLETHAPP_TESTING environment variable = '{os.environ.get('PLETHAPP_TESTING')}'")
+        print(f"[DEBUG] PLETHAPP_PULSE_TEST environment variable = '{os.environ.get('PLETHAPP_PULSE_TEST')}'")
         if os.environ.get('PLETHAPP_TESTING') == '1':
             print("[TESTING MODE] Auto-loading test file...")
-            test_file = Path(r"C:\Users\rphil2\Dropbox\python scripts\breath_analysis\pyqt6\examples\25121004.abf")
+            # Check if pulse test mode
+            if os.environ.get('PLETHAPP_PULSE_TEST') == '1':
+                test_file = Path(r"C:\Users\rphil2\Dropbox\python scripts\breath_analysis\pyqt6\examples\R2 R5 R1\25122001.abf")
+                print("[TESTING MODE] Pulse test mode - loading 25122001.abf (25ms pulse experiment)")
+            else:
+                test_file = Path(r"C:\Users\rphil2\Dropbox\python scripts\breath_analysis\pyqt6\examples\25121004.abf")
+                print("[TESTING MODE] Standard test mode - loading 25121004.abf (30Hz stim)")
             print(f"[TESTING MODE] Checking if file exists: {test_file}")
             print(f"[TESTING MODE] File exists: {test_file.exists()}")
             if test_file.exists():
@@ -367,7 +384,13 @@ class MainWindow(QMainWindow):
 
     def _set_test_channels(self):
         """Helper function for testing mode - sets analysis and stim channels."""
-        print("[TESTING MODE] Setting analyze channel to 0, stim channel to 7...")
+        is_pulse_test = os.environ.get('PLETHAPP_PULSE_TEST') == '1'
+
+        if is_pulse_test:
+            print("[TESTING MODE] Setting analyze channel to 0 (first), stim channel to last...")
+        else:
+            print("[TESTING MODE] Setting analyze channel to 0, stim channel to 7...")
+
         print(f"[TESTING MODE] AnalyzeChanSelect has {self.AnalyzeChanSelect.count()} items")
         print(f"[TESTING MODE] StimChanSelect has {self.StimChanSelect.count()} items")
 
@@ -378,22 +401,36 @@ class MainWindow(QMainWindow):
             # Manually trigger the channel change handler
             self.on_analyze_channel_changed(1)
 
-        # Set stim channel to 7 (need to find the index)
+        # Set stim channel (last channel for pulse test, channel 7 for standard test)
         stim_channel_set = False
-        for i in range(self.StimChanSelect.count()):
-            item_text = self.StimChanSelect.itemText(i)
-            # Check if this item contains "7" (handles "7", "IN 7", "Channel 7", etc.)
-            # Extract the number from the item text
-            if "7" in item_text.split():  # Split by whitespace and check if "7" is one of the words
-                print(f"[TESTING MODE] Found stim channel at index {i}: '{item_text}'")
-                self.StimChanSelect.setCurrentIndex(i)
+        if is_pulse_test:
+            # Select the last channel in the dropdown
+            last_idx = self.StimChanSelect.count() - 1
+            if last_idx >= 0:
+                self.StimChanSelect.setCurrentIndex(last_idx)
+                print(f"[TESTING MODE] Set stim channel to last (index {last_idx}): {self.StimChanSelect.currentText()}")
                 stim_channel_set = True
                 # Manually trigger the channel change handler
-                self.on_stim_channel_changed(i)
-                break
+                self.on_stim_channel_changed(last_idx)
+        else:
+            # Set stim channel to 7 (need to find the index)
+            for i in range(self.StimChanSelect.count()):
+                item_text = self.StimChanSelect.itemText(i)
+                # Check if this item contains "7" (handles "7", "IN 7", "Channel 7", etc.)
+                # Extract the number from the item text
+                if "7" in item_text.split():  # Split by whitespace and check if "7" is one of the words
+                    print(f"[TESTING MODE] Found stim channel at index {i}: '{item_text}'")
+                    self.StimChanSelect.setCurrentIndex(i)
+                    stim_channel_set = True
+                    # Manually trigger the channel change handler
+                    self.on_stim_channel_changed(i)
+                    break
 
         if not stim_channel_set:
-            print("[TESTING MODE] Warning: Could not find stim channel '7'")
+            if is_pulse_test:
+                print("[TESTING MODE] Warning: Could not find last stim channel")
+            else:
+                print("[TESTING MODE] Warning: Could not find stim channel '7'")
 
         # Wait a bit for channels to be processed, then click Apply Peak Detection
         QTimer.singleShot(200, self._click_apply_peak_detection)
@@ -665,6 +702,7 @@ class MainWindow(QMainWindow):
             self.state.sigh_by_sweep.clear()
             st.breath_by_sweep.clear()
             self.state.omitted_sweeps.clear()
+            self.state.omitted_ranges.clear()
             self._refresh_omit_button_label()
 
         # Clear cross-sweep outlier detection data
@@ -727,8 +765,9 @@ class MainWindow(QMainWindow):
         self.state.sigh_by_sweep.clear()
         self.state.breath_by_sweep.clear()
 
-        #Clear omitted sweeps
+        #Clear omitted sweeps and regions
         self.state.omitted_sweeps.clear()
+        self.state.omitted_ranges.clear()
         self._refresh_omit_button_label()
 
 
@@ -827,6 +866,7 @@ class MainWindow(QMainWindow):
             self.state.sigh_by_sweep.clear()
             st.breath_by_sweep.clear()
             self.state.omitted_sweeps.clear()
+            self.state.omitted_ranges.clear()
             self._refresh_omit_button_label()
 
         # Clear cross-sweep outlier detection data
@@ -874,8 +914,9 @@ class MainWindow(QMainWindow):
         self.state.sigh_by_sweep.clear()
         self.state.breath_by_sweep.clear()
 
-        #Clear omitted sweeps
+        #Clear omitted sweeps and regions
         self.state.omitted_sweeps.clear()
+        self.state.omitted_ranges.clear()
         self._refresh_omit_button_label()
 
         # Clear z-score global statistics cache
@@ -1467,6 +1508,11 @@ class MainWindow(QMainWindow):
                 if hasattr(st, 'breath_by_sweep'):
                     st.breath_by_sweep.clear()
 
+                # Clear omitted sweeps and regions
+                st.omitted_sweeps.clear()
+                st.omitted_ranges.clear()
+                self._refresh_omit_button_label()
+
                 # Clear sniffing regions
                 if hasattr(st, 'sniff_regions_by_sweep'):
                     st.sniff_regions_by_sweep.clear()
@@ -1599,6 +1645,30 @@ class MainWindow(QMainWindow):
             if hz:
                 msg += f", freq={hz:.3f}Hz"
             print(msg)
+
+    def _detect_stims_all_sweeps(self, thresh: float = 1.0):
+        """Detect stimulations on all sweeps (for export/preview)."""
+        st = self.state
+        if not st.stim_chan or st.stim_chan not in st.sweeps:
+            return
+
+        Y = st.sweeps[st.stim_chan]
+        n_sweeps = Y.shape[1]
+        t = st.t
+
+        for s in range(n_sweeps):
+            # Skip if already detected
+            if s in st.stim_spans_by_sweep:
+                continue
+
+            y = Y[:, s]
+            on_idx, off_idx, spans_s, metrics = stimdet.detect_threshold_crossings(y, t, thresh=thresh)
+            st.stim_onsets_by_sweep[s] = on_idx
+            st.stim_offsets_by_sweep[s] = off_idx
+            st.stim_spans_by_sweep[s] = spans_s
+            st.stim_metrics_by_sweep[s] = metrics
+
+        print(f"[stim] Detected stims for all {n_sweeps} sweeps")
 
     # ---------- Filters & redraw ----------
     def update_and_redraw(self, *args):
@@ -1847,7 +1917,7 @@ class MainWindow(QMainWindow):
 
         # Get current prominence from field
         try:
-            current_prom = float(self.PeakPromValue.text().strip()) if self.PeakPromValue.text().strip() else None
+            current_prom = self.PeakPromValueSpinBox.value() if self.PeakPromValueSpinBox.value() > 0 else None
         except ValueError:
             current_prom = None
 
@@ -1868,7 +1938,7 @@ class MainWindow(QMainWindow):
             self.peak_min_dist = vals['min_dist']
             self.peak_height_threshold = vals['height_threshold']
 
-            self.PeakPromValue.setText(f"{vals['prominence']:.4f}")
+            self.PeakPromValueSpinBox.setValue(vals['prominence'])
             self.ApplyPeakFindPushButton.setEnabled(True)
 
             # Update threshold line on plot
@@ -1908,20 +1978,24 @@ class MainWindow(QMainWindow):
 
             y_data = np.concatenate(all_sweeps_data)
 
-            # Detect all peaks with minimal prominence
+            # Detect all peaks with minimal prominence AND above baseline (height > 0)
+            # height=0 filters out rebound peaks below baseline, giving cleaner 2-population model
             min_dist_samples = int(self.peak_min_dist * st.sr_hz)
-            peaks, props = find_peaks(y_data, prominence=0.001, distance=min_dist_samples)
-            prominences = props['prominences']
+            peaks, props = find_peaks(y_data, height=0, prominence=0.001, distance=min_dist_samples)
+            peak_heights = y_data[peaks]
 
-            if len(prominences) < 10:
+            if len(peak_heights) < 10:
                 print("[Auto-Detect] Not enough peaks found")
                 return
 
-            # Otsu's method: auto-calculate optimal prominence threshold
-            prom_norm = ((prominences - prominences.min()) /
-                        (prominences.max() - prominences.min()) * 255).astype(np.uint8)
+            # Store peak heights for histogram reuse (so we don't recalculate during dragging)
+            self.all_peak_heights = peak_heights
 
-            hist, bin_edges = np.histogram(prom_norm, bins=256, range=(0, 256))
+            # Otsu's method: auto-calculate optimal HEIGHT threshold
+            heights_norm = ((peak_heights - peak_heights.min()) /
+                        (peak_heights.max() - peak_heights.min()) * 255).astype(np.uint8)
+
+            hist, bin_edges = np.histogram(heights_norm, bins=256, range=(0, 256))
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
             weight1 = np.cumsum(hist)
@@ -1934,19 +2008,20 @@ class MainWindow(QMainWindow):
             optimal_thresh_norm = bin_centers[optimal_bin]
 
             # Convert back to original scale
-            optimal_prom = float((optimal_thresh_norm / 255.0 *
-                            (prominences.max() - prominences.min()) +
-                            prominences.min()))
+            optimal_height = float((optimal_thresh_norm / 255.0 *
+                            (peak_heights.max() - peak_heights.min()) +
+                            peak_heights.min()))
 
-            # Store and populate prominence field with auto-detected value
-            self.peak_prominence = optimal_prom
-            self.PeakPromValue.setText(f"{optimal_prom:.4f}")
+            # Store and populate spinbox with auto-detected value
+            # Use same value for both height and prominence thresholds
+            self.peak_prominence = optimal_height
+            self.PeakPromValueSpinBox.setValue(optimal_height)
 
             # Store the height threshold value (will be used in peak detection)
-            self.peak_height_threshold = optimal_prom
+            self.peak_height_threshold = optimal_height
 
             # Draw threshold line on plot
-            self.plot_host.update_threshold_line(optimal_prom)
+            self.plot_host.update_threshold_line(optimal_height)
 
             # Enable Apply button
             self.ApplyPeakFindPushButton.setEnabled(True)
@@ -1959,6 +2034,13 @@ class MainWindow(QMainWindow):
             print(f"[Auto-Detect] Error: {e}")
             import traceback
             traceback.print_exc()
+
+    def _on_prominence_spinbox_changed(self):
+        """Update threshold line on plot when spinbox value changes."""
+        new_value = self.PeakPromValueSpinBox.value()
+        if new_value > 0:
+            self.peak_height_threshold = new_value
+            self.plot_host.update_threshold_line(new_value)
 
     def _apply_peak_detection(self):
         """
@@ -1974,11 +2056,10 @@ class MainWindow(QMainWindow):
 
         self._log_status_message("Detecting peaks and breath features...")
 
-        # Get prominence from UI field (user can edit auto-detected value)
-        try:
-            prom = float(self.PeakPromValue.text().strip())
-        except (ValueError, AttributeError):
-            self._show_warning("Invalid Prominence", "Please enter a valid prominence value.")
+        # Get prominence from UI spinbox (user can edit auto-detected value)
+        prom = self.PeakPromValueSpinBox.value()
+        if prom <= 0:
+            self._show_warning("Invalid Prominence", "Please enter a valid prominence value (must be > 0).")
             return
 
         # Use stored height threshold (set during auto-detect, same as prominence)
@@ -2872,22 +2953,18 @@ class MainWindow(QMainWindow):
             self.OmitSweepButton.setToolTip("Mark this sweep to be excluded from saving and stats.")
 
     def on_omit_sweep_clicked(self):
-        """Toggle omission for the current sweep and refresh plot/label."""
+        """Handle Omit Sweep button - simple toggle to enter/exit omit region mode."""
         st = self.state
         if self.navigation_manager._sweep_count() == 0:
             return
-        s = max(0, min(st.sweep_idx, self.navigation_manager._sweep_count() - 1))
-        if s in st.omitted_sweeps:
-            st.omitted_sweeps.remove(s)
-            try: self._log_status_message(f"Sweep {s+1}: included", 3000)
-            except Exception: pass
-        else:
-            st.omitted_sweeps.add(s)
-            try: self._log_status_message(f"Sweep {s+1}: omitted", 3000)
-            except Exception: pass
 
-        self._refresh_omit_button_label()
-        self.redraw_main_plot()
+        # Simple toggle: button checked state determines mode
+        if self.OmitSweepButton.isChecked():
+            # Entering omit region mode
+            self.editing_modes._enter_omit_region_mode(remove_mode=False)
+        else:
+            # Exiting omit region mode
+            self.editing_modes._exit_omit_region_mode()
 
     def _dim_axes_for_omitted(self, ax, label=True):
         """Delegate to PlotManager."""

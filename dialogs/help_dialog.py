@@ -34,7 +34,7 @@ class HelpDialog(QDialog):
 
         # Tab widget for workflow, data files, and about
         tabs = QTabWidget()
-        tabs.addTab(self._create_quick_reference(), "Usage & Workflow")
+        tabs.addTab(self._create_quick_reference(), "Features & Usage")
         tabs.addTab(self._create_data_files_tab(), "Exported Data Files")
         tabs.addTab(self._create_about_tab(), "About")
         layout.addWidget(tabs)
@@ -57,7 +57,7 @@ class HelpDialog(QDialog):
                 <li><b>Open File:</b> Ctrl+O → Select .abf, .smrx, or .edf file <i>(already analyzed? you'll be prompted to resume)</i></li>
                 <li><b>Select Channel:</b> Choose respiratory signal from dropdown</li>
                 <li><b>Detect Peaks:</b> Click "Apply" (threshold auto-detected)</li>
-                <li><b>Review/Edit:</b> Click editing mode button (Add/Delete Peak), then click plot to edit. Label sighs if needed.</li>
+                <li><b>Review/Edit:</b> Click editing mode button (<span style="color: #4CAF50;">Add</span>/<span style="color: #F44336;">Delete</span> Peak), then click plot to edit. Label sighs if needed.</li>
                 <li><b>Preview:</b> Click "View Summary" to review results before export</li>
                 <li><b>Export:</b> Click "Save Data" (Ctrl+S) → Enter animal info → Choose which files to save → Save</li>
             </ol>
@@ -65,16 +65,19 @@ class HelpDialog(QDialog):
             <h2 style="color: #2a7fff; margin-top: 20px;">Keyboard Shortcuts</h2>
             <table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse; margin-top: 5px;">
                 <tr style="background-color: #2a2a2a;">
-                    <th width="170">Shortcut</th>
+                    <th width="200">Shortcut</th>
                     <th>Action</th>
                 </tr>
                 <tr><td><b>Ctrl+O</b></td><td>Open file</td></tr>
                 <tr><td><b>Ctrl+S</b></td><td>Save/export data</td></tr>
                 <tr><td><b>F1</b></td><td>Show this help</td></tr>
-                <tr><td><b>Shift+Click</b></td><td>(in add/delete mode) Toggle between Add/Delete peak</td></tr>
-                <tr><td><b>Ctrl+Click</b></td><td>(in add/delete mode) Switch to Add Sigh mode</td></tr>
-                <tr><td><b>Shift+Click & Drag</b></td><td>(in move point mode) Snap to zero crossings</td></tr>
-                <tr><td><b>Shift+Click</b></td><td>(in mark sniff mode) Delete sniffing region</td></tr>
+                <tr><td><b>Shift+Click</b></td><td>(in <span style="color: #4CAF50;">add</span>/<span style="color: #F44336;">delete</span> mode) Toggle between <span style="color: #4CAF50;">Add</span>/<span style="color: #F44336;">Delete</span> peak</td></tr>
+                <tr><td><b>Ctrl+Click</b></td><td>(in <span style="color: #4CAF50;">add</span>/<span style="color: #F44336;">delete</span> mode) Switch to Add Sigh mode</td></tr>
+                <tr><td><b>Shift+Click & Drag</b></td><td>(in <span style="color: #FFD700;">move point</span> mode) Snap to zero crossings</td></tr>
+                <tr><td><b>Shift+Click</b></td><td>(in <span style="color: #9C27B0;">mark sniff</span> mode) <span style="color: #F44336;">Delete</span> sniffing region</td></tr>
+                <tr><td><b>Shift+Click</b></td><td>(in omit region mode) Delete omitted region</td></tr>
+                <tr><td><b>Ctrl+Shift+Click</b></td><td>(in omit region mode) Toggle full sweep omission</td></tr>
+                <tr><td><b>R</b></td><td>(in omit region mode) Snap regions to breath onsets</td></tr>
             </table>
 
             <h2 style="color: #2a7fff; margin-top: 20px;">Key Features</h2>
@@ -82,10 +85,18 @@ class HelpDialog(QDialog):
                 <li><b>Auto-Threshold:</b> Otsu's method finds optimal peak detection threshold automatically</li>
                 <li><b>Manual Editing Modes:</b>
                     <ul style="margin-top: 3px; margin-bottom: 3px;">
-                        <li><b>Add/Delete Peak:</b> Click editing mode button first, then Shift+Click toggles modes, Ctrl+Click for sigh mode</li>
-                        <li><b>Move Point:</b> Click and drag peaks, onsets, or offsets. Hold Shift to snap to zero crossings</li>
-                        <li><b>Mark Sniff:</b> Click and drag to highlight sniffing regions. Shift+Click to delete a region</li>
-                        <li><b>Omit Sweep:</b> Exclude specific sweeps from analysis</li>
+                        <li><b><span style="color: #4CAF50;">Add</span>/<span style="color: #F44336;">Delete</span> Peak:</b> Click editing mode button first, then Shift+Click toggles between <span style="color: #4CAF50;">Add</span> and <span style="color: #F44336;">Delete</span> modes, Ctrl+Click for sigh mode</li>
+                        <li><b><span style="color: #FFD700;">Move Point:</span></b> Click and drag peaks, onsets, or offsets. Hold Shift to snap to zero crossings</li>
+                        <li><b><span style="color: #9C27B0;">Mark Sniff:</span></b> Click and drag to highlight sniffing regions. Shift+Click to delete a region</li>
+                        <li><b>Omit Regions:</b> Click and drag to mark artifacts/noise for exclusion from analysis
+                            <ul style="margin-top: 3px; margin-bottom: 3px;">
+                                <li>Omitted regions shown with gray overlay and "omitted" label</li>
+                                <li>Shift+Click to delete an omitted region</li>
+                                <li>Ctrl+Shift+Click to toggle full sweep omission</li>
+                                <li>Press 'R' to snap regions to breath onset boundaries</li>
+                                <li>Excluded from y-range calculation, metrics, and exports</li>
+                            </ul>
+                        </li>
                     </ul>
                 </li>
                 <li><b>Eupnea/Sniffing Detection (GMM Clustering):</b>
@@ -101,6 +112,7 @@ class HelpDialog(QDialog):
                 <li><b>More Options:</b> Click to see histogram and adjust threshold interactively</li>
                 <li><b>Red Dashed Line:</b> Shows current height threshold on plot</li>
                 <li><b>Events Channel:</b> (<span style="color: #FFD700;">⚠ developing feature</span>) Dropdown for triggering on custom events</li>
+                <li><b>Pulse Analysis:</b> (<span style="color: #FFD700;">⚠ in development</span>) 25ms stimulus analysis with phase response curves (PRC). Results appear in summary PDF but not yet saved to CSV files.</li>
                 <li><b>Curation Tab:</b> Consolidate multiple files (best for identical experiments like 30Hz stims)</li>
                 <li><b>Auto-Resume:</b> When opening a previously analyzed file/channel, you'll be prompted to resume or start over</li>
             </ul>
@@ -111,7 +123,7 @@ class HelpDialog(QDialog):
             <p style="margin-top: 0;">Load file → Select channel → Click Apply → Review → Export</p>
 
             <h3 style="margin-bottom: 5px;">Adjust Threshold</h3>
-            <p style="margin-top: 0;">Click "More Options" → Drag red line → OK → Click Apply</p>
+            <p style="margin-top: 0;">Three ways to adjust: (1) Drag the red dashed line directly on the main plot, (2) Use up/down arrows in the Prom/Thresh spinbox, or (3) Click "More Options" → Drag red line on histogram → OK. Then click Apply to re-detect peaks.</p>
 
             <h3 style="margin-bottom: 5px;">Save Session & Resume Later</h3>
             <p style="margin-top: 0;">Press Ctrl+S → Check "Session State" → Save → Resume later with Ctrl+O (auto-prompts if file was analyzed)</p>
