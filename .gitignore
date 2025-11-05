@@ -70,3 +70,6 @@ test_*.bat
 # Planning/notes files (keep these but they're not critical)
 # Remove this line if you want to commit implementation plans
 *_IMPLEMENTATION_PLAN.md
+
+# Internal development files (kept locally, not on GitHub)
+_internal/
