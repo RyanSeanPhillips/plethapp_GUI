@@ -22,8 +22,12 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Build/packaging - keep dist/ for distributing executables
+# Build/packaging
 build/
+dist/  # Don't commit built executables
+dist/**
+dist_old/  # Don't commit old build folders
+dist_old/**
 
 # Data/outputs (do NOT back these up)
 Pleth_App_analysis/
@@ -57,3 +61,12 @@ profiling_results/
 
 # Keep the app icon (even if you later move it into an images folder)
 !assets/plethapp_thumbnail.ico
+
+# Test files (don't commit testing scripts)
+test_*.py
+test_*.bat
+*.tmp.*
+
+# Planning/notes files (keep these but they're not critical)
+# Remove this line if you want to commit implementation plans
+*_IMPLEMENTATION_PLAN.md
