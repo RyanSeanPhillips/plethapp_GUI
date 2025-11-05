@@ -681,6 +681,9 @@ class PlotHost(QWidget):
                         self._threshold_histogram = []
                     self._threshold_histogram.extend([line_above, fill_above])
 
+            # CRITICAL: Restore original x-limits to prevent autoscaling from expanding the view
+            ax.set_xlim(xlim)
+
             print(f"[Histogram] Created line histogram with colored fills")
             self.canvas.draw_idle()
 
