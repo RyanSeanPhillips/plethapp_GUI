@@ -66,6 +66,7 @@ profiling_results/
 test_*.py
 test_*.bat
 *.tmp.*
+*.backup
 
 # Planning/notes files (keep these but they're not critical)
 # Remove this line if you want to commit implementation plans
