@@ -13,7 +13,7 @@
 - **Eupnea/Apnea Detection**: Identifies regions of normal breathing and breathing gaps
 - **GMM Clustering**: Automatic eupnea/sniffing classification using Gaussian Mixture Models
 - **Signal Processing**: Butterworth filtering, notch filters, and spectral analysis
-- **Multi-Format Support**: Load ABF (Axon), SMRX (Spike2), and EDF files
+- **Multi-Format Support**: Load ABF (Axon) and EDF files
 - **Interactive Editing**: Manual peak editing with keyboard shortcuts
 - **Data Export**: Export analyzed data to CSV with comprehensive summary reports
 
@@ -69,9 +69,8 @@ Download the ZIP file, extract it, and run `PlethApp_v1.0.11.exe` - no installat
 
 ## File Format Support
 
-- **ABF (Axon Binary Format)**: Axon pCLAMP files
-- **SMRX (Spike2)**: CED Spike2 files
-- **EDF/EDF+**: European Data Format files
+- **ABF (Axon Binary Format)**: Axon pCLAMP files (.abf)
+- **EDF/EDF+**: European Data Format files (.edf)
 
 ## License
 
