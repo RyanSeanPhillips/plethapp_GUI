@@ -2027,8 +2027,8 @@ class MainWindow(QMainWindow):
             self.ApplyPeakFindPushButton.setEnabled(True)
 
             t_elapsed = time.time() - t_start
-            print(f"[Auto-Detect] Optimal prominence: {optimal_prom:.4f} ({t_elapsed:.2f}s)")
-            self._log_status_message(f"Auto-detected prominence: {optimal_prom:.4f}", 3000)
+            print(f"[Auto-Detect] Optimal prominence: {optimal_height:.4f} ({t_elapsed:.2f}s)")
+            self._log_status_message(f"Auto-detected prominence: {optimal_height:.4f}", 3000)
 
         except Exception as e:
             print(f"[Auto-Detect] Error: {e}")
