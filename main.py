@@ -29,7 +29,11 @@ from core.state import AppState
 from core import abf_io, filters
 from core.plotting import PlotHost
 from core import stim as stimdet   # stim detection
-from core import peaks as peakdet   # peak detection
+
+# Peak detection: Switch between standard and downsampled versions
+from core import peaks as peakdet              # Standard (original)
+# from core import peaks_downsampled as peakdet    # Downsampled (BROKEN - messes up peaks)
+
 from core import metrics  # calculation of breath metrics
 from core.navigation_manager import NavigationManager
 from core import telemetry  # Anonymous usage tracking

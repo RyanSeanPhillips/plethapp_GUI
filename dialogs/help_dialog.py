@@ -405,6 +405,18 @@ class HelpDialog(QDialog):
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(version_label)
 
+        # Check for updates
+        update_label = QLabel()
+        update_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        update_label.setOpenExternalLinks(True)
+        update_label.setTextFormat(Qt.TextFormat.RichText)
+        update_label.setWordWrap(True)
+        update_label.setMaximumWidth(500)
+        layout.addWidget(update_label)
+
+        # Perform update check asynchronously to avoid blocking UI
+        self._check_for_updates_async(update_label)
+
         # Add description
         description = QLabel(
             "<p style='text-align: center; max-width: 500px;'>"
@@ -519,6 +531,37 @@ class HelpDialog(QDialog):
 
         details_dialog.setStyleSheet(self.styleSheet())
         details_dialog.exec()
+
+    def _check_for_updates_async(self, label):
+        """Check for updates in background thread and update label."""
+        from PyQt6.QtCore import QThread, pyqtSignal
+
+        class UpdateChecker(QThread):
+            """Background thread for checking updates."""
+            update_checked = pyqtSignal(object)  # Emits update_info or None
+
+            def run(self):
+                """Run update check in background."""
+                from core import update_checker
+                update_info = update_checker.check_for_updates()
+                self.update_checked.emit(update_info)
+
+        def on_update_checked(update_info):
+            """Handle update check result."""
+            from core import update_checker
+
+            if update_info:
+                # Update available
+                label.setText(update_checker.get_update_message(update_info))
+            else:
+                # No update or check failed - be less intrusive
+                # Only show message if explicitly requested
+                pass
+
+        # Create and start background thread
+        self.update_thread = UpdateChecker()
+        self.update_thread.update_checked.connect(on_update_checked)
+        self.update_thread.start()
 
     def _apply_dark_theme(self):
         """Apply dark theme styling to the dialog."""

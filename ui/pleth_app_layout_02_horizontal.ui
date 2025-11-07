@@ -1172,39 +1172,6 @@ Options</string>
               <property name="title">
                <string>Peak Detection</string>
               </property>
-              <widget class="QLineEdit" name="PeakPromValue">
-               <property name="geometry">
-                <rect>
-                 <x>90</x>
-                 <y>20</y>
-                 <width>57</width>
-                 <height>18</height>
-                </rect>
-               </property>
-               <property name="sizePolicy">
-                <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
-                 <horstretch>0</horstretch>
-                 <verstretch>0</verstretch>
-                </sizepolicy>
-               </property>
-               <property name="minimumSize">
-                <size>
-                 <width>57</width>
-                 <height>18</height>
-                </size>
-               </property>
-               <property name="maximumSize">
-                <size>
-                 <width>51</width>
-                 <height>16</height>
-                </size>
-               </property>
-               <property name="font">
-                <font>
-                 <pointsize>8</pointsize>
-                </font>
-               </property>
-              </widget>
               <widget class="QPushButton" name="ApplyPeakFindPushButton">
                <property name="geometry">
                 <rect>
@@ -1337,7 +1304,7 @@ QPushButton:hover {
               <widget class="QDoubleSpinBox" name="PeakPromValueSpinBox">
                <property name="geometry">
                 <rect>
-                 <x>150</x>
+                 <x>90</x>
                  <y>20</y>
                  <width>81</width>
                  <height>22</height>
@@ -3150,7 +3117,6 @@ QPushButton:disabled {
   <tabstop>LowPassVal</tabstop>
   <tabstop>HighPassVal</tabstop>
   <tabstop>InvertSignal_checkBox</tabstop>
-  <tabstop>PeakPromValue</tabstop>
   <tabstop>ApplyPeakFindPushButton</tabstop>
   <tabstop>PrevButton</tabstop>
   <tabstop>ViewModeToggleButton</tabstop>

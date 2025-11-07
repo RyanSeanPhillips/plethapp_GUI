@@ -44,8 +44,10 @@ class ProminenceThresholdDialog(QDialog):
         # Auto-calculated threshold
         self.auto_threshold = None
         self.current_threshold = None  # User-adjusted value
-        self.local_min_threshold = None  # Local minimum threshold
+        self.local_min_threshold = None  # Local minimum threshold (valley location)
+        self.valley_depth_score = 0.0  # Signal quality metric (0-1, higher = better)
         self.inter_class_variance_curve = None  # For plotting
+        self.exp_gauss_params = None  # Exponential + Gaussian fit parameters
 
         # Separation metric for display
         self.separation_metric = 1.0
@@ -171,6 +173,11 @@ class ProminenceThresholdDialog(QDialog):
 
         self.lbl_peak_count = QLabel("Peaks detected: 0")
         threshold_layout.addWidget(self.lbl_peak_count)
+
+        # Signal quality indicator based on valley depth
+        self.lbl_signal_quality = QLabel("Signal Quality: Calculating...")
+        self.lbl_signal_quality.setStyleSheet("font-size: 10pt;")
+        threshold_layout.addWidget(self.lbl_signal_quality)
 
         self.btn_reset = QPushButton("Reset to Auto")
         self.btn_reset.setToolTip("Reset threshold to auto-detected value")
@@ -399,21 +406,29 @@ class ProminenceThresholdDialog(QDialog):
             thresh_values = bin_centers[:-1] / 255.0 * (peak_heights.max() - peak_heights.min()) + peak_heights.min()
             self.inter_class_variance_curve = (thresh_values, variance)
 
-            # Calculate local minimum threshold (first local min to the right of Otsu's threshold)
-            self.local_min_threshold = self._calculate_local_minimum_threshold(peak_heights, self.auto_threshold)
+            # Calculate valley threshold (independent of Otsu) and quality metric
+            self.local_min_threshold, self.valley_depth_score = self._calculate_local_minimum_threshold(peak_heights)
             if self.local_min_threshold is not None:
-                print(f"[Local Min] First local minimum after Otsu: {self.local_min_threshold:.4f}")
-                self.btn_set_local_min.setEnabled(True)  # Enable button if local min exists
+                print(f"[Valley] Natural valley threshold: {self.local_min_threshold:.4f}")
+                print(f"[Valley] Signal quality score: {self.valley_depth_score:.3f}")
+                self.btn_set_local_min.setEnabled(True)  # Enable button if valley exists
             else:
+                self.valley_depth_score = 0.0
                 self.btn_set_local_min.setEnabled(False)
 
-            # Use user's previously set threshold if available, otherwise DEFAULT TO OTSU
+            # Update signal quality display
+            self._update_quality_label()
+
+            # Use user's previously set threshold if available, otherwise DEFAULT TO LOCAL MINIMUM
             if self.user_threshold is not None:
                 self.current_threshold = self.user_threshold
-                print(f"[Otsu] Using user threshold: {self.user_threshold:.4f} (Otsu calculated: {self.auto_threshold:.4f})")
+                print(f"[Threshold] Using user threshold: {self.user_threshold:.4f} (Otsu: {self.auto_threshold:.4f}, Valley: {self.local_min_threshold:.4f if self.local_min_threshold else 'N/A'})")
+            elif self.local_min_threshold is not None:
+                self.current_threshold = self.local_min_threshold  # DEFAULT TO LOCAL MINIMUM
+                print(f"[Threshold] Using valley threshold: {self.local_min_threshold:.4f} (Otsu: {self.auto_threshold:.4f})")
             else:
-                self.current_threshold = self.auto_threshold  # DEFAULT TO OTSU
-                print(f"[Otsu] Auto-detected height threshold: {self.auto_threshold:.4f}")
+                self.current_threshold = self.auto_threshold  # FALLBACK TO OTSU
+                print(f"[Threshold] Using Otsu threshold: {self.auto_threshold:.4f} (no valley found)")
 
             self.lbl_threshold.setText(f"{self.current_threshold:.4f}")
 
@@ -426,16 +441,20 @@ class ProminenceThresholdDialog(QDialog):
             traceback.print_exc()
 
 
-    def _calculate_local_minimum_threshold(self, peak_heights, otsu_threshold):
+    def _calculate_local_minimum_threshold(self, peak_heights, otsu_threshold=None):
         """
-        Calculate first local minimum of histogram to the right of Otsu's threshold.
+        Calculate valley threshold using exponential + Gaussian mixture model.
 
-        This provides an alternative threshold that may better separate noise from breaths
-        when there's a clear valley between the two distributions.
+        Tries TWO models in order:
+        1. Exp + 2 Gaussians (for eupnea + sniffing)
+        2. Exp + 1 Gaussian (fallback for simpler distributions)
+
+        Returns (valley_location, valley_depth_score) where:
+        - valley_location: Minimum between 0 and first Gaussian peak
+        - valley_depth_score: Quality metric based on fit quality and separation
         """
         try:
-            from scipy.ndimage import gaussian_filter1d
-            from scipy.signal import argrelmin
+            from scipy.optimize import curve_fit
 
             # Create histogram with same bins as visual display
             if self.percentile_95 is not None:
@@ -446,50 +465,253 @@ class ProminenceThresholdDialog(QDialog):
                 peaks_for_hist = peak_heights
 
             if len(peaks_for_hist) < 10:
-                print("[Local Min] Not enough peaks for calculation")
-                return None
+                print("[Valley] Not enough peaks for calculation")
+                return None, 0.0
 
             counts, bins = np.histogram(peaks_for_hist, bins=self.num_bins, range=hist_range)
             bin_centers = (bins[:-1] + bins[1:]) / 2
+            bin_width = bin_centers[1] - bin_centers[0] if len(bin_centers) > 1 else 1.0
 
-            # Smooth histogram to reduce noise (adaptive sigma based on bin count)
-            sigma = max(1.5, self.num_bins / 50)  # Scale sigma with bin count
-            smoothed_counts = gaussian_filter1d(counts.astype(float), sigma=sigma)
+            # Normalize histogram to PDF (density, not counts)
+            total_area = np.sum(counts) * bin_width
+            density = counts / total_area if total_area > 0 else counts
 
-            # Find local minima with adaptive order
-            order = max(2, int(self.num_bins / 40))  # Adaptive order based on bins
-            local_mins = argrelmin(smoothed_counts, order=order)[0]
+            # Try 2-Gaussian model first (eupnea + sniffing)
+            result = self._fit_exp_2gauss(bin_centers, density, counts)
 
-            print(f"[Local Min] Found {len(local_mins)} local minima in histogram")
-            print(f"[Local Min] Otsu threshold: {otsu_threshold:.4f}")
-            print(f"[Local Min] Histogram range: {bin_centers.min():.4f} - {bin_centers.max():.4f}")
+            if result is not None:
+                print("[Valley Fit] Using 2-Gaussian model (eupnea + sniffing)")
+                return result
 
-            if len(local_mins) == 0:
-                print("[Local Min] No local minima found in smoothed histogram")
-                return None
+            # Fallback to 1-Gaussian model
+            print("[Valley Fit] Falling back to 1-Gaussian model")
+            result = self._fit_exp_1gauss(bin_centers, density, counts)
 
-            # Find first local minimum to the right of Otsu threshold
-            candidates = []
-            for min_idx in local_mins:
-                min_value = bin_centers[min_idx]
-                if min_value > otsu_threshold:
-                    candidates.append((min_value, smoothed_counts[min_idx]))
-                    print(f"[Local Min] Candidate: {min_value:.4f} (count: {smoothed_counts[min_idx]:.1f})")
-
-            if len(candidates) == 0:
-                print("[Local Min] No local minima found to the right of Otsu threshold")
-                return None
-
-            # Return the first (leftmost) local minimum
-            best_threshold = candidates[0][0]
-            print(f"[Local Min] Selected: {best_threshold:.4f}")
-            return float(best_threshold)
+            return result if result is not None else (None, 0.0)
 
         except Exception as e:
-            print(f"[Local Min] Error: {e}")
+            print(f"[Valley] Error: {e}")
             import traceback
             traceback.print_exc()
+            return None, 0.0
+
+    def _fit_exp_2gauss(self, bin_centers, density, counts):
+        """Fit exponential + 2 Gaussians (noise + eupnea + sniffing)."""
+        try:
+            from scipy.optimize import curve_fit
+
+            def exp_2gauss_model(x, lambda_exp, mu1, sigma1, mu2, sigma2, w_exp, w_g1):
+                """
+                Exponential + 2 Gaussians
+                w_exp: weight of exponential
+                w_g1: weight of first Gaussian
+                Remaining weight (1 - w_exp - w_g1) goes to second Gaussian
+                """
+                exp_comp = lambda_exp * np.exp(-lambda_exp * x)
+                gauss1 = (1 / (np.sqrt(2 * np.pi) * sigma1)) * np.exp(-0.5 * ((x - mu1) / sigma1) ** 2)
+                gauss2 = (1 / (np.sqrt(2 * np.pi) * sigma2)) * np.exp(-0.5 * ((x - mu2) / sigma2) ** 2)
+
+                w_g2 = max(0, 1 - w_exp - w_g1)  # Ensure non-negative
+                return w_exp * exp_comp + w_g1 * gauss1 + w_g2 * gauss2
+
+            # Initial guesses
+            left_third = bin_centers[bin_centers < np.percentile(bin_centers, 33)]
+            lambda_init = 1.0 / np.mean(left_third) if len(left_third) > 0 else 1.0
+
+            # Two Gaussian peaks: one at ~40th percentile (eupnea), one at ~70th (sniffing)
+            mu1_init = np.percentile(bin_centers, 40)
+            mu2_init = np.percentile(bin_centers, 70)
+            sigma1_init = (mu2_init - mu1_init) / 4  # Rough estimate
+            sigma2_init = sigma1_init
+
+            w_exp_init = 0.25
+            w_g1_init = 0.40  # Eupnea typically more common than sniffing
+
+            print(f"[2-Gauss] Initial: λ={lambda_init:.3f}, μ1={mu1_init:.3f}, μ2={mu2_init:.3f}")
+
+            # Bounds
+            bounds = ([0.001, bin_centers.min(), 0.001, mu1_init, 0.001, 0.0, 0.0],
+                     [100.0, mu2_init, bin_centers.max(), bin_centers.max(), bin_centers.max(), 0.8, 0.8])
+
+            popt, pcov = curve_fit(
+                exp_2gauss_model,
+                bin_centers,
+                density,
+                p0=[lambda_init, mu1_init, sigma1_init, mu2_init, sigma2_init, w_exp_init, w_g1_init],
+                bounds=bounds,
+                maxfev=10000
+            )
+
+            lambda_fit, mu1_fit, sigma1_fit, mu2_fit, sigma2_fit, w_exp_fit, w_g1_fit = popt
+            w_g2_fit = max(0, 1 - w_exp_fit - w_g1_fit)
+
+            # Calculate R²
+            fitted = exp_2gauss_model(bin_centers, *popt)
+            ss_res = np.sum((density - fitted) ** 2)
+            ss_tot = np.sum((density - np.mean(density)) ** 2)
+            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+            print(f"[2-Gauss] Fitted: λ={lambda_fit:.3f}, μ1={mu1_fit:.3f}, μ2={mu2_fit:.3f}, R²={r_squared:.3f}")
+            print(f"[2-Gauss] Weights: exp={w_exp_fit:.3f}, g1={w_g1_fit:.3f}, g2={w_g2_fit:.3f}")
+
+            # Reject if R² too low or weights are weird
+            if r_squared < 0.7 or w_g1_fit < 0.05 or w_g2_fit < 0.05:
+                print("[2-Gauss] Poor fit or degenerate weights, rejecting")
+                return None
+
+            # Find valley between 0 and first Gaussian peak
+            search_range = (bin_centers >= 0) & (bin_centers <= mu1_fit)
+            if not np.any(search_range):
+                return None
+
+            search_x = bin_centers[search_range]
+            search_y = exp_2gauss_model(search_x, *popt)
+
+            valley_idx = np.argmin(search_y)
+            valley_location = search_x[valley_idx]
+            valley_value = search_y[valley_idx]
+
+            # Quality score
+            exp_at_valley = w_exp_fit * lambda_fit * np.exp(-lambda_fit * valley_location)
+            valley_depth = 1.0 - (valley_value / exp_at_valley) if exp_at_valley > 0 else 0.0
+            quality_score = r_squared * valley_depth
+            quality_score = max(0.0, min(1.0, quality_score))
+
+            print(f"[2-Gauss] Valley at {valley_location:.3f}, quality={quality_score:.3f}")
+
+            # Store parameters including bin_centers and fitted curve for plotting
+            self.exp_gauss_params = {
+                'model': '2gauss',
+                'lambda': lambda_fit,
+                'mu1': mu1_fit,
+                'sigma1': sigma1_fit,
+                'mu2': mu2_fit,
+                'sigma2': sigma2_fit,
+                'w_exp': w_exp_fit,
+                'w_g1': w_g1_fit,
+                'w_g2': w_g2_fit,
+                'r_squared': r_squared,
+                'bin_centers': bin_centers,
+                'fitted_curve': fitted,
+                'density': density
+            }
+
+            return float(valley_location), float(quality_score)
+
+        except Exception as e:
+            print(f"[2-Gauss] Fit failed: {e}")
             return None
+
+    def _fit_exp_1gauss(self, bin_centers, density, counts):
+        """Fit exponential + 1 Gaussian (noise + breaths)."""
+        try:
+            from scipy.optimize import curve_fit
+
+            def exp_gauss_model(x, lambda_exp, mu_gauss, sigma_gauss, w_exp):
+                exp_component = lambda_exp * np.exp(-lambda_exp * x)
+                gauss_component = (1 / (np.sqrt(2 * np.pi) * sigma_gauss)) * np.exp(-0.5 * ((x - mu_gauss) / sigma_gauss) ** 2)
+                return w_exp * exp_component + (1 - w_exp) * gauss_component
+
+            # Initial guesses
+            left_half = bin_centers[bin_centers < np.median(bin_centers)]
+            lambda_init = 1.0 / np.mean(left_half) if len(left_half) > 0 else 1.0
+            mu_init = np.average(bin_centers, weights=counts + 1)
+            sigma_init = np.sqrt(np.average((bin_centers - mu_init)**2, weights=counts + 1))
+            w_exp_init = 0.3
+
+            print(f"[1-Gauss] Initial: λ={lambda_init:.3f}, μ={mu_init:.3f}, σ={sigma_init:.3f}")
+
+            bounds = ([0.001, bin_centers.min(), 0.001, 0.0],
+                     [100.0, bin_centers.max(), bin_centers.max(), 1.0])
+
+            popt, pcov = curve_fit(
+                exp_gauss_model,
+                bin_centers,
+                density,
+                p0=[lambda_init, mu_init, sigma_init, w_exp_init],
+                bounds=bounds,
+                maxfev=5000
+            )
+
+            lambda_fit, mu_fit, sigma_fit, w_exp_fit = popt
+
+            # Calculate R²
+            fitted = exp_gauss_model(bin_centers, *popt)
+            ss_res = np.sum((density - fitted) ** 2)
+            ss_tot = np.sum((density - np.mean(density)) ** 2)
+            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+            print(f"[1-Gauss] Fitted: λ={lambda_fit:.3f}, μ={mu_fit:.3f}, σ={sigma_fit:.3f}, R²={r_squared:.3f}")
+
+            # Find valley
+            search_range = (bin_centers >= 0) & (bin_centers <= mu_fit)
+            if not np.any(search_range):
+                return None
+
+            search_x = bin_centers[search_range]
+            search_y = exp_gauss_model(search_x, *popt)
+
+            valley_idx = np.argmin(search_y)
+            valley_location = search_x[valley_idx]
+            valley_value = search_y[valley_idx]
+
+            # Quality
+            exp_at_valley = w_exp_fit * lambda_fit * np.exp(-lambda_fit * valley_location)
+            valley_depth = 1.0 - (valley_value / exp_at_valley) if exp_at_valley > 0 else 0.0
+            quality_score = r_squared * valley_depth
+            quality_score = max(0.0, min(1.0, quality_score))
+
+            print(f"[1-Gauss] Valley at {valley_location:.3f}, quality={quality_score:.3f}")
+
+            # Store parameters for plotting
+            self.exp_gauss_params = {
+                'model': '1gauss',
+                'lambda': lambda_fit,
+                'mu': mu_fit,
+                'sigma': sigma_fit,
+                'w_exp': w_exp_fit,
+                'r_squared': r_squared,
+                'bin_centers': bin_centers,
+                'fitted_curve': fitted,
+                'density': density
+            }
+
+            return float(valley_location), float(quality_score)
+
+        except Exception as e:
+            print(f"[1-Gauss] Fit failed: {e}")
+            return None
+
+    def _update_quality_label(self):
+        """Update the signal quality label with color-coded quality rating."""
+        score = self.valley_depth_score
+
+        # Determine quality category and color
+        if score >= 0.8:
+            quality = "Excellent"
+            color = "#00aa00"  # Green
+            tooltip = "Very clear separation between noise and signal peaks"
+        elif score >= 0.5:
+            quality = "Good"
+            color = "#55aa00"  # Yellow-green
+            tooltip = "Good separation, minimal overlap between noise and signal"
+        elif score >= 0.3:
+            quality = "Fair"
+            color = "#aaaa00"  # Yellow
+            tooltip = "Moderate overlap - may need manual review of low-amplitude breaths"
+        elif score >= 0.1:
+            quality = "Poor"
+            color = "#aa5500"  # Orange
+            tooltip = "Significant overlap - manual labeling recommended"
+        else:
+            quality = "Very Poor"
+            color = "#aa0000"  # Red
+            tooltip = "Heavy overlap - extensive manual review required"
+
+        # Update label with score and quality
+        self.lbl_signal_quality.setText(f"Signal Quality: {quality} ({score:.2f})")
+        self.lbl_signal_quality.setStyleSheet(f"font-size: 10pt; font-weight: bold; color: {color};")
+        self.lbl_signal_quality.setToolTip(tooltip)
 
     def _on_percentile_changed(self, text):
         """Callback when percentile cutoff changes."""
@@ -608,6 +830,82 @@ class ProminenceThresholdDialog(QDialog):
                     else:
                         patch.set_facecolor('red')  # Red for "breaths"
                         patch.set_alpha(0.5)
+
+            # Plot fitted curve components if available
+            if hasattr(self, 'exp_gauss_params') and self.exp_gauss_params is not None:
+                params = self.exp_gauss_params
+                bin_centers = params.get('bin_centers')
+                fitted_curve = params.get('fitted_curve')
+                r_squared = params.get('r_squared', 0.0)
+                model_type = params.get('model', 'unknown')
+
+                if bin_centers is not None and fitted_curve is not None:
+                    # Scale factor to convert density to counts
+                    bin_width = bins[1] - bins[0] if len(bins) > 1 else 1.0
+                    scale = len(peaks_for_hist) * bin_width
+
+                    # Plot individual components
+                    x = bin_centers
+
+                    if model_type == '2gauss':
+                        # Extract 2-Gaussian model parameters
+                        lambda_exp = params.get('lambda')
+                        mu1 = params.get('mu1')
+                        sigma1 = params.get('sigma1')
+                        mu2 = params.get('mu2')
+                        sigma2 = params.get('sigma2')
+                        w_exp = params.get('w_exp')
+                        w_g1 = params.get('w_g1')
+                        w_g2 = params.get('w_g2')
+
+                        # Calculate individual components (in density units)
+                        exp_comp = lambda_exp * np.exp(-lambda_exp * x)
+                        gauss1_comp = (1 / (np.sqrt(2 * np.pi) * sigma1)) * np.exp(-0.5 * ((x - mu1) / sigma1) ** 2)
+                        gauss2_comp = (1 / (np.sqrt(2 * np.pi) * sigma2)) * np.exp(-0.5 * ((x - mu2) / sigma2) ** 2)
+
+                        # Scale to counts
+                        exp_counts = w_exp * exp_comp * scale
+                        gauss1_counts = w_g1 * gauss1_comp * scale
+                        gauss2_counts = w_g2 * gauss2_comp * scale
+
+                        # Plot individual components with different styles
+                        ax1.plot(x, exp_counts, color='#ff8800', linewidth=1.5,
+                                linestyle='--', alpha=0.6, label='Exponential (noise)', zorder=3)
+                        ax1.plot(x, gauss1_counts, color='#00ff88', linewidth=1.5,
+                                linestyle='--', alpha=0.6, label=f'Gaussian 1 (μ={mu1:.2f})', zorder=3)
+                        ax1.plot(x, gauss2_counts, color='#8800ff', linewidth=1.5,
+                                linestyle='--', alpha=0.6, label=f'Gaussian 2 (μ={mu2:.2f})', zorder=3)
+
+                        # Plot combined fit
+                        fitted_counts = fitted_curve * scale
+                        ax1.plot(x, fitted_counts, color='#ff00ff', linewidth=2.5,
+                                linestyle='-', alpha=0.9, label=f'Combined Fit (R²={r_squared:.3f})', zorder=4)
+
+                    else:  # 1gauss model
+                        # Extract 1-Gaussian model parameters
+                        lambda_exp = params.get('lambda')
+                        mu = params.get('mu')
+                        sigma = params.get('sigma')
+                        w_exp = params.get('w_exp')
+
+                        # Calculate individual components (in density units)
+                        exp_comp = lambda_exp * np.exp(-lambda_exp * x)
+                        gauss_comp = (1 / (np.sqrt(2 * np.pi) * sigma)) * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+
+                        # Scale to counts
+                        exp_counts = w_exp * exp_comp * scale
+                        gauss_counts = (1 - w_exp) * gauss_comp * scale
+
+                        # Plot individual components
+                        ax1.plot(x, exp_counts, color='#ff8800', linewidth=1.5,
+                                linestyle='--', alpha=0.6, label='Exponential (noise)', zorder=3)
+                        ax1.plot(x, gauss_counts, color='#00ff88', linewidth=1.5,
+                                linestyle='--', alpha=0.6, label=f'Gaussian (μ={mu:.2f})', zorder=3)
+
+                        # Plot combined fit
+                        fitted_counts = fitted_curve * scale
+                        ax1.plot(x, fitted_counts, color='#00ffff', linewidth=2.5,
+                                linestyle='-', alpha=0.9, label=f'Combined Fit (R²={r_squared:.3f})', zorder=4)
 
             ax1.set_xlabel('Peak Height', fontsize=11, color='#d4d4d4')
             ax1.set_ylabel('Frequency (count)', fontsize=11, color='#d4d4d4')

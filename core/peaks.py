@@ -885,7 +885,7 @@ def detect_peaks_and_breaths(
         direction=direction,
     )
 
-    # Use Numba-optimized version if available (10-50× faster)
+    # Use Numba-optimized version if available (1.2× speedup)
     if _USE_NUMBA_VERSION:
         breaths = compute_breath_events_numba(y, pks, sr_hz=sr_hz, exclude_sec=exclude_sec)
     else:
