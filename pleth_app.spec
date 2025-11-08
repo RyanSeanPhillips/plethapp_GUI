@@ -28,10 +28,6 @@ added_files = [
 
     # Core modules
     (os.path.join(spec_root, 'core'), 'core'),
-
-    # Python 3.9 embedded environment for Son64 (.smrx) file loading
-    # This includes the full Python 3.9 runtime with sonpy library
-    (os.path.join(spec_root, 'lib', 'python39'), os.path.join('lib', 'python39')),
 ]
 
 # Hidden imports - modules that PyInstaller might miss
@@ -105,6 +101,9 @@ a = Analysis(
         'PySide6.QtWidgets',
         # Exclude problematic modules
         'pkg_resources',
+        # Exclude numba and dependencies (not used in production, only in test files)
+        'numba',
+        'llvmlite',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
