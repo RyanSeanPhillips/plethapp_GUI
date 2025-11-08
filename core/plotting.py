@@ -85,6 +85,18 @@ class PlotHost(QWidget):
         self._threshold_drag_cid_release = None
         self._threshold_histogram = None  # Histogram shown during threshold dragging
 
+        # Cache histogram data for fast updates during drag
+        self._histogram_bin_centers = None
+        self._histogram_scaled_counts = None
+        self._histogram_x_min = None
+
+        # Separate storage for fills and lines (for correct draw order)
+        self._histogram_fills = None
+        self._histogram_lines = None
+
+        # Background cache for blitting (threshold drag optimization)
+        self._blit_background = None
+
         #Continuious Breath metrics
         self.ax_y2 = None
         self.line_y2 = None
@@ -570,9 +582,22 @@ class PlotHost(QWidget):
             # Show histogram of all peak heights
             self._show_peak_height_histogram()
 
+            # Set threshold line and histogram as animated BEFORE caching background
+            # This ensures they're NOT included in the cached background
+            if self.threshold_line:
+                self.threshold_line.set_animated(True)
+            if self._threshold_histogram:
+                for artist in self._threshold_histogram:
+                    artist.set_animated(True)
+
+            # Cache background for ultra-fast blitting (without threshold line/histogram)
+            self.canvas.draw()
+            self.canvas.flush_events()
+            self._blit_background = self.canvas.copy_from_bbox(self.fig.bbox)
+
     def _on_threshold_drag(self, event):
-        """Handle mouse motion while dragging threshold line."""
-        if not self._dragging_threshold or event.inaxes is None:
+        """Handle mouse motion while dragging threshold line (ultra-optimized with blitting)."""
+        if not self._dragging_threshold or event.inaxes is None or self._blit_background is None:
             return
 
         # Update threshold line position
@@ -580,21 +605,42 @@ class PlotHost(QWidget):
         if new_threshold is not None and new_threshold > 0:
             self.threshold_line.set_ydata([new_threshold, new_threshold])
 
-            # Find main window by walking up parent chain
+            # Store threshold but DON'T update SpinBox during drag (too slow!)
             main_window = self._find_main_window()
             if main_window:
-                # Block signals to prevent feedback loop
-                main_window.PeakPromValueSpinBox.blockSignals(True)
-                main_window.PeakPromValueSpinBox.setValue(new_threshold)
-                main_window.PeakPromValueSpinBox.blockSignals(False)
-                # Update stored threshold
                 main_window.peak_height_threshold = new_threshold
 
-                # Update histogram colors based on new threshold
-                self._clear_peak_height_histogram()
-                self._show_peak_height_histogram()
+            # Update histogram colors based on new threshold
+            self._update_histogram_colors_for_blitting(new_threshold)
 
-            self.canvas.draw_idle()
+            # ULTRA-OPTIMIZED: Use blitting to only redraw threshold line + histogram
+            # Restore cached background (everything except animated artists)
+            self.canvas.restore_region(self._blit_background)
+
+            # Redraw only the animated artists (threshold line + histogram)
+            ax = self.threshold_line.axes
+
+            # Draw histogram artists (fills first, then lines on top)
+            if self._histogram_fills:
+                for fill in self._histogram_fills:
+                    try:
+                        ax.draw_artist(fill)
+                    except:
+                        pass
+
+            if self._histogram_lines:
+                for line in self._histogram_lines:
+                    try:
+                        ax.draw_artist(line)
+                    except:
+                        pass
+
+            # Draw threshold line on top of everything
+            ax.draw_artist(self.threshold_line)
+
+            # Blit the updated region (super fast!)
+            self.canvas.blit(self.fig.bbox)
+            self.canvas.flush_events()
 
     def _on_threshold_release(self, event):
         """Handle mouse release to stop dragging threshold line."""
@@ -603,10 +649,34 @@ class PlotHost(QWidget):
             # Restore cursor
             from PyQt6.QtCore import Qt
             self.setCursor(Qt.CursorShape.ArrowCursor)
-            # Clear histogram
-            self._clear_peak_height_histogram()
-            # Enable Apply button
+
+            # Turn off animation on threshold line and histogram
+            if self.threshold_line:
+                self.threshold_line.set_animated(False)
+            if self._threshold_histogram:
+                for artist in self._threshold_histogram:
+                    try:
+                        artist.set_animated(False)
+                    except:
+                        pass
+
+            # Clear background cache
+            self._blit_background = None
+
+            # Update SpinBox with final threshold
             main_window = self._find_main_window()
+            if main_window:
+                current_threshold = getattr(main_window, 'peak_height_threshold', None)
+                if current_threshold is not None:
+                    # Update SpinBox (blocked signals to prevent feedback)
+                    main_window.PeakPromValueSpinBox.blockSignals(True)
+                    main_window.PeakPromValueSpinBox.setValue(current_threshold)
+                    main_window.PeakPromValueSpinBox.blockSignals(False)
+
+            # Clear histogram now that dragging is done
+            self._clear_peak_height_histogram()
+
+            # Enable Apply button
             if main_window:
                 main_window.ApplyPeakFindPushButton.setEnabled(True)
 
@@ -715,29 +785,34 @@ class PlotHost(QWidget):
                 scale_factor = (0.1 * x_range) / max_count
                 scaled_counts = counts * scale_factor
 
+                # Cache histogram data for fast updates during drag
+                self._histogram_bin_centers = bin_centers
+                self._histogram_scaled_counts = scaled_counts
+                self._histogram_x_min = x_min
+
                 # Plot as line with fills
                 # Split into below and above threshold
                 below_mask = bin_centers < current_threshold
                 above_mask = bin_centers >= current_threshold
 
-                # Gray fill for below threshold (HIGH Z-ORDER to show on top)
+                # Gray fill for below threshold (black outline, gray fill)
                 if np.any(below_mask):
                     line_below = ax.plot(x_min + scaled_counts[below_mask], bin_centers[below_mask],
-                                        'k-', linewidth=1.0, alpha=0.8, zorder=100)[0]
+                                        'k-', linewidth=1.5, alpha=1.0, zorder=100)[0]
                     fill_below = ax.fill_betweenx(bin_centers[below_mask],
                                                   x_min, x_min + scaled_counts[below_mask],
-                                                  alpha=0.3, color='gray', zorder=99)
+                                                  alpha=0.7, color='gray', zorder=99)
                     self._threshold_histogram = [line_below, fill_below]
                 else:
                     self._threshold_histogram = []
 
-                # Red fill for above threshold (HIGH Z-ORDER to show on top)
+                # Red fill for above threshold (black outline, red fill)
                 if np.any(above_mask):
                     line_above = ax.plot(x_min + scaled_counts[above_mask], bin_centers[above_mask],
-                                        'k-', linewidth=1.0, alpha=0.8, zorder=100)[0]
+                                        'k-', linewidth=1.5, alpha=1.0, zorder=100)[0]
                     fill_above = ax.fill_betweenx(bin_centers[above_mask],
                                                   x_min, x_min + scaled_counts[above_mask],
-                                                  alpha=0.3, color='red', zorder=99)
+                                                  alpha=0.7, color='red', zorder=99)
                     if self._threshold_histogram is None:
                         self._threshold_histogram = []
                     self._threshold_histogram.extend([line_above, fill_above])
@@ -762,7 +837,147 @@ class PlotHost(QWidget):
                 except:
                     pass
             self._threshold_histogram = None
+            # Clear cached data
+            self._histogram_bin_centers = None
+            self._histogram_scaled_counts = None
+            self._histogram_x_min = None
+            self._histogram_fills = None
+            self._histogram_lines = None
             self.canvas.draw_idle()
+
+    def _update_histogram_colors_fast(self, new_threshold):
+        """
+        Fast update of histogram colors without redrawing everything.
+        Only updates the fill colors based on new threshold.
+        """
+        # If histogram not created yet or no cached data, do full redraw
+        if (self._threshold_histogram is None or
+            self._histogram_bin_centers is None or
+            self._histogram_scaled_counts is None):
+            # First time - create histogram
+            self._clear_peak_height_histogram()
+            self._show_peak_height_histogram()
+            return
+
+        try:
+            import numpy as np
+
+            # Get the axis
+            if not self.fig.axes:
+                return
+            ax = self.fig.axes[0]
+
+            # Remove old histogram artists
+            for artist in self._threshold_histogram:
+                try:
+                    artist.remove()
+                except:
+                    pass
+
+            # Recreate with new threshold coloring
+            bin_centers = self._histogram_bin_centers
+            scaled_counts = self._histogram_scaled_counts
+            x_min = self._histogram_x_min
+
+            # Split into below and above threshold
+            below_mask = bin_centers < new_threshold
+            above_mask = bin_centers >= new_threshold
+
+            self._threshold_histogram = []
+
+            # Gray fill for below threshold (black outline, gray fill)
+            if np.any(below_mask):
+                line_below = ax.plot(x_min + scaled_counts[below_mask], bin_centers[below_mask],
+                                    'k-', linewidth=1.5, alpha=1.0, zorder=100)[0]
+                fill_below = ax.fill_betweenx(bin_centers[below_mask],
+                                              x_min, x_min + scaled_counts[below_mask],
+                                              alpha=0.7, color='gray', zorder=99)
+                self._threshold_histogram.extend([line_below, fill_below])
+
+            # Red fill for above threshold (black outline, red fill)
+            if np.any(above_mask):
+                line_above = ax.plot(x_min + scaled_counts[above_mask], bin_centers[above_mask],
+                                    'k-', linewidth=1.5, alpha=1.0, zorder=100)[0]
+                fill_above = ax.fill_betweenx(bin_centers[above_mask],
+                                              x_min, x_min + scaled_counts[above_mask],
+                                              alpha=0.7, color='red', zorder=99)
+                self._threshold_histogram.extend([line_above, fill_above])
+
+        except Exception as e:
+            print(f"[Fast Histogram Update] Error: {e}")
+            # Fall back to full redraw
+            self._clear_peak_height_histogram()
+            self._show_peak_height_histogram()
+
+    def _update_histogram_colors_for_blitting(self, new_threshold):
+        """
+        Update histogram colors during blitting (no draw calls).
+        Creates new colored histogram artists and marks them as animated.
+        """
+        # If no cached data, skip
+        if (self._histogram_bin_centers is None or
+            self._histogram_scaled_counts is None):
+            return
+
+        try:
+            import numpy as np
+
+            # Get the axis
+            if not self.fig.axes:
+                return
+            ax = self.fig.axes[0]
+
+            # Remove old histogram artists
+            if self._threshold_histogram:
+                for artist in self._threshold_histogram:
+                    try:
+                        artist.remove()
+                    except:
+                        pass
+
+            # Recreate with new threshold coloring
+            bin_centers = self._histogram_bin_centers
+            scaled_counts = self._histogram_scaled_counts
+            x_min = self._histogram_x_min
+
+            # Split into below and above threshold
+            below_mask = bin_centers < new_threshold
+            above_mask = bin_centers >= new_threshold
+
+            self._threshold_histogram = []
+            self._histogram_fills = []
+            self._histogram_lines = []
+
+            # Gray fill for below threshold (black outline, gray fill)
+            if np.any(below_mask):
+                line_below = ax.plot(x_min + scaled_counts[below_mask], bin_centers[below_mask],
+                                    'k-', linewidth=1.5, alpha=1.0, zorder=100)[0]
+                fill_below = ax.fill_betweenx(bin_centers[below_mask],
+                                              x_min, x_min + scaled_counts[below_mask],
+                                              alpha=0.7, color='gray', zorder=99)
+                # Mark as animated for blitting
+                line_below.set_animated(True)
+                fill_below.set_animated(True)
+                self._histogram_fills.append(fill_below)
+                self._histogram_lines.append(line_below)
+                self._threshold_histogram.extend([line_below, fill_below])
+
+            # Red fill for above threshold (black outline, red fill)
+            if np.any(above_mask):
+                line_above = ax.plot(x_min + scaled_counts[above_mask], bin_centers[above_mask],
+                                    'k-', linewidth=1.5, alpha=1.0, zorder=100)[0]
+                fill_above = ax.fill_betweenx(bin_centers[above_mask],
+                                              x_min, x_min + scaled_counts[above_mask],
+                                              alpha=0.7, color='red', zorder=99)
+                # Mark as animated for blitting
+                line_above.set_animated(True)
+                fill_above.set_animated(True)
+                self._histogram_fills.append(fill_above)
+                self._histogram_lines.append(line_above)
+                self._threshold_histogram.extend([line_above, fill_above])
+
+        except Exception as e:
+            print(f"[Blitting Histogram Update] Error: {e}")
 
     #                         t_on=None, y_on=None,
     #                         t_off=None, y_off=None,

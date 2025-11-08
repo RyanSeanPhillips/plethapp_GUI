@@ -174,16 +174,34 @@ class PlotManager:
         # Calculate ylim with percentile-based scaling (matching core/plotting.py autoscale)
         if len(y_values) > 0:
             y_values = np.array(y_values)
-            # Use percentiles to avoid artifacts and huge outliers
-            y_min = np.percentile(y_values, 1)   # 1st percentile
-            y_max = np.percentile(y_values, 99)  # 99th percentile
 
-            # Add 25% padding to avoid clipping peaks (matching core/plotting.py)
-            y_range = y_max - y_min
-            if y_range > 0:
+            # Remove NaN values before calculating percentiles
+            y_valid = y_values[~np.isnan(y_values)]
+
+            if len(y_valid) > 0:
+                # Use percentiles to avoid artifacts and huge outliers
+                y_min = np.percentile(y_valid, 1)   # 1st percentile
+                y_max = np.percentile(y_valid, 99)  # 99th percentile
+                y_range = y_max - y_min
+
+                # Handle edge case where all values are the same
+                if y_range == 0 or np.isnan(y_range):
+                    y_range = abs(y_min) if y_min != 0 else 1.0
+
+                # Add 25% padding to avoid clipping peaks (matching core/plotting.py)
                 padding = 0.25 * y_range
-                ax.set_ylim(y_min - padding, y_max + padding)
-                print(f"[Plot Manager] Auto-scaled Y-axis (excluding omitted): {y_min - padding:.3f} to {y_max + padding:.3f}")
+
+                # Final validation
+                y_lower = y_min - padding
+                y_upper = y_max + padding
+
+                if np.isfinite(y_lower) and np.isfinite(y_upper):
+                    ax.set_ylim(y_lower, y_upper)
+                    print(f"[Plot Manager] Auto-scaled Y-axis (excluding omitted): {y_lower:.3f} to {y_upper:.3f}")
+                else:
+                    print(f"[Plot Manager] Warning: Invalid Y-axis limits (NaN/Inf), using default")
+            else:
+                print(f"[Plot Manager] Warning: No valid (non-NaN) data for Y-axis scaling")
 
     def _draw_dual_subplot_plot(self, t_full, y_pleth, t_plot, spans_plot, title, sweep_idx, t0):
         """Draw dual subplot layout with pleth trace on top and event channel on bottom."""
@@ -235,12 +253,31 @@ class PlotManager:
 
         # Apply percentile-based Y-axis autoscaling (matching single-panel behavior)
         if len(y_pleth) > 0:
-            y_min = np.percentile(y_pleth, 1)   # 1st percentile
-            y_max = np.percentile(y_pleth, 99)  # 99th percentile
-            y_range = y_max - y_min
-            padding = 0.25 * y_range  # 25% padding
-            ax_pleth.set_ylim(y_min - padding, y_max + padding)
-            print(f"[Dual Plot] Auto-scaled Y-axis: {y_min - padding:.3f} to {y_max + padding:.3f} (99th percentile)")
+            # Remove NaN values before calculating percentiles
+            y_valid = y_pleth[~np.isnan(y_pleth)]
+
+            if len(y_valid) > 0:
+                y_min = np.percentile(y_valid, 1)   # 1st percentile
+                y_max = np.percentile(y_valid, 99)  # 99th percentile
+                y_range = y_max - y_min
+
+                # Handle edge case where all values are the same
+                if y_range == 0 or np.isnan(y_range):
+                    y_range = abs(y_min) if y_min != 0 else 1.0
+
+                padding = 0.25 * y_range  # 25% padding
+
+                # Final validation
+                y_lower = y_min - padding
+                y_upper = y_max + padding
+
+                if np.isfinite(y_lower) and np.isfinite(y_upper):
+                    ax_pleth.set_ylim(y_lower, y_upper)
+                    print(f"[Dual Plot] Auto-scaled Y-axis: {y_lower:.3f} to {y_upper:.3f} (99th percentile)")
+                else:
+                    print(f"[Dual Plot] Warning: Invalid Y-axis limits (NaN/Inf), using default")
+            else:
+                print(f"[Dual Plot] Warning: No valid (non-NaN) data for Y-axis scaling")
 
         # Plot event trace on bottom subplot
         self._plot_event_trace(ax_event, t_full, t_plot, spans_plot, t0)

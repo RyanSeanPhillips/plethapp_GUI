@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QPushButton,
     QLabel, QGroupBox, QDialogButtonBox, QWidget
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSize
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from scipy.signal import find_peaks
@@ -29,7 +29,7 @@ class ProminenceThresholdDialog(QDialog):
                  percentile_cutoff=99, num_bins=200):
         super().__init__(parent)
         self.setWindowTitle("Auto-Detect Prominence Threshold")
-        self.resize(1000, 700)
+        self.resize(1200, 700)  # 20% wider (1000 -> 1200)
 
         self.y_data = y_data
         self.sr_hz = sr_hz or 1000.0
@@ -56,6 +56,10 @@ class ProminenceThresholdDialog(QDialog):
         self.threshold_vline = None
         self.otsu_reference_line = None  # Fixed line showing Otsu's calculated threshold
         self.is_dragging = False
+
+        # Store histogram patches and bins for fast updating
+        self.histogram_patches = None
+        self.histogram_bins = None
 
         # Y2 axis mode toggle
         self.y2_mode = "peak_count"  # or "variance"
@@ -138,6 +142,34 @@ class ProminenceThresholdDialog(QDialog):
             QLineEdit:focus {
                 border: 1px solid #2a7fff;
             }
+            QComboBox {
+                background-color: #2d2d2d;
+                color: #d4d4d4;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
+                padding: 3px;
+            }
+            QComboBox:focus {
+                border: 1px solid #2a7fff;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2d2d2d;
+                color: #d4d4d4;
+                selection-background-color: #3e3e42;
+            }
+            QSpinBox {
+                background-color: #2d2d2d;
+                color: #d4d4d4;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
+                padding: 3px;
+            }
+            QSpinBox:focus {
+                border: 1px solid #2a7fff;
+            }
             QDialogButtonBox QPushButton {
                 min-width: 80px;
             }
@@ -145,139 +177,94 @@ class ProminenceThresholdDialog(QDialog):
 
     def _setup_ui(self):
         """Build the dialog UI."""
-        layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
 
         # Title and description
-        title = QLabel("<h2>Prominence Threshold Detection (Otsu's Method)</h2>")
-        layout.addWidget(title)
+        title = QLabel("<h2>Prominence Threshold Detection</h2>")
+        main_layout.addWidget(title)
 
         desc = QLabel(
-            "Automatically detects optimal prominence threshold by analyzing the distribution "
-            "of peak prominences. The threshold separates noise from real breaths by maximizing "
-            "inter-class variance."
+            "Automatically detects optimal threshold by analyzing peak height distribution. "
+            "Drag the red line to adjust the threshold interactively."
         )
         desc.setWordWrap(True)
-        layout.addWidget(desc)
+        main_layout.addWidget(desc)
 
-        # Threshold display and controls with peak count
+        # Create horizontal layout for left sidebar + right plot
+        content_layout = QHBoxLayout()
+
+        # LEFT SIDEBAR - Controls (350px wide)
+        left_panel = QWidget()
+        left_panel.setMaximumWidth(350)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Threshold display group
         threshold_group = QGroupBox("Detected Threshold")
-        threshold_layout = QHBoxLayout()
+        threshold_layout = QVBoxLayout()
 
-        threshold_layout.addWidget(QLabel("Optimal Prominence:"))
-
+        # Threshold value row
+        thresh_row = QHBoxLayout()
+        thresh_row.addWidget(QLabel("Optimal Prominence:"))
         self.lbl_threshold = QLabel("Calculating...")
         self.lbl_threshold.setStyleSheet("font-weight: bold; font-size: 14pt; color: #2a7fff;")
-        threshold_layout.addWidget(self.lbl_threshold)
+        thresh_row.addWidget(self.lbl_threshold)
+        thresh_row.addStretch()
+        threshold_layout.addLayout(thresh_row)
 
-        threshold_layout.addStretch()
-
+        # Peak count row
+        count_row = QHBoxLayout()
         self.lbl_peak_count = QLabel("Peaks detected: 0")
-        threshold_layout.addWidget(self.lbl_peak_count)
+        count_row.addWidget(self.lbl_peak_count)
+        count_row.addStretch()
+        threshold_layout.addLayout(count_row)
 
-        # Signal quality indicator based on valley depth
+        # Signal quality indicator (HIDDEN)
         self.lbl_signal_quality = QLabel("Signal Quality: Calculating...")
         self.lbl_signal_quality.setStyleSheet("font-size: 10pt;")
+        self.lbl_signal_quality.setVisible(False)  # Hidden - not working well yet
         threshold_layout.addWidget(self.lbl_signal_quality)
 
-        self.btn_reset = QPushButton("Reset to Auto")
-        self.btn_reset.setToolTip("Reset threshold to auto-detected value")
-        self.btn_reset.clicked.connect(self._reset_threshold)
+        # Button row - single Reset button to snap to valley threshold
+        btn_row = QHBoxLayout()
+        self.btn_reset = QPushButton("Reset")
+        self.btn_reset.setToolTip("Reset threshold to valley (local minimum)")
+        self.btn_reset.clicked.connect(self._reset_to_valley)
         self.btn_reset.setEnabled(False)
-        threshold_layout.addWidget(self.btn_reset)
+        btn_row.addWidget(self.btn_reset)
+        btn_row.addStretch()
+        threshold_layout.addLayout(btn_row)
 
         threshold_group.setLayout(threshold_layout)
-        layout.addWidget(threshold_group)
+        left_layout.addWidget(threshold_group)
 
-        # Interactive plot with toggle
-        plot_header = QHBoxLayout()
-        plot_label = QLabel("<b>Interactive Histogram</b> - <span style='color: #ff6666;'>Drag the red line to adjust threshold</span>")
-        plot_label.setStyleSheet("color: #666; font-size: 10pt;")
-        plot_header.addWidget(plot_label)
-
-        plot_header.addStretch()
-
-        # "Set to Otsu" button
-        self.btn_set_otsu = QPushButton("→ Otsu")
-        self.btn_set_otsu.setToolTip("Set threshold to Otsu's calculated value")
-        self.btn_set_otsu.clicked.connect(self._set_to_otsu)
-        plot_header.addWidget(self.btn_set_otsu)
-
-        # "Set to Local Min" button
-        self.btn_set_local_min = QPushButton("→ Local Min")
-        self.btn_set_local_min.setToolTip("Set threshold to first local minimum")
-        self.btn_set_local_min.clicked.connect(self._set_to_local_min)
-        self.btn_set_local_min.setEnabled(False)  # Enabled only if local min exists
-        plot_header.addWidget(self.btn_set_local_min)
-
-        # Y2 axis toggle button (initial text shows what you'll see if you CLICK it)
-        self.btn_toggle_y2 = QPushButton("Show: Inter-Class Variance")
-        self.btn_toggle_y2.setToolTip("Toggle between Peak Count and Inter-Class Variance")
-        self.btn_toggle_y2.setMaximumWidth(220)
-        self.btn_toggle_y2.clicked.connect(self._toggle_y2_axis)
-        plot_header.addWidget(self.btn_toggle_y2)
-
-        layout.addLayout(plot_header)
-
-        # Create matplotlib figure with dark theme
-        self.fig = Figure(figsize=(10, 5), dpi=100, facecolor='#1e1e1e')
-        self.canvas = FigureCanvas(self.fig)
-        self.canvas.setStyleSheet("background-color: #1e1e1e;")
-        layout.addWidget(self.canvas)
-
-        # Add matplotlib navigation toolbar for zoom/pan
-        self.toolbar = NavigationToolbar2QT(self.canvas, self)
-        self.toolbar.setStyleSheet("""
-            QToolBar {
-                background-color: #2d2d2d;
-                border: 1px solid #3e3e42;
-                spacing: 3px;
-            }
-            QToolButton {
-                background-color: #2d2d2d;
-                color: #d4d4d4;
-                border: 1px solid #3e3e42;
-                border-radius: 3px;
-                padding: 3px;
-            }
-            QToolButton:hover {
-                background-color: #3e3e42;
-            }
-            QToolButton:pressed {
-                background-color: #505050;
-            }
-        """)
-        layout.addWidget(self.toolbar)
-
-        # Connect drag events
-        self.canvas.mpl_connect('button_press_event', self._on_mouse_press)
-        self.canvas.mpl_connect('motion_notify_event', self._on_mouse_move)
-        self.canvas.mpl_connect('button_release_event', self._on_mouse_release)
-
-        # Advanced parameters (always visible)
+        # Advanced parameters
         params_group = QGroupBox("Advanced Parameters")
         params_layout = QFormLayout()
 
         self.le_min_dist = QLineEdit(str(self.current_min_dist))
         self.le_min_dist.setToolTip("Minimum time between peaks (seconds)")
+        self.le_min_dist.setMaximumWidth(100)
         params_layout.addRow("Min Peak Distance (s):", self.le_min_dist)
 
-        self.le_threshold_height = QLineEdit("")  # Will be populated after threshold calculation
-        self.le_threshold_height.setToolTip("Absolute height threshold - auto-populated from Otsu's method")
+        self.le_threshold_height = QLineEdit("")
+        self.le_threshold_height.setToolTip("Absolute height threshold")
+        self.le_threshold_height.setMaximumWidth(100)
         params_layout.addRow("Height Threshold:", self.le_threshold_height)
 
         params_group.setLayout(params_layout)
-        layout.addWidget(params_group)
+        left_layout.addWidget(params_group)
 
         # Histogram controls
         histogram_controls_group = QGroupBox("Histogram Controls")
-        histogram_controls_layout = QHBoxLayout()
+        histogram_controls_layout = QVBoxLayout()
 
         # Percentile cutoff control
         from PyQt6.QtWidgets import QSpinBox, QComboBox
-        histogram_controls_layout.addWidget(QLabel("Outlier Cutoff:"))
+        perc_row = QHBoxLayout()
+        perc_row.addWidget(QLabel("Outlier Cutoff:"))
         self.percentile_combo = QComboBox()
         self.percentile_combo.addItems(["90%", "95%", "99%", "100% (None)"])
-        # Set to stored value
         if self.percentile_cutoff == 90:
             self.percentile_combo.setCurrentText("90%")
         elif self.percentile_cutoff == 95:
@@ -288,32 +275,94 @@ class ProminenceThresholdDialog(QDialog):
             self.percentile_combo.setCurrentText("100% (None)")
         self.percentile_combo.setToolTip("Exclude outliers above this percentile from histogram")
         self.percentile_combo.currentTextChanged.connect(self._on_percentile_changed)
-        histogram_controls_layout.addWidget(self.percentile_combo)
-
-        histogram_controls_layout.addSpacing(20)
+        self.percentile_combo.setMaximumWidth(130)
+        perc_row.addWidget(self.percentile_combo)
+        perc_row.addStretch()
+        histogram_controls_layout.addLayout(perc_row)
 
         # Bin count control
-        histogram_controls_layout.addWidget(QLabel("Bins:"))
+        bins_row = QHBoxLayout()
+        bins_row.addWidget(QLabel("Bins:"))
         self.bins_spin = QSpinBox()
-        self.bins_spin.setRange(20, 500)  # Increased max to 500
-        self.bins_spin.setValue(self.num_bins)  # Use stored value
+        self.bins_spin.setRange(20, 500)
+        self.bins_spin.setValue(self.num_bins)
         self.bins_spin.setSingleStep(10)
         self.bins_spin.setToolTip("Number of bins in histogram")
         self.bins_spin.valueChanged.connect(self._on_bins_changed)
-        histogram_controls_layout.addWidget(self.bins_spin)
+        self.bins_spin.setMaximumWidth(80)
+        bins_row.addWidget(self.bins_spin)
+        bins_row.addStretch()
+        histogram_controls_layout.addLayout(bins_row)
 
-        histogram_controls_layout.addStretch()
+        # Y2 toggle - COMMENTED OUT (not needed)
+        # y2_row = QHBoxLayout()
+        # self.btn_toggle_y2 = QPushButton("Show: Inter-Class Variance")
+        # self.btn_toggle_y2.setToolTip("Toggle between Peak Count and Inter-Class Variance")
+        # self.btn_toggle_y2.clicked.connect(self._toggle_y2_axis)
+        # y2_row.addWidget(self.btn_toggle_y2)
+        # y2_row.addStretch()
+        # histogram_controls_layout.addLayout(y2_row)
 
         histogram_controls_group.setLayout(histogram_controls_layout)
-        layout.addWidget(histogram_controls_group)
+        left_layout.addWidget(histogram_controls_group)
 
-        # Dialog buttons
+        left_layout.addStretch()
+        content_layout.addWidget(left_panel)
+
+        # RIGHT PANEL - Plot area
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+
+        # Create matplotlib figure
+        self.fig = Figure(figsize=(10, 5), dpi=100, facecolor='#1e1e1e')
+        self.canvas = FigureCanvas(self.fig)
+        self.canvas.setStyleSheet("background-color: #1e1e1e;")
+
+        # Add navigation toolbar BELOW canvas with blue styling
+        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.toolbar.setObjectName("ProminenceDialogToolbar")
+        self.toolbar.setIconSize(QSize(15, 15))
+        self.toolbar.setMovable(False)
+        self.toolbar.setFloatable(False)
+        self.toolbar.setStyleSheet("""
+        QToolBar#ProminenceDialogToolbar { background: transparent; border: none; padding: 0px; }
+        QToolBar#ProminenceDialogToolbar::separator { background: transparent; width: 0px; height: 0px; }
+        QToolBar#ProminenceDialogToolbar::handle { image: none; width: 0px; height: 0px; }
+        QToolBar#ProminenceDialogToolbar QToolButton {
+            background: #434b5d; color: #eef2f8;
+            border: 1px solid #5a6580; border-radius: 8px;
+            padding: 5px 8px; margin: 2px;
+        }
+        QToolBar#ProminenceDialogToolbar QToolButton:hover { background: #515c72; border-color: #6a7694; }
+        QToolBar#ProminenceDialogToolbar QToolButton:pressed { background: #5f6d88; border-color: #7886a6; }
+        QToolBar#ProminenceDialogToolbar QToolButton:checked {
+            background: #4A90E2; color: white; border-color: #357ABD;
+        }
+        QToolBar#ProminenceDialogToolbar QToolButton:disabled {
+            background: #353b4a; border-color: #444d60; color: #8691a8;
+        }""")
+
+        right_layout.addWidget(self.canvas)
+        right_layout.addWidget(self.toolbar)
+
+        # Connect drag events
+        self.canvas.mpl_connect('button_press_event', self._on_mouse_press)
+        self.canvas.mpl_connect('motion_notify_event', self._on_mouse_move)
+        self.canvas.mpl_connect('button_release_event', self._on_mouse_release)
+
+        content_layout.addWidget(right_panel, stretch=1)
+
+        main_layout.addLayout(content_layout)
+
+        # Dialog buttons at bottom
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
+        main_layout.addWidget(button_box)
 
     def _detect_all_peaks(self):
         """Run peak detection once with minimal threshold."""
@@ -411,10 +460,8 @@ class ProminenceThresholdDialog(QDialog):
             if self.local_min_threshold is not None:
                 print(f"[Valley] Natural valley threshold: {self.local_min_threshold:.4f}")
                 print(f"[Valley] Signal quality score: {self.valley_depth_score:.3f}")
-                self.btn_set_local_min.setEnabled(True)  # Enable button if valley exists
             else:
                 self.valley_depth_score = 0.0
-                self.btn_set_local_min.setEnabled(False)
 
             # Update signal quality display
             self._update_quality_label()
@@ -739,23 +786,13 @@ class ProminenceThresholdDialog(QDialog):
         self.num_bins = value
         self._plot_histogram()
 
-    def _set_to_otsu(self):
-        """Set threshold to Otsu's calculated value."""
-        if self.auto_threshold is not None:
-            self.current_threshold = self.auto_threshold
-            self.lbl_threshold.setText(f"{self.current_threshold:.4f}")
-            self.le_threshold_height.setText(f"{self.current_threshold:.4f}")
-            self.btn_reset.setEnabled(False)  # No need to reset if already at Otsu
-            self._plot_histogram()
-            print(f"[Threshold] Set to Otsu: {self.current_threshold:.4f}")
-
-    def _set_to_local_min(self):
-        """Set threshold to local minimum value."""
+    def _reset_to_valley(self):
+        """Reset threshold to valley (local minimum) value."""
         if self.local_min_threshold is not None:
             self.current_threshold = self.local_min_threshold
             self.lbl_threshold.setText(f"{self.current_threshold:.4f}")
             self.le_threshold_height.setText(f"{self.current_threshold:.4f}")
-            self.btn_reset.setEnabled(True)  # Enable reset since we moved away from Otsu
+            self.btn_reset.setEnabled(False)  # Disable after resetting
             self._plot_histogram()
 
             # Real-time update to main plot
@@ -766,7 +803,7 @@ class ProminenceThresholdDialog(QDialog):
                 except Exception:
                     pass
 
-            print(f"[Threshold] Set to Local Min: {self.current_threshold:.4f}")
+            print(f"[Threshold] Reset to Valley: {self.current_threshold:.4f}")
 
     def _toggle_y2_axis(self):
         """Toggle between peak count and inter-class variance on y2 axis."""
@@ -821,6 +858,10 @@ class ProminenceThresholdDialog(QDialog):
                                        label=f'Peak Height Distribution (n={len(peaks_for_hist)})',
                                        range=hist_range)
 
+            # Store patches and bins for fast updating during drag
+            self.histogram_patches = patches
+            self.histogram_bins = bins
+
             # Color bars based on threshold (gray = below, red = above)
             if self.current_threshold is not None:
                 for i, patch in enumerate(patches):
@@ -869,16 +910,16 @@ class ProminenceThresholdDialog(QDialog):
                         gauss2_counts = w_g2 * gauss2_comp * scale
 
                         # Plot individual components with different styles
-                        ax1.plot(x, exp_counts, color='#ff8800', linewidth=1.5,
+                        ax1.plot(x, exp_counts, color='#ffaa33', linewidth=1.5,
                                 linestyle='--', alpha=0.6, label='Exponential (noise)', zorder=3)
                         ax1.plot(x, gauss1_counts, color='#00ff88', linewidth=1.5,
                                 linestyle='--', alpha=0.6, label=f'Gaussian 1 (μ={mu1:.2f})', zorder=3)
-                        ax1.plot(x, gauss2_counts, color='#8800ff', linewidth=1.5,
+                        ax1.plot(x, gauss2_counts, color='#bb66ff', linewidth=1.5,
                                 linestyle='--', alpha=0.6, label=f'Gaussian 2 (μ={mu2:.2f})', zorder=3)
 
-                        # Plot combined fit
+                        # Plot combined fit (thinner line)
                         fitted_counts = fitted_curve * scale
-                        ax1.plot(x, fitted_counts, color='#ff00ff', linewidth=2.5,
+                        ax1.plot(x, fitted_counts, color='#ff00ff', linewidth=2.0,
                                 linestyle='-', alpha=0.9, label=f'Combined Fit (R²={r_squared:.3f})', zorder=4)
 
                     else:  # 1gauss model
@@ -897,14 +938,14 @@ class ProminenceThresholdDialog(QDialog):
                         gauss_counts = (1 - w_exp) * gauss_comp * scale
 
                         # Plot individual components
-                        ax1.plot(x, exp_counts, color='#ff8800', linewidth=1.5,
+                        ax1.plot(x, exp_counts, color='#ffaa33', linewidth=1.5,
                                 linestyle='--', alpha=0.6, label='Exponential (noise)', zorder=3)
                         ax1.plot(x, gauss_counts, color='#00ff88', linewidth=1.5,
                                 linestyle='--', alpha=0.6, label=f'Gaussian (μ={mu:.2f})', zorder=3)
 
-                        # Plot combined fit
+                        # Plot combined fit (thinner line)
                         fitted_counts = fitted_curve * scale
-                        ax1.plot(x, fitted_counts, color='#00ffff', linewidth=2.5,
+                        ax1.plot(x, fitted_counts, color='#00ffff', linewidth=2.0,
                                 linestyle='-', alpha=0.9, label=f'Combined Fit (R²={r_squared:.3f})', zorder=4)
 
             ax1.set_xlabel('Peak Height', fontsize=11, color='#d4d4d4')
@@ -912,18 +953,18 @@ class ProminenceThresholdDialog(QDialog):
 
             # Title with outlier count if applicable
             if n_excluded > 0:
-                title_text = f'Peak Height Distribution (Otsu\'s Method)\n{n_excluded} outlier peaks excluded (above {self.percentile_cutoff}th percentile)'
+                title_text = f'Peak Height Distribution\n{n_excluded} outlier peaks excluded (above {self.percentile_cutoff}th percentile)'
             else:
-                title_text = 'Peak Height Distribution (Otsu\'s Method)'
+                title_text = 'Peak Height Distribution'
             ax1.set_title(title_text, fontsize=12, fontweight='bold', color='#d4d4d4')
             ax1.grid(True, alpha=0.2, axis='y', color='#666666')
 
-            # Draw FIXED Otsu reference line (thin, gray, dashed)
-            if self.auto_threshold is not None:
-                self.otsu_reference_line = ax1.axvline(self.auto_threshold, color='#888888',
-                                                       linestyle=':', linewidth=1.0,
-                                                       label=f'Otsu = {self.auto_threshold:.4f}',
-                                                       zorder=1)  # Behind draggable line
+            # COMMENTED OUT - Otsu reference line not needed
+            # # Draw FIXED Otsu reference line (thin, gray, dashed) - no label to simplify legend
+            # if self.auto_threshold is not None:
+            #     self.otsu_reference_line = ax1.axvline(self.auto_threshold, color='#888888',
+            #                                            linestyle=':', linewidth=1.0,
+            #                                            zorder=1)  # Behind draggable line
 
             # Draw local minimum line (thin, cyan, dotted)
             if hasattr(self, 'local_min_threshold') and self.local_min_threshold is not None:
@@ -932,70 +973,69 @@ class ProminenceThresholdDialog(QDialog):
                            label=f'Local Min = {self.local_min_threshold:.4f}',
                            zorder=1)
 
-            # Draw draggable threshold line (red, thicker)
+            # Draw draggable threshold line (red, thicker) - no label to simplify legend
             if self.current_threshold is not None:
                 self.threshold_vline = ax1.axvline(self.current_threshold, color='red',
                                                    linestyle='--', linewidth=1.5,
-                                                   label=f'Current = {self.current_threshold:.4f}',
                                                    picker=5, zorder=2)  # Pickable within 5 pixels
 
-            # Secondary y-axis: Toggle between peak count and inter-class variance
-            ax2 = ax1.twinx()
+            # COMMENTED OUT - Y2 axis not needed
+            # # Secondary y-axis: Toggle between peak count and inter-class variance
+            # ax2 = ax1.twinx()
+            #
+            # # Apply dark theme to second y-axis
+            # ax2.spines['right'].set_color('#666666')
+            # ax2.spines['left'].set_color('#666666')
+            # ax2.spines['top'].set_color('#666666')
+            # ax2.spines['bottom'].set_color('#666666')
+            #
+            # if self.y2_mode == "peak_count":
+            #     # Compute peak count vs threshold (using filtered range)
+            #     if self.percentile_95 is not None:
+            #         thresh_range = np.linspace(peak_heights.min(), self.percentile_95, 100)
+            #     else:
+            #         thresh_range = np.linspace(peak_heights.min(), peak_heights.max(), 100)
+            #
+            #     peak_counts = [np.sum(peak_heights >= t) for t in thresh_range]
+            #
+            #     # No label to simplify legend
+            #     ax2.plot(thresh_range, peak_counts, color='#66cc66', linewidth=2, alpha=0.6)
+            #     ax2.set_ylabel('Peaks Above Threshold', fontsize=11, color='#66cc66')
+            #     ax2.tick_params(axis='y', labelcolor='#66cc66')
+            #
+            #     # Mark current peak count (no horizontal line to avoid obscuring label)
+            #     if self.current_threshold is not None:
+            #         current_count = np.sum(peak_heights >= self.current_threshold)
+            #         ax2.plot(self.current_threshold, current_count, 'ro', markersize=8)
+            #         ax2.text(self.current_threshold, current_count, f'  {current_count} peaks',
+            #                 va='center', fontsize=9, color='#ff6666')
+            #
+            # else:  # variance mode
+            #     # Plot inter-class variance
+            #     if self.inter_class_variance_curve is not None:
+            #         var_thresh, var_values = self.inter_class_variance_curve
+            #         ax2.plot(var_thresh, var_values, color='#cc66cc', linewidth=2, alpha=0.6,
+            #                 label='Inter-Class Variance')
+            #         ax2.set_ylabel('Inter-Class Variance', fontsize=11, color='#cc66cc')
+            #         ax2.tick_params(axis='y', labelcolor='#cc66cc')
+            #
+            #         # Mark maximum variance point
+            #         max_idx = np.argmax(var_values)
+            #         ax2.plot(var_thresh[max_idx], var_values[max_idx], color='#cc66cc',
+            #                 marker='o', markersize=8)
+            #
+            #         # Mark current variance point (no horizontal line to avoid obscuring labels)
+            #         if self.current_threshold is not None:
+            #             # Find variance at current threshold
+            #             closest_idx = np.argmin(np.abs(var_thresh - self.current_threshold))
+            #             current_var = var_values[closest_idx]
+            #             ax2.plot(self.current_threshold, current_var, 'ro', markersize=8)
+            #             ax2.text(self.current_threshold, current_var, f'  Var={current_var:.0f}',
+            #                     va='center', fontsize=9, color='#ff6666')
 
-            # Apply dark theme to second y-axis
-            ax2.spines['right'].set_color('#666666')
-            ax2.spines['left'].set_color('#666666')
-            ax2.spines['top'].set_color('#666666')
-            ax2.spines['bottom'].set_color('#666666')
-
-            if self.y2_mode == "peak_count":
-                # Compute peak count vs threshold (using filtered range)
-                if self.percentile_95 is not None:
-                    thresh_range = np.linspace(peak_heights.min(), self.percentile_95, 100)
-                else:
-                    thresh_range = np.linspace(peak_heights.min(), peak_heights.max(), 100)
-
-                peak_counts = [np.sum(peak_heights >= t) for t in thresh_range]
-
-                ax2.plot(thresh_range, peak_counts, color='#66cc66', linewidth=2, alpha=0.6,
-                        label='Peaks Above Threshold')
-                ax2.set_ylabel('Peaks Above Threshold', fontsize=11, color='#66cc66')
-                ax2.tick_params(axis='y', labelcolor='#66cc66')
-
-                # Mark current peak count (no horizontal line to avoid obscuring label)
-                if self.current_threshold is not None:
-                    current_count = np.sum(peak_heights >= self.current_threshold)
-                    ax2.plot(self.current_threshold, current_count, 'ro', markersize=8)
-                    ax2.text(self.current_threshold, current_count, f'  {current_count} peaks',
-                            va='center', fontsize=9, color='#ff6666')
-
-            else:  # variance mode
-                # Plot inter-class variance
-                if self.inter_class_variance_curve is not None:
-                    var_thresh, var_values = self.inter_class_variance_curve
-                    ax2.plot(var_thresh, var_values, color='#cc66cc', linewidth=2, alpha=0.6,
-                            label='Inter-Class Variance')
-                    ax2.set_ylabel('Inter-Class Variance', fontsize=11, color='#cc66cc')
-                    ax2.tick_params(axis='y', labelcolor='#cc66cc')
-
-                    # Mark maximum variance point
-                    max_idx = np.argmax(var_values)
-                    ax2.plot(var_thresh[max_idx], var_values[max_idx], color='#cc66cc',
-                            marker='o', markersize=8)
-
-                    # Mark current variance point (no horizontal line to avoid obscuring labels)
-                    if self.current_threshold is not None:
-                        # Find variance at current threshold
-                        closest_idx = np.argmin(np.abs(var_thresh - self.current_threshold))
-                        current_var = var_values[closest_idx]
-                        ax2.plot(self.current_threshold, current_var, 'ro', markersize=8)
-                        ax2.text(self.current_threshold, current_var, f'  Var={current_var:.0f}',
-                                va='center', fontsize=9, color='#ff6666')
-
-            # Combine legends with dark theme styling
+            # Legend with dark theme styling
             lines1, labels1 = ax1.get_legend_handles_labels()
-            lines2, labels2 = ax2.get_legend_handles_labels()
-            legend = ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right',
+            legend = ax1.legend(lines1, labels1, loc='upper right',
                                fontsize=9, facecolor='#2d2d2d', edgecolor='#666666')
             legend.get_frame().set_alpha(0.9)
             for text in legend.get_texts():
@@ -1028,7 +1068,7 @@ class ProminenceThresholdDialog(QDialog):
                     return
 
     def _on_mouse_move(self, event):
-        """Handle mouse drag to adjust threshold."""
+        """Handle mouse drag to adjust threshold (optimized - no full replot)."""
         if not self.is_dragging or event.inaxes is None:
             return
 
@@ -1038,16 +1078,27 @@ class ProminenceThresholdDialog(QDialog):
             self.current_threshold = float(new_threshold)
             self.lbl_threshold.setText(f"{self.current_threshold:.4f}")
 
-            # Enable reset button if threshold changed
-            if abs(self.current_threshold - self.auto_threshold) > 0.001:
-                self.btn_reset.setEnabled(True)
-            else:
-                self.btn_reset.setEnabled(False)
+            # Enable reset button if threshold changed from valley
+            if self.local_min_threshold is not None:
+                if abs(self.current_threshold - self.local_min_threshold) > 0.001:
+                    self.btn_reset.setEnabled(True)
+                else:
+                    self.btn_reset.setEnabled(False)
 
             # Update height threshold field to match dragged threshold
             self.le_threshold_height.setText(f"{self.current_threshold:.4f}")
 
-            # Real-time update to main plot
+            # OPTIMIZED: Just update line position and bar colors, don't replot everything
+            # Don't update main plot during drag - too slow!
+            self._update_threshold_line_fast(self.current_threshold)
+
+    def _on_mouse_release(self, event):
+        """Handle mouse release after drag."""
+        if self.is_dragging:
+            self.is_dragging = False
+            self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
+
+            # Update main plot ONCE after drag is complete
             if self.parent() is not None:
                 try:
                     self.parent().plot_host.update_threshold_line(self.current_threshold)
@@ -1055,14 +1106,36 @@ class ProminenceThresholdDialog(QDialog):
                 except Exception as e:
                     pass  # Silently fail if main plot update doesn't work
 
-            # Redraw plot
-            self._plot_histogram()
+    def _update_threshold_line_fast(self, new_threshold):
+        """
+        Fast update of threshold line position and bar colors.
+        This is MUCH faster than calling _plot_histogram() on every mouse move.
+        """
+        if self.threshold_vline is None or self.histogram_patches is None:
+            return
 
-    def _on_mouse_release(self, event):
-        """Handle mouse release after drag."""
-        if self.is_dragging:
-            self.is_dragging = False
-            self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
+        try:
+            # Update threshold line position
+            self.threshold_vline.set_xdata([new_threshold, new_threshold])
+
+            # Recolor histogram bars based on new threshold
+            bins = self.histogram_bins
+            for i, patch in enumerate(self.histogram_patches):
+                if bins[i] < new_threshold:
+                    patch.set_facecolor('gray')  # Gray for "noise"
+                    patch.set_alpha(0.5)
+                else:
+                    patch.set_facecolor('red')  # Red for "breaths"
+                    patch.set_alpha(0.5)
+
+            # Fast redraw without clearing figure
+            # This avoids the overhead of tight_layout, axis clearing, etc.
+            self.canvas.draw_idle()
+
+        except Exception as e:
+            # If fast update fails, fall back to full replot
+            print(f"[Fast Update] Failed: {e}")
+            self._plot_histogram()
 
     def _reset_threshold(self):
         """Reset threshold to auto-detected value."""
