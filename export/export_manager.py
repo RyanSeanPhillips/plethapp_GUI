@@ -82,7 +82,21 @@ class ExportManager:
     """Manages all data export operations for the main window."""
 
     # metrics we won't include in CSV exports and PDFs
-    _EXCLUDE_FOR_CSV = {"d1", "d2", "eupnic", "apnea"}
+    # Note: These metrics are still computed and available for ML export,
+    # but hidden from user-facing CSV/PDF outputs for clarity and performance
+    _EXCLUDE_FOR_CSV = {
+        "d1", "d2", "eupnic", "apnea",
+        # Phase 2.2: Sigh detection features (for future ML use)
+        "n_inflections", "rise_variability", "n_shoulder_peaks",
+        "shoulder_prominence", "rise_autocorr", "peak_sharpness",
+        "trough_sharpness", "skewness", "kurtosis",
+        # Phase 2.3 Group A: Shape & ratio metrics (for future ML use)
+        "peak_to_trough", "amp_ratio", "ti_te_ratio",
+        "area_ratio", "total_area", "ibi",
+        # Phase 2.3 Group B: Normalized metrics (for future ML use)
+        "amp_insp_norm", "amp_exp_norm", "peak_to_trough_norm",
+        "prominence_norm", "ibi_norm", "ti_norm", "te_norm",
+    }
 
     def __init__(self, main_window):
         """
@@ -491,7 +505,21 @@ class ExportManager:
 
 
     # metrics we won't include in CSV exports and PDFs
-    _EXCLUDE_FOR_CSV = {"d1", "d2", "eupnic", "apnea"}
+    # Note: These metrics are still computed and available for ML export,
+    # but hidden from user-facing CSV/PDF outputs for clarity and performance
+    _EXCLUDE_FOR_CSV = {
+        "d1", "d2", "eupnic", "apnea",
+        # Phase 2.2: Sigh detection features (for future ML use)
+        "n_inflections", "rise_variability", "n_shoulder_peaks",
+        "shoulder_prominence", "rise_autocorr", "peak_sharpness",
+        "trough_sharpness", "skewness", "kurtosis",
+        # Phase 2.3 Group A: Shape & ratio metrics (for future ML use)
+        "peak_to_trough", "amp_ratio", "ti_te_ratio",
+        "area_ratio", "total_area", "ibi",
+        # Phase 2.3 Group B: Normalized metrics (for future ML use)
+        "amp_insp_norm", "amp_exp_norm", "peak_to_trough_norm",
+        "prominence_norm", "ibi_norm", "ti_norm", "te_norm",
+    }
 
 
     def _metric_keys_in_order(self):
@@ -922,7 +950,19 @@ class ExportManager:
                 omitted_masks_cache[s] = None  # No masking needed
 
             for k in all_keys:
-                y2 = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
+                # Special handling for probability metrics - use ALL peaks (including noise)
+                if k in ('p_noise', 'p_breath'):
+                    all_pks_data = st.all_peaks_by_sweep.get(s, None)
+                    all_br = st.all_breaths_by_sweep.get(s, None)
+                    if all_pks_data is not None and all_br is not None:
+                        all_pks = all_pks_data['indices']
+                        y2 = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, all_pks, all_br, sweep=s)
+                    else:
+                        # Fallback if all_peaks not available
+                        y2 = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
+                else:
+                    y2 = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
+
                 if y2 is not None and len(y2) == N:
                     # Apply cached omitted mask if it exists
                     omit_mask = omitted_masks_cache[s]
@@ -958,7 +998,18 @@ class ExportManager:
                 traces_for_sweep = {}
                 for k in keys_for_cta:
                     if k in metrics.METRICS:
-                        trace = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
+                        # Special handling for probability metrics - use ALL peaks (including noise)
+                        if k in ('p_noise', 'p_breath'):
+                            all_pks_data = st.all_peaks_by_sweep.get(s, None)
+                            all_br = st.all_breaths_by_sweep.get(s, None)
+                            if all_pks_data is not None and all_br is not None:
+                                all_pks = all_pks_data['indices']
+                                trace = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, all_pks, all_br, sweep=s)
+                            else:
+                                trace = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
+                        else:
+                            trace = self._compute_metric_trace(k, st.t, y_proc, st.sr_hz, pks, br, sweep=s)
+
                         # Apply cached omitted mask if it exists (reuse from main loop)
                         if trace is not None:
                             omit_mask = omitted_masks_cache.get(s)

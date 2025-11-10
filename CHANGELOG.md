@@ -9,28 +9,29 @@ All notable changes to PhysioMetrics will be documented in this file.
 
 ---
 
-## [1.0.13] - 2024-11-XX
+## [1.0.14] - 2024-11-10
 
 ### Added
-- Signal quality assessment in Auto-Detect dialog
-  - Exponential + Gaussian mixture model fitting to peak height histogram
-  - Automatic valley detection for optimal threshold placement
-  - Color-coded signal quality metric (Excellent → Very Poor)
-  - Visual curve fitting display with individual components
-- GitHub release update checker
-  - Automatic check for new versions on GitHub
-  - Non-intrusive notification with download link
-  - Background thread with graceful error handling
+- **Rebranded to PhysioMetrics** - Professional name for broader scope
+  - Updated all application branding, documentation, and metadata
+  - New three-column About dialog layout with author and funding information
+  - Added K01 funding attribution (NIDA K01DA058543)
+  - Created CITATION.cff for proper software citation
+- Probability metrics for breath classification
+  - P(noise) and P(breath) calculated from auto-threshold model
+  - Computed on all detected peaks (including noise) for ML training
 
 ### Fixed
-- Histogram display now uses correct parameters (99th percentile, 200 bins) on first load
-- Threshold line can now be dragged even when Y2 metric is displayed
-- Y-axis autoscaling now works consistently using percentile-based scaling (1st-99th + 25% padding)
-- Resolved Y2 axis blocking threshold line dragging by adjusting z-order
+- Fixed P(noise)/P(breath) metrics to use all peaks (including noise)
+- Fixed model parameter storage for probability metric calculation
 
 ### Changed
-- Default threshold changed from Otsu's method to valley threshold (local minimum)
-- Improved histogram parameter calculation during peak detection
+- Hidden 22 experimental ML metrics from CSV/PDF exports for clarity and performance
+  - Metrics still computed for future ML work, just not displayed to users
+  - Phase 2.2: Sigh detection features (9 metrics)
+  - Phase 2.3 Group A: Shape & ratio metrics (6 metrics)
+  - Phase 2.3 Group B: Normalized metrics (7 metrics)
+- Simplified application description for future extensibility
 
 ### Known Issues
 - Zero crossing markers may appear slightly offset on recordings with large DC offset removed by high-pass filtering

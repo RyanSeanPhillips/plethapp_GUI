@@ -1970,7 +1970,8 @@ class MainWindow(QMainWindow):
             peak_heights: Array of detected peak heights
 
         Returns:
-            float: Valley location, or None if fitting fails
+            tuple: (valley_threshold, model_params_dict) or (None, None) if fitting fails
+            model_params_dict contains: lambda_exp, mu1, sigma1, mu2, sigma2, w_exp, w_g1, w_g2
         """
         try:
             from scipy.optimize import curve_fit
@@ -1980,7 +1981,7 @@ class MainWindow(QMainWindow):
             peaks_for_hist = peak_heights[peak_heights <= percentile_95]
 
             if len(peaks_for_hist) < 10:
-                return None
+                return (None, None)
 
             # Create histogram
             hist_range = (peaks_for_hist.min(), percentile_95)
@@ -2022,7 +2023,20 @@ class MainWindow(QMainWindow):
                     # Find valley between 0 and first Gaussian peak
                     search_end_idx = np.argmin(np.abs(bin_centers - popt[1]))
                     valley_idx = np.argmin(fitted[:search_end_idx])
-                    return float(bin_centers[valley_idx])
+                    threshold = float(bin_centers[valley_idx])
+
+                    # Store model parameters for probability metrics
+                    model_params = {
+                        'lambda_exp': float(popt[0]),
+                        'mu1': float(popt[1]),
+                        'sigma1': float(popt[2]),
+                        'mu2': float(popt[3]),
+                        'sigma2': float(popt[4]),
+                        'w_exp': float(popt[5]),
+                        'w_g1': float(popt[6]),
+                        'w_g2': float(max(0, 1 - popt[5] - popt[6]))
+                    }
+                    return (threshold, model_params)
             except:
                 pass
 
@@ -2051,13 +2065,26 @@ class MainWindow(QMainWindow):
                 # Find valley between 0 and Gaussian peak
                 search_end_idx = np.argmin(np.abs(bin_centers - popt[1]))
                 valley_idx = np.argmin(fitted[:search_end_idx])
-                return float(bin_centers[valley_idx])
+                threshold = float(bin_centers[valley_idx])
 
-            return None
+                # Store model parameters for probability metrics (1-Gaussian fallback)
+                model_params = {
+                    'lambda_exp': float(popt[0]),
+                    'mu1': float(popt[1]),
+                    'sigma1': float(popt[2]),
+                    'mu2': float(popt[1]),  # Same as mu1 for 1-Gaussian
+                    'sigma2': float(popt[2]),  # Same as sigma1
+                    'w_exp': float(popt[3]),
+                    'w_g1': float(1 - popt[3]),
+                    'w_g2': 0.0  # No second Gaussian in fallback
+                }
+                return (threshold, model_params)
+
+            return (None, None)
 
         except Exception as e:
             print(f"[Valley Fit] Error: {e}")
-            return None
+            return (None, None)
 
     def _auto_detect_prominence_silent(self):
         """
@@ -2127,15 +2154,23 @@ class MainWindow(QMainWindow):
 
             # Calculate local minimum threshold (valley between noise and signal)
             # This is more robust than Otsu for breath signals
-            local_min_threshold = self._calculate_local_minimum_threshold_silent(peak_heights)
+            local_min_threshold, model_params = self._calculate_local_minimum_threshold_silent(peak_heights)
 
             # Choose threshold: prefer local minimum if available, fallback to Otsu
             if local_min_threshold is not None:
                 chosen_threshold = local_min_threshold
                 print(f"[Auto-Detect] Using valley threshold: {chosen_threshold:.4f} (Otsu: {optimal_height:.4f})")
+
+                # Store model parameters for probability metrics
+                import core.metrics as metrics
+                metrics.set_threshold_model_params(model_params)
+                print(f"[Auto-Detect] Stored model parameters for P(noise)/P(breath) calculation")
             else:
                 chosen_threshold = optimal_height
                 print(f"[Auto-Detect] Using Otsu threshold: {chosen_threshold:.4f} (no valley found)")
+                # Clear model parameters if valley fit failed
+                import core.metrics as metrics
+                metrics.set_threshold_model_params(None)
 
             # Store and populate spinbox with auto-detected value
             # Use same value for both height and prominence thresholds
