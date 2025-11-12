@@ -189,7 +189,21 @@ class SaveMetaDialog(QDialog):
         self.chk_save_session.setToolTip("Save analysis session (.pleth.npz) - allows resuming work later (~8 MB, <1s)")
         self.chk_save_session.setStyleSheet(small_font)
 
-        # Arrange in 3 columns x 2 rows
+        self.chk_save_ml_training = QCheckBox("ML Training Data", self)
+        self.chk_save_ml_training.setChecked(False)  # Off by default (optional feature)
+        self.chk_save_ml_training.setToolTip("Export peak metrics + user edits for ML model training (saved to ML_Training_Data folder as .npz)")
+        self.chk_save_ml_training.setStyleSheet(small_font)
+
+        self.chk_ml_include_waveforms = QCheckBox("+ Waveform Cutouts", self)
+        self.chk_ml_include_waveforms.setChecked(False)  # Off by default (increases file size)
+        self.chk_ml_include_waveforms.setToolTip("Include raw waveform segments around each peak for neural network training (~10x larger files)")
+        self.chk_ml_include_waveforms.setStyleSheet(small_font + " padding-left: 20px;")  # Indent to show it's a sub-option
+        self.chk_ml_include_waveforms.setEnabled(False)  # Disabled until ML training is checked
+
+        # Enable/disable waveform checkbox based on ML training checkbox
+        self.chk_save_ml_training.toggled.connect(self.chk_ml_include_waveforms.setEnabled)
+
+        # Arrange in 3 columns x 4 rows (added rows for ML data)
         # Row 0: NPZ, Timeseries, Breaths
         export_grid.addWidget(self.chk_save_npz, 0, 0)
         export_grid.addWidget(self.chk_save_timeseries, 0, 1)
@@ -198,6 +212,10 @@ class SaveMetaDialog(QDialog):
         export_grid.addWidget(self.chk_save_events, 1, 0)
         export_grid.addWidget(self.chk_save_pdf, 1, 1)
         export_grid.addWidget(self.chk_save_session, 1, 2)
+        # Row 2: ML Training Data
+        export_grid.addWidget(self.chk_save_ml_training, 2, 0, 1, 2)  # Spans 2 columns
+        # Row 3: Waveform cutouts (sub-option, indented)
+        export_grid.addWidget(self.chk_ml_include_waveforms, 3, 0, 1, 3)  # Spans all columns
 
         # Add checkbox grid to container
         export_container_layout.addWidget(export_widget, 1, 0, 1, 3)  # Spans 3 columns
@@ -306,4 +324,6 @@ class SaveMetaDialog(QDialog):
             "save_events_csv": bool(self.chk_save_events.isChecked()),
             "save_pdf": bool(self.chk_save_pdf.isChecked()),
             "save_session": bool(self.chk_save_session.isChecked()),
+            "save_ml_training": bool(self.chk_save_ml_training.isChecked()),
+            "ml_include_waveforms": bool(self.chk_ml_include_waveforms.isChecked()),
         }

@@ -1133,3 +1133,198 @@ def _d1_lowpass20(y: np.ndarray, sr_hz: float, cutoff_hz: float = 20.0) -> np.nd
 
     # No sampling rate — unscaled gradient (ZCs still valid)
     return np.gradient(y)
+
+
+def compute_peak_candidate_metrics(y: np.ndarray,
+                                   all_peak_indices: np.ndarray,
+                                   breath_events: Dict[str, np.ndarray],
+                                   sr_hz: float,
+                                   p_noise: np.ndarray = None,
+                                   p_breath: np.ndarray = None) -> list[dict]:
+    """
+    Compute comprehensive metrics for each peak to enable ML-driven
+    merge detection, noise classification, and sigh detection.
+
+    NO hardcoded rules - just collect the data for ML to learn from!
+
+    Args:
+        y: Processed signal (1D array)
+        all_peak_indices: All detected peaks (including noise)
+        breath_events: Dict with 'onsets', 'offsets', 'expmins', 'expoffs'
+        sr_hz: Sampling rate
+        p_noise: Optional P(noise) probability for each peak
+        p_breath: Optional P(breath) probability for each peak
+
+    Returns:
+        List of dicts, one per peak, with comprehensive metrics
+    """
+    all_peak_indices = np.asarray(all_peak_indices, dtype=int)
+    y = np.asarray(y, dtype=float)
+
+    if len(all_peak_indices) == 0:
+        return []
+
+    # Extract breath event arrays
+    onsets = breath_events.get('onsets', np.array([]))
+    offsets = breath_events.get('offsets', np.array([]))
+    expmins = breath_events.get('expmins', np.array([]))
+
+    # Pre-compute gap statistics for normalization
+    all_gaps = np.diff(all_peak_indices) / sr_hz if len(all_peak_indices) > 1 else np.array([])
+    median_gap = np.median(all_gaps) if len(all_gaps) > 0 else 1.0
+
+    # Pre-compute amplitude statistics for normalization
+    peak_amplitudes = y[all_peak_indices]
+    median_amplitude = np.median(peak_amplitudes) if len(peak_amplitudes) > 0 else 1.0
+
+    metrics = []
+
+    for i, pk_idx in enumerate(all_peak_indices):
+        # Basic features
+        peak_amplitude = y[pk_idx]
+
+        # Left/right neighbors
+        prev_pk = all_peak_indices[i-1] if i > 0 else None
+        next_pk = all_peak_indices[i+1] if i < len(all_peak_indices)-1 else None
+
+        # === TIMING METRICS ===
+
+        # Gap to previous peak (absolute seconds)
+        gap_to_prev = (pk_idx - prev_pk) / sr_hz if prev_pk is not None else None
+
+        # Gap to next peak (absolute seconds)
+        gap_to_next = (next_pk - pk_idx) / sr_hz if next_pk is not None else None
+
+        # NORMALIZED gap metrics (relative to recording distribution)
+        gap_to_prev_normalized = gap_to_prev / median_gap if gap_to_prev is not None else None
+        gap_to_next_normalized = gap_to_next / median_gap if gap_to_next is not None else None
+
+        # === TROUGH METRICS (for merge detection) ===
+
+        # Trough depth to PREVIOUS peak
+        trough_depth_prev = None
+        trough_ratio_prev = None
+        trough_value_prev = None
+        if prev_pk is not None:
+            trough_idx_prev = prev_pk + np.argmin(y[prev_pk:pk_idx])
+            trough_value_prev = y[trough_idx_prev]
+            trough_depth_prev = min(y[prev_pk], y[pk_idx]) - trough_value_prev
+            combined_amplitude = (y[prev_pk] + y[pk_idx]) / 2
+            trough_ratio_prev = trough_depth_prev / combined_amplitude if combined_amplitude > 0 else 0
+
+        # Trough depth to NEXT peak
+        trough_depth_next = None
+        trough_ratio_next = None
+        trough_value_next = None
+        if next_pk is not None:
+            trough_idx_next = pk_idx + np.argmin(y[pk_idx:next_pk])
+            trough_value_next = y[trough_idx_next]
+            trough_depth_next = min(y[pk_idx], y[next_pk]) - trough_value_next
+            combined_amplitude = (y[pk_idx] + y[next_pk]) / 2
+            trough_ratio_next = trough_depth_next / combined_amplitude if combined_amplitude > 0 else 0
+
+        # === PROMINENCE ASYMMETRY ===
+
+        # Left prominence (relative to previous trough)
+        left_prominence = None
+        if prev_pk is not None:
+            left_trough = np.min(y[prev_pk:pk_idx])
+            left_prominence = y[pk_idx] - left_trough
+
+        # Right prominence (relative to next trough)
+        right_prominence = None
+        if next_pk is not None:
+            right_trough = np.min(y[pk_idx:next_pk])
+            right_prominence = y[pk_idx] - right_trough
+
+        # Asymmetry ratio (0 = highly asymmetric, 1 = symmetric)
+        prom_asymmetry = None
+        if left_prominence is not None and right_prominence is not None and max(left_prominence, right_prominence) > 0:
+            prom_asymmetry = min(left_prominence, right_prominence) / max(left_prominence, right_prominence)
+
+        # === ONSET POSITION (strong indicator of shoulder peak) ===
+
+        # Does the onset start above zero?
+        onset_idx = onsets[i] if i < len(onsets) else None
+        onset_value = y[onset_idx] if onset_idx is not None else None
+        onset_above_zero = onset_value > 0 if onset_value is not None else None
+
+        # How far above zero? (normalized by peak amplitude)
+        onset_height_ratio = onset_value / peak_amplitude if (onset_value is not None and peak_amplitude > 0) else None
+
+        # === AMPLITUDE METRICS (for noise detection) ===
+
+        # Absolute amplitude
+        amp_absolute = peak_amplitude
+
+        # Normalized amplitude (relative to recording median)
+        amp_normalized = peak_amplitude / median_amplitude if median_amplitude > 0 else 0
+
+        # === BREATH EVENT METRICS ===
+
+        # Get offset for this breath
+        offset_idx = offsets[i] if i < len(offsets) else None
+        offset_value = y[offset_idx] if offset_idx is not None else None
+
+        # Get expiratory minimum for this breath
+        expmin_idx = expmins[i] if i < len(expmins) else None
+        expmin_value = y[expmin_idx] if expmin_idx is not None else None
+
+        # Inspiratory time (onset to peak)
+        ti = (pk_idx - onset_idx) / sr_hz if onset_idx is not None else None
+
+        # Expiratory time (offset to next onset)
+        next_onset_idx = onsets[i+1] if i+1 < len(onsets) else None
+        te = (next_onset_idx - offset_idx) / sr_hz if (offset_idx is not None and next_onset_idx is not None) else None
+
+        # Store all metrics
+        metrics.append({
+            # Identifiers
+            'peak_idx': int(pk_idx),
+            'peak_number': int(i),
+
+            # Timing (absolute)
+            'gap_to_prev': float(gap_to_prev) if gap_to_prev is not None else None,
+            'gap_to_next': float(gap_to_next) if gap_to_next is not None else None,
+
+            # Timing (normalized) - NORMALIZED BY RECORDING DISTRIBUTION
+            'gap_to_prev_norm': float(gap_to_prev_normalized) if gap_to_prev_normalized is not None else None,
+            'gap_to_next_norm': float(gap_to_next_normalized) if gap_to_next_normalized is not None else None,
+
+            # Trough depth (merge indicators)
+            'trough_depth_prev': float(trough_depth_prev) if trough_depth_prev is not None else None,
+            'trough_ratio_prev': float(trough_ratio_prev) if trough_ratio_prev is not None else None,
+            'trough_value_prev': float(trough_value_prev) if trough_value_prev is not None else None,
+            'trough_depth_next': float(trough_depth_next) if trough_depth_next is not None else None,
+            'trough_ratio_next': float(trough_ratio_next) if trough_ratio_next is not None else None,
+            'trough_value_next': float(trough_value_next) if trough_value_next is not None else None,
+
+            # Prominence asymmetry
+            'left_prominence': float(left_prominence) if left_prominence is not None else None,
+            'right_prominence': float(right_prominence) if right_prominence is not None else None,
+            'prom_asymmetry': float(prom_asymmetry) if prom_asymmetry is not None else None,
+
+            # Onset position - STRONG INDICATOR OF SHOULDER PEAK
+            'onset_above_zero': bool(onset_above_zero) if onset_above_zero is not None else None,
+            'onset_height_ratio': float(onset_height_ratio) if onset_height_ratio is not None else None,
+            'onset_value': float(onset_value) if onset_value is not None else None,
+
+            # Amplitude (for noise detection)
+            'amplitude_absolute': float(amp_absolute),
+            'amplitude_normalized': float(amp_normalized),
+
+            # Breath event values
+            'offset_value': float(offset_value) if offset_value is not None else None,
+            'expmin_value': float(expmin_value) if expmin_value is not None else None,
+
+            # Timing metrics
+            'ti': float(ti) if ti is not None else None,
+            'te': float(te) if te is not None else None,
+
+            # Probability metrics (from threshold model)
+            # Note: p_noise/p_breath are full-length arrays, sample at peak index
+            'p_noise': float(p_noise[pk_idx]) if p_noise is not None and pk_idx < len(p_noise) else None,
+            'p_breath': float(p_breath[pk_idx]) if p_breath is not None and pk_idx < len(p_breath) else None,
+        })
+
+    return metrics

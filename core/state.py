@@ -39,6 +39,14 @@ class AppState:
     window_start_s: float = 0.0
     window_dur_s: float = 10.0
 
+    # Display controls
+    use_percentile_autoscale: bool = False  # Y-axis autoscaling: True = 99th percentile, False = min/max
+    autoscale_padding: float = 0.25         # Padding multiplier for percentile autoscale (0.25 = 25%)
+    eupnea_use_shade: bool = False          # Eupnea display: True = background shade, False = line at top
+    sniffing_use_shade: bool = False        # Sniffing display: True = background shade, False = line at top
+    apnea_use_shade: bool = False           # Apnea display: True = background shade, False = line at bottom
+    outliers_use_shade: bool = False        # Outliers display: True = background shade, False = line
+
     # Peaks & edits
     peaks_by_sweep: Dict[int, np.ndarray] = field(default_factory=dict)
     breath_by_sweep: Dict[int, Dict] = field(default_factory=dict)  # sweep -> {'onsets', 'offsets', 'expmins', 'expoffs'}
@@ -47,6 +55,9 @@ class AppState:
     # ML Training Data: ALL detected peaks with auto-labels
     all_peaks_by_sweep: Dict[int, Dict] = field(default_factory=dict)  # sweep -> {'indices', 'labels', 'label_source', 'prominences'}
     all_breaths_by_sweep: Dict[int, Dict] = field(default_factory=dict)  # sweep -> {'onsets', 'offsets', 'expmins'} for ALL peaks (including noise)
+    peak_metrics_by_sweep: Dict[int, List[Dict]] = field(default_factory=dict)  # sweep -> list of metric dicts for ORIGINAL auto-detected peaks (NEVER modified, for ML training)
+    current_peak_metrics_by_sweep: Dict[int, List[Dict]] = field(default_factory=dict)  # sweep -> list of metric dicts for CURRENT edited peaks (for Y2 plotting, updated after edits)
+    user_merge_decisions: Dict[int, List[Dict]] = field(default_factory=dict)  # sweep -> [{'peak1_idx', 'peak2_idx', 'kept_idx', 'removed_idx', 'timestamp'}] - tracks user merge decisions for ML training
     omitted_points: Dict[int, List[int]] = field(default_factory=dict)       # sweep -> sample idxs
     omitted_ranges: Dict[int, List[Tuple[int,int]]] = field(default_factory=dict)  # sweep -> [(i0,i1), ...]
     omitted_sweeps: set = field(default_factory=set)  # set of sweep indices to exclude

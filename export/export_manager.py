@@ -645,7 +645,267 @@ class ExportManager:
 
 
 
+    def _get_ml_training_folder(self):
+        """
+        Get or create centralized ML training data folder.
+        Prompts user for location on first use, then remembers it.
+
+        Returns:
+            Path to ML training folder, or None if user cancels
+        """
+        from pathlib import Path
+
+        # Check for saved ML training folder location
+        saved_ml_folder = self.window.settings.value("ml_training_folder", None)
+
+        if saved_ml_folder and Path(saved_ml_folder).exists():
+            return Path(saved_ml_folder)
+
+        # Prompt user to choose location
+        from PyQt6.QtWidgets import QMessageBox
+
+        reply = QMessageBox.question(
+            self.window,
+            "ML Training Data Folder",
+            "Where would you like to save ML training data?\n\n"
+            "This creates a centralized 'ML_Training_Data' folder\n"
+            "to collect labeled data from multiple experiments.\n\n"
+            "Choose a parent directory (e.g., your data root folder).",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Ok
+        )
+
+        if reply == QMessageBox.StandardButton.Cancel:
+            return None
+
+        # Let user choose parent directory
+        default_root = self.window.settings.value("save_root", str(self.window.state.in_path.parent))
+        chosen = QFileDialog.getExistingDirectory(
+            self.window,
+            "Choose parent folder for ML_Training_Data",
+            str(default_root)
+        )
+
+        if not chosen:
+            return None
+
+        # Create ML_Training_Data subfolder
+        ml_folder = Path(chosen) / "ML_Training_Data"
+        try:
+            ml_folder.mkdir(parents=True, exist_ok=True)
+            # Remember this location
+            self.window.settings.setValue("ml_training_folder", str(ml_folder))
+            print(f"[ML training] Created folder: {ml_folder}")
+            return ml_folder
+        except Exception as e:
+            QMessageBox.critical(
+                self.window,
+                "ML Training Folder Error",
+                f"Could not create folder:\n{ml_folder}\n\n{e}"
+            )
+            return None
+
     @profile
+    def _export_ml_training_data(self, npz_path, source_name, include_waveforms=False):
+        """
+        Export ML training data as compact .npz file.
+
+        Saves a single .npz file containing:
+        - Peak metrics arrays (original detection)
+        - Labels (still_exists, was_modified)
+        - Merge decisions
+        - Source file metadata
+        - [Optional] Waveform cutouts around each peak
+
+        Args:
+            npz_path: Path for output .npz file
+            source_name: Source filename (for metadata)
+            include_waveforms: If True, include raw waveform segments for neural net training
+        """
+        st = self.window.state
+
+        print(f"[ML training] Exporting training data to {npz_path.name}...")
+        if include_waveforms:
+            print(f"[ML training] Including waveform cutouts (this will increase file size)")
+
+        # Collect all peak metrics as structured arrays
+        # IMPORTANT: Include BOTH original auto-detected peaks AND user-added peaks
+        peak_data = []
+
+        for sweep_idx in sorted(st.peaks_by_sweep.keys()):
+            original_metrics = st.peak_metrics_by_sweep.get(sweep_idx, [])
+            current_metrics = st.current_peak_metrics_by_sweep.get(sweep_idx, [])
+
+            # Get sigh labels for this sweep
+            sigh_indices = set(st.sigh_by_sweep.get(sweep_idx, []))
+
+            # Create lookups
+            original_peak_indices = {m['peak_idx']: m for m in original_metrics} if original_metrics else {}
+            current_peak_indices = {m['peak_idx']: m for m in current_metrics} if current_metrics else {}
+
+            # Process all ORIGINAL peaks (auto-detected)
+            for orig_metric in original_metrics:
+                peak_idx = orig_metric.get('peak_idx')
+                still_exists = peak_idx in current_peak_indices
+                was_modified = False
+                user_added = 0  # Original peaks are not user-added
+
+                if still_exists:
+                    current_metric = current_peak_indices[peak_idx]
+                    for key in ['amplitude_absolute', 'duration', 'onset_height_ratio']:
+                        orig_val = orig_metric.get(key)
+                        curr_val = current_metric.get(key)
+                        if orig_val is not None and curr_val is not None:
+                            if abs(orig_val - curr_val) > 1e-6:
+                                was_modified = True
+                                break
+
+                # Check if this peak is labeled as a sigh
+                is_sigh = 1 if peak_idx in sigh_indices else 0
+
+                # Build record with all metrics + labels
+                record = {
+                    'sweep_idx': sweep_idx,
+                    'peak_idx': peak_idx,
+                    'still_exists': 1 if still_exists else 0,
+                    'was_modified': 1 if was_modified else 0,
+                    'user_added': user_added,
+                    'is_sigh': is_sigh,
+                }
+                for key, value in orig_metric.items():
+                    if key not in ['sweep_idx', 'peak_idx'] and not isinstance(value, dict):
+                        record[key] = value
+
+                peak_data.append(record)
+
+            # Process USER-ADDED peaks (not in original detection)
+            for peak_idx, curr_metric in current_peak_indices.items():
+                if peak_idx not in original_peak_indices:
+                    # This is a user-added peak!
+                    is_sigh = 1 if peak_idx in sigh_indices else 0
+
+                    record = {
+                        'sweep_idx': sweep_idx,
+                        'peak_idx': peak_idx,
+                        'still_exists': 1,  # User added it, so it exists
+                        'was_modified': 0,  # Not modified (newly created)
+                        'user_added': 1,  # Key label: this peak was manually added
+                        'is_sigh': is_sigh,
+                    }
+                    # Add all current metrics for this user-added peak
+                    for key, value in curr_metric.items():
+                        if key not in ['sweep_idx', 'peak_idx'] and not isinstance(value, dict):
+                            record[key] = value
+
+                    peak_data.append(record)
+
+        # Optionally extract waveform cutouts for neural net training
+        waveform_cutouts = None
+        waveform_window_samples = None
+        if include_waveforms and peak_data:
+            print(f"[ML training] Extracting waveform cutouts...")
+
+            # Define standard window: ±1 second around peak
+            window_seconds = 1.0
+            window_samples = int(window_seconds * st.sr_hz)
+            waveform_window_samples = 2 * window_samples  # Total length
+
+            cutouts = []
+            for record in peak_data:
+                sweep_idx = record['sweep_idx']
+                peak_idx = record['peak_idx']
+
+                # Get processed trace for this sweep
+                y_proc = self.window._get_processed_for(st.analyze_chan, sweep_idx)
+
+                # Extract window around peak
+                start_idx = max(0, peak_idx - window_samples)
+                end_idx = min(len(y_proc), peak_idx + window_samples)
+
+                segment = y_proc[start_idx:end_idx]
+
+                # Pad to standard length if needed
+                if len(segment) < waveform_window_samples:
+                    # Pad with zeros (or edge values)
+                    pad_before = peak_idx - start_idx if peak_idx >= window_samples else window_samples - peak_idx
+                    pad_after = waveform_window_samples - len(segment) - pad_before
+                    if pad_before < 0:
+                        pad_before = 0
+                        pad_after = waveform_window_samples - len(segment)
+                    segment = np.pad(segment, (pad_before, pad_after), mode='edge')
+
+                # Truncate if too long (shouldn't happen, but safety check)
+                if len(segment) > waveform_window_samples:
+                    segment = segment[:waveform_window_samples]
+
+                cutouts.append(segment)
+
+            waveform_cutouts = np.array(cutouts, dtype=np.float32)  # [n_peaks, window_samples]
+            print(f"[ML training] ✓ Extracted {len(cutouts)} waveform cutouts ({waveform_cutouts.shape})")
+
+        # Collect merge decisions
+        merge_data = []
+        if hasattr(st, 'user_merge_decisions'):
+            for sweep_idx, decisions in st.user_merge_decisions.items():
+                for decision in decisions:
+                    merge_data.append({
+                        'sweep_idx': sweep_idx,
+                        'peak1_idx': decision.get('peak1_idx'),
+                        'peak2_idx': decision.get('peak2_idx'),
+                        'kept_idx': decision.get('kept_idx'),
+                        'removed_idx': decision.get('removed_idx'),
+                        'timestamp': decision.get('timestamp'),
+                    })
+
+        # Convert to numpy arrays for compact storage
+        import pandas as pd
+
+        if peak_data:
+            df_peaks = pd.DataFrame(peak_data)
+            # Get column names and data
+            peak_columns = df_peaks.columns.tolist()
+            peak_arrays = {col: df_peaks[col].values for col in peak_columns}
+        else:
+            peak_columns = []
+            peak_arrays = {}
+
+        if merge_data:
+            df_merges = pd.DataFrame(merge_data)
+            merge_columns = df_merges.columns.tolist()
+            merge_arrays = {f"merge_{col}": df_merges[col].values for col in merge_columns}
+        else:
+            merge_columns = []
+            merge_arrays = {}
+
+        # Save to .npz with metadata
+        save_dict = {
+            # Metadata
+            'source_file': source_name,
+            'n_peaks': len(peak_data),
+            'n_merges': len(merge_data),
+            'peak_columns': np.array(peak_columns, dtype=object),
+            'merge_columns': np.array(merge_columns, dtype=object),
+            'has_waveforms': include_waveforms,
+            'sampling_rate_hz': float(st.sr_hz) if st.sr_hz else 0.0,
+            # Peak data
+            **peak_arrays,
+            # Merge data
+            **merge_arrays,
+        }
+
+        # Add waveform data if included
+        if waveform_cutouts is not None:
+            save_dict['waveform_cutouts'] = waveform_cutouts
+            save_dict['waveform_window_samples'] = waveform_window_samples
+            save_dict['waveform_window_seconds'] = 2.0  # ±1 second
+
+        np.savez_compressed(npz_path, **save_dict)
+
+        print(f"[ML training] ✓ Exported {len(peak_data)} peaks, {len(merge_data)} merges")
+        if include_waveforms:
+            print(f"[ML training] ✓ Waveforms: {waveform_cutouts.shape} @ {st.sr_hz:.1f} Hz")
+        print(f"[ML training] ✓ File size: {npz_path.stat().st_size / 1024:.1f} KB")
+
     def _export_all_analyzed_data(self, preview_only=False, progress_dialog=None):
         """
         Exports (or previews) analyzed data.
@@ -812,6 +1072,7 @@ class ExportManager:
             save_events_csv = vals.get("save_events_csv", True)
             save_pdf = vals.get("save_pdf", True)
             save_session = vals.get("save_session", True)  # Session state (.pleth.npz)
+            save_ml_training = vals.get("save_ml_training", False)  # ML training data (3 CSVs)
 
             # Check for duplicate files before saving (only check files that will be saved)
             existing_files = []
@@ -822,6 +1083,7 @@ class ExportManager:
             if save_events_csv: expected_suffixes.append("_events.csv")
             if save_pdf: expected_suffixes.append("_summary.pdf")
             if save_session: expected_suffixes.append("_session.npz")
+            # Note: ML training data goes to separate centralized folder, not checked here
             for suffix in expected_suffixes:
                 filepath = final_dir / (suggested + suffix)
                 if filepath.exists():
@@ -2186,6 +2448,32 @@ class ExportManager:
                     print(f"[session] ✗ Session save failed: {e}")
                     session_path = None
 
+            # Export ML training data if requested
+            ml_training_path = None
+            if save_ml_training:
+                try:
+                    # Get centralized ML training folder (user can choose where)
+                    ml_folder = self._get_ml_training_folder()
+                    if ml_folder:
+                        # Create filename with timestamp to avoid collisions
+                        import datetime
+                        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                        ml_filename = f"{suggested}_{timestamp}_ml_training.npz"
+                        ml_training_path = ml_folder / ml_filename
+
+                        # Check if waveforms should be included
+                        include_waveforms = vals.get("ml_include_waveforms", False)
+
+                        self._export_ml_training_data(ml_training_path, suggested, include_waveforms=include_waveforms)
+                        print(f"[ML training] ✓ ML training data exported to {ml_training_path}")
+                    else:
+                        print(f"[ML training] ⚠ ML training export cancelled by user")
+                except Exception as e:
+                    print(f"[ML training] ✗ ML training export failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    ml_training_path = None
+
             # Build success message (only include files that were actually saved)
             file_list = [npz_path.name]  # NPZ always saved
             if save_timeseries_csv:
@@ -2202,6 +2490,8 @@ class ExportManager:
                 file_list.append(event_cta_pdf_path.name)
             if save_session and session_path:
                 file_list.append(f"{session_path.name} (session)")
+            if save_ml_training and ml_training_path:
+                file_list.append(f"{ml_training_path.name} (ML training → {ml_training_path.parent.name}/)")
             msg = "Saved:\n" + "\n".join(f"- {name}" for name in file_list)
             print("[save]", msg)
             try:

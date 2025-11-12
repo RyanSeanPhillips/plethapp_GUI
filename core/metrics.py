@@ -30,6 +30,10 @@ _normalization_stats: Optional[Dict[str, Dict[str, float]]] = None
 # Used to compute P(noise) and P(breath) for each peak
 _threshold_model_params: Optional[Dict[str, float]] = None
 
+# Module-level storage for peak candidate metrics (for ML merge detection)
+# List of dicts, one per peak, with comprehensive metrics
+_current_peak_metrics: Optional[List[Dict]] = None
+
 
 def set_gmm_probabilities(probs: Optional[Dict[int, float]]):
     """
@@ -90,6 +94,27 @@ def set_threshold_model_params(params: Optional[Dict[str, float]]):
     """
     global _threshold_model_params
     _threshold_model_params = params
+    if params is None:
+        print("[metrics] Threshold model params CLEARED")
+    else:
+        print(f"[metrics] Threshold model params SET: lambda_exp={params.get('lambda_exp', 'N/A'):.3f}, mu1={params.get('mu1', 'N/A'):.3f}, mu2={params.get('mu2', 'N/A'):.3f}")
+
+
+def set_peak_metrics(metrics: Optional[List[Dict]]):
+    """
+    Set peak candidate metrics for the current sweep.
+
+    This should be called by the main window before computing Y2 metrics,
+    passing the metrics from st.peak_metrics_by_sweep[sweep_idx].
+
+    Args:
+        metrics: List of dicts, one per peak, with comprehensive metrics
+                 (gap_to_next_norm, trough_ratio_next, onset_above_zero, etc.)
+                 None to clear metrics
+    """
+    global _current_peak_metrics
+    _current_peak_metrics = metrics
+
 
 # (human label, key)
 METRIC_SPECS: List[Tuple[str, str]] = [
@@ -110,6 +135,12 @@ METRIC_SPECS: List[Tuple[str, str]] = [
     ("Breathing regularity score (RMSSD)",    "regularity"),
     ("Sniffing confidence (GMM)",             "sniff_conf"),
     ("Eupnea confidence (GMM)",               "eupnea_conf"),
+    # Peak candidate metrics (for ML merge detection, noise classification)
+    ("Gap to next peak (normalized)",        "gap_to_next_norm"),
+    ("Trough ratio to next",                  "trough_ratio_next"),
+    ("Onset height ratio",                    "onset_height_ratio"),
+    ("Prominence asymmetry",                  "prom_asymmetry"),
+    ("Amplitude (normalized)",                "amplitude_normalized"),
     # Phase 2.1: Half-width features for ML
     ("FWHM (full width at half max)",        "fwhm"),
     ("Width at 25% of peak",                  "width_25"),
@@ -2589,6 +2620,179 @@ def compute_p_breath(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None)
 # Set this to True to enable detailed diagnostic output for Te and area_exp
 ENABLE_DEBUG_OUTPUT = False
 
+
+# ============================================================================
+# Peak Candidate Metrics (for ML merge detection, noise classification)
+# ============================================================================
+
+def compute_gap_to_next_norm(t, y, sr, pks, on, off, exm, exo):
+    """Gap to next peak (normalized by recording median). Stepwise constant over onset→next-onset spans."""
+    N = len(y)
+    out = np.full(N, np.nan, dtype=float)
+
+    if _current_peak_metrics is None or pks is None or len(pks) == 0:
+        return out
+    if on is None or len(on) < 2:
+        return out
+
+    on_arr = np.asarray(on, dtype=int)
+    pks_arr = np.asarray(pks, dtype=int)
+    spans = _spans_from_bounds(on_arr, N)
+
+    vals = []
+    for i in range(len(on_arr) - 1):
+        i0, i1 = int(on_arr[i]), int(on_arr[i + 1])
+        # Find first peak in this breath cycle
+        mask = (pks_arr >= i0) & (pks_arr < i1)
+        if not np.any(mask):
+            vals.append(np.nan)
+            continue
+        pk_idx = int(pks_arr[mask][0])
+
+        # Look up metric value
+        metric = next((m for m in _current_peak_metrics if m['peak_idx'] == pk_idx), None)
+        if metric and metric.get('gap_to_next_norm') is not None:
+            vals.append(metric['gap_to_next_norm'])
+        else:
+            vals.append(np.nan)
+
+    # Extend last span with last value
+    vals.append(vals[-1] if vals else np.nan)
+    return _step_fill(N, spans, vals)
+
+
+def compute_trough_ratio_next(t, y, sr, pks, on, off, exm, exo):
+    """Trough depth ratio to next peak (shallow = merge candidate). Stepwise constant over onset→next-onset spans."""
+    N = len(y)
+    out = np.full(N, np.nan, dtype=float)
+
+    if _current_peak_metrics is None or pks is None or len(pks) == 0:
+        return out
+    if on is None or len(on) < 2:
+        return out
+
+    on_arr = np.asarray(on, dtype=int)
+    pks_arr = np.asarray(pks, dtype=int)
+    spans = _spans_from_bounds(on_arr, N)
+
+    vals = []
+    for i in range(len(on_arr) - 1):
+        i0, i1 = int(on_arr[i]), int(on_arr[i + 1])
+        mask = (pks_arr >= i0) & (pks_arr < i1)
+        if not np.any(mask):
+            vals.append(np.nan)
+            continue
+        pk_idx = int(pks_arr[mask][0])
+
+        metric = next((m for m in _current_peak_metrics if m['peak_idx'] == pk_idx), None)
+        if metric and metric.get('trough_ratio_next') is not None:
+            vals.append(metric['trough_ratio_next'])
+        else:
+            vals.append(np.nan)
+
+    vals.append(vals[-1] if vals else np.nan)
+    return _step_fill(N, spans, vals)
+
+
+def compute_onset_height_ratio(t, y, sr, pks, on, off, exm, exo):
+    """Onset height ratio (onset value / peak amplitude). High values indicate shoulder peaks. Stepwise constant over onset→next-onset spans."""
+    N = len(y)
+    out = np.full(N, np.nan, dtype=float)
+
+    if _current_peak_metrics is None or pks is None or len(pks) == 0:
+        return out
+    if on is None or len(on) < 2:
+        return out
+
+    on_arr = np.asarray(on, dtype=int)
+    pks_arr = np.asarray(pks, dtype=int)
+    spans = _spans_from_bounds(on_arr, N)
+
+    vals = []
+    for i in range(len(on_arr) - 1):
+        i0, i1 = int(on_arr[i]), int(on_arr[i + 1])
+        mask = (pks_arr >= i0) & (pks_arr < i1)
+        if not np.any(mask):
+            vals.append(np.nan)
+            continue
+        pk_idx = int(pks_arr[mask][0])
+
+        metric = next((m for m in _current_peak_metrics if m['peak_idx'] == pk_idx), None)
+        if metric and metric.get('onset_height_ratio') is not None:
+            vals.append(metric['onset_height_ratio'])
+        else:
+            vals.append(np.nan)
+
+    vals.append(vals[-1] if vals else np.nan)
+    return _step_fill(N, spans, vals)
+
+
+def compute_prom_asymmetry(t, y, sr, pks, on, off, exm, exo):
+    """Prominence asymmetry (0 = very asymmetric, 1 = symmetric). Stepwise constant over onset→next-onset spans."""
+    N = len(y)
+    out = np.full(N, np.nan, dtype=float)
+
+    if _current_peak_metrics is None or pks is None or len(pks) == 0:
+        return out
+    if on is None or len(on) < 2:
+        return out
+
+    on_arr = np.asarray(on, dtype=int)
+    pks_arr = np.asarray(pks, dtype=int)
+    spans = _spans_from_bounds(on_arr, N)
+
+    vals = []
+    for i in range(len(on_arr) - 1):
+        i0, i1 = int(on_arr[i]), int(on_arr[i + 1])
+        mask = (pks_arr >= i0) & (pks_arr < i1)
+        if not np.any(mask):
+            vals.append(np.nan)
+            continue
+        pk_idx = int(pks_arr[mask][0])
+
+        metric = next((m for m in _current_peak_metrics if m['peak_idx'] == pk_idx), None)
+        if metric and metric.get('prom_asymmetry') is not None:
+            vals.append(metric['prom_asymmetry'])
+        else:
+            vals.append(np.nan)
+
+    vals.append(vals[-1] if vals else np.nan)
+    return _step_fill(N, spans, vals)
+
+
+def compute_amplitude_normalized(t, y, sr, pks, on, off, exm, exo):
+    """Peak amplitude normalized by recording median. Stepwise constant over onset→next-onset spans."""
+    N = len(y)
+    out = np.full(N, np.nan, dtype=float)
+
+    if _current_peak_metrics is None or pks is None or len(pks) == 0:
+        return out
+    if on is None or len(on) < 2:
+        return out
+
+    on_arr = np.asarray(on, dtype=int)
+    pks_arr = np.asarray(pks, dtype=int)
+    spans = _spans_from_bounds(on_arr, N)
+
+    vals = []
+    for i in range(len(on_arr) - 1):
+        i0, i1 = int(on_arr[i]), int(on_arr[i + 1])
+        mask = (pks_arr >= i0) & (pks_arr < i1)
+        if not np.any(mask):
+            vals.append(np.nan)
+            continue
+        pk_idx = int(pks_arr[mask][0])
+
+        metric = next((m for m in _current_peak_metrics if m['peak_idx'] == pk_idx), None)
+        if metric and metric.get('amplitude_normalized') is not None:
+            vals.append(metric['amplitude_normalized'])
+        else:
+            vals.append(np.nan)
+
+    vals.append(vals[-1] if vals else np.nan)
+    return _step_fill(N, spans, vals)
+
+
 # Registry: key -> function
 METRICS: Dict[str, Callable] = {
     "if":          compute_if,
@@ -2641,6 +2845,12 @@ METRICS: Dict[str, Callable] = {
     # Phase 2.3 Group C: Probability from auto-threshold
     "p_noise":             compute_p_noise,
     "p_breath":            compute_p_breath,
+    # Peak candidate metrics (for ML merge detection, noise classification)
+    "gap_to_next_norm":      compute_gap_to_next_norm,
+    "trough_ratio_next":     compute_trough_ratio_next,
+    "onset_height_ratio":    compute_onset_height_ratio,
+    "prom_asymmetry":        compute_prom_asymmetry,
+    "amplitude_normalized":  compute_amplitude_normalized,
 }
 
 # Optional: Enable robust metrics mode

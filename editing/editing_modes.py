@@ -28,6 +28,7 @@ class EditingModes:
         # Mode flags
         self._add_peaks_mode = False
         self._delete_peaks_mode = False
+        self._merge_peaks_mode = False
         self._add_sigh_mode = False
         self._move_point_mode = False
         self._mark_sniff_mode = False
@@ -55,6 +56,14 @@ class EditingModes:
         self._omit_region_index = None  # Index of region being edited
         self._key_cid = None  # Connection ID for matplotlib key press events (omit mode)
 
+        # Merge Peaks mode state
+        self._merge_start_x = None  # X-coordinate where drag started
+        self._merge_drag_artist = None  # Visual indicator while dragging
+        self._selected_peaks = []  # List of peak indices selected for merging
+        self._merge_motion_cid = None  # Connection ID for mouse motion events
+        self._merge_release_cid = None  # Connection ID for mouse release events
+        self._merge_key_cid = None  # Connection ID for matplotlib key press events
+
         # Peak editing window size
         self._peak_edit_half_win_s = 0.08  # ±80ms window for peak operations
 
@@ -66,6 +75,8 @@ class EditingModes:
         # Set buttons as checkable
         self.window.addPeaksButton.setCheckable(True)
         self.window.deletePeaksButton.setCheckable(True)
+        if hasattr(self.window, 'MergeBreathsButton'):
+            self.window.MergeBreathsButton.setCheckable(True)
         self.window.addSighButton.setCheckable(True)
         self.window.movePointButton.setCheckable(True)
         self.window.markSniffButton.setCheckable(True)
@@ -73,6 +84,8 @@ class EditingModes:
         # Connect signals
         self.window.addPeaksButton.toggled.connect(self.on_add_peaks_toggled)
         self.window.deletePeaksButton.toggled.connect(self.on_delete_peaks_toggled)
+        if hasattr(self.window, 'MergeBreathsButton'):
+            self.window.MergeBreathsButton.toggled.connect(self.on_merge_peaks_toggled)
         self.window.addSighButton.toggled.connect(self.on_add_sigh_toggled)
         self.window.movePointButton.toggled.connect(self.on_move_point_toggled)
         self.window.markSniffButton.toggled.connect(self.on_mark_sniff_toggled)
@@ -89,6 +102,20 @@ class EditingModes:
         """
         # Note: Omit region mode uses matplotlib canvas key events (spacebar)
         # not Qt key events, so no handler needed here for snap functionality
+
+        # Merge peaks mode handlers
+        if self._merge_peaks_mode:
+            print(f"[merge-peaks] Key pressed: {event.key()}")  # Debug
+            if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+                print("[merge-peaks] Enter key detected, executing merge...")
+                # Merge the selected peaks
+                self._execute_merge()
+                return True
+            elif event.key() == Qt.Key.Key_Escape:
+                print("[merge-peaks] Escape key detected, canceling...")
+                # Cancel selection
+                self._cancel_merge_selection()
+                return True
 
         # Move point mode handlers
         if self._move_point_mode and self._selected_point:
@@ -127,6 +154,19 @@ class EditingModes:
         elif event.key == 'escape':
             # Cancel move
             self._cancel_move_point()
+
+    def _on_merge_canvas_key_press(self, event):
+        """Handle matplotlib canvas key events for merge peaks mode."""
+        if not self._merge_peaks_mode:
+            return
+
+        print(f"[merge-peaks] Canvas key pressed: {event.key}")
+        if event.key in ('enter', 'return'):
+            print("[merge-peaks] Enter detected on canvas, executing merge...")
+            self._execute_merge()
+        elif event.key == 'escape':
+            print("[merge-peaks] Escape detected on canvas, canceling...")
+            self._cancel_merge_selection()
 
     def _on_canvas_motion(self, event):
         """Handle mouse motion for click-and-drag point movement."""
@@ -464,6 +504,26 @@ class EditingModes:
         st.breath_by_sweep[s] = breaths
         print(f"[add-peak] Surgically added breath events at index {new_idx}")
 
+        # Recompute peak metrics for current edited peaks (for Y2 plotting)
+        if hasattr(st, 'current_peak_metrics_by_sweep'):
+            try:
+                from core import peaks as peakdet
+                import core.metrics as metrics_mod
+                p_noise_all = metrics_mod.compute_p_noise(y, pks_new, st.sr_hz)
+                p_breath_all = 1.0 - p_noise_all if p_noise_all is not None else None
+                peak_metrics = peakdet.compute_peak_candidate_metrics(
+                    y=y,
+                    all_peak_indices=pks_new,
+                    breath_events=breaths,
+                    sr_hz=st.sr_hz,
+                    p_noise=p_noise_all,
+                    p_breath=p_breath_all
+                )
+                st.current_peak_metrics_by_sweep[s] = peak_metrics
+                print(f"[add-peak] Recomputed {len(peak_metrics)} current peak metrics")
+            except Exception as e:
+                print(f"[add-peak] Could not recompute peak metrics: {e}")
+
         # Log telemetry: manual edit
         from core import telemetry
         telemetry.log_edit('add_peak',
@@ -638,6 +698,28 @@ class EditingModes:
                         breaths[key] = np.delete(arr, closest_idx)
             st.breath_by_sweep[s] = breaths
             print(f"[delete-peak] Surgically removed breath events at index {closest_idx}")
+
+        # Recompute peak metrics for current edited peaks (for Y2 plotting)
+        if hasattr(st, 'current_peak_metrics_by_sweep'):
+            try:
+                from core import peaks as peakdet
+                import core.metrics as metrics_mod
+                t, y = self.window._current_trace()
+                if y is not None:
+                    p_noise_all = metrics_mod.compute_p_noise(y, pks_new, st.sr_hz)
+                    p_breath_all = 1.0 - p_noise_all if p_noise_all is not None else None
+                    peak_metrics = peakdet.compute_peak_candidate_metrics(
+                        y=y,
+                        all_peak_indices=pks_new,
+                        breath_events=breaths,
+                        sr_hz=st.sr_hz,
+                        p_noise=p_noise_all,
+                        p_breath=p_breath_all
+                    )
+                    st.current_peak_metrics_by_sweep[s] = peak_metrics
+                    print(f"[delete-peak] Recomputed {len(peak_metrics)} current peak metrics")
+            except Exception as e:
+                print(f"[delete-peak] Could not recompute peak metrics: {e}")
 
         # If a Y2 metric is selected, recompute
         if getattr(st, "y2_metric_key", None):
@@ -2158,3 +2240,419 @@ class EditingModes:
         # Update state
         st.omitted_ranges[sweep_idx] = merged_samples
         print(f"[omit-region] After merging: {len(merged_samples)} region(s) on sweep {sweep_idx}")
+
+    # ========== MERGE PEAKS MODE ==========
+
+    def on_merge_peaks_toggled(self, checked: bool):
+        """Enter/exit Merge Peaks mode (drag to select 2 peaks, press Enter to merge)."""
+        self._merge_peaks_mode = checked
+
+        if checked:
+            # Turn off matplotlib toolbar modes (zoom, pan)
+            self.window.plot_host.turn_off_toolbar_modes()
+
+            # Turn OFF other edit modes
+            if getattr(self, "_add_peaks_mode", False):
+                self._add_peaks_mode = False
+                self.window.addPeaksButton.blockSignals(True)
+                self.window.addPeaksButton.setChecked(False)
+                self.window.addPeaksButton.blockSignals(False)
+                self.window.addPeaksButton.setText("Add Peaks")
+
+            if getattr(self, "_delete_peaks_mode", False):
+                self._delete_peaks_mode = False
+                self.window.deletePeaksButton.blockSignals(True)
+                self.window.deletePeaksButton.setChecked(False)
+                self.window.deletePeaksButton.blockSignals(False)
+                self.window.deletePeaksButton.setText("Delete Peaks")
+
+            if getattr(self, "_add_sigh_mode", False):
+                self._add_sigh_mode = False
+                self.window.addSighButton.blockSignals(True)
+                self.window.addSighButton.setChecked(False)
+                self.window.addSighButton.blockSignals(False)
+                self.window.addSighButton.setText("ADD/DEL Sigh")
+
+            if getattr(self, "_move_point_mode", False):
+                self._move_point_mode = False
+                self.window.movePointButton.blockSignals(True)
+                self.window.movePointButton.setChecked(False)
+                self.window.movePointButton.blockSignals(False)
+                self.window.movePointButton.setText("Move Point")
+
+            if getattr(self, "_mark_sniff_mode", False):
+                self._mark_sniff_mode = False
+                self.window.markSniffButton.blockSignals(True)
+                self.window.markSniffButton.setChecked(False)
+                self.window.markSniffButton.blockSignals(False)
+                self.window.markSniffButton.setText("Mark Sniff")
+
+            self.window.MergeBreathsButton.setText("Merge Breaths (ON) [Drag to select, click on peak to merge]")
+            self.window.plot_host.set_click_callback(self._on_plot_click_merge_peaks)
+            self.window.plot_host.setCursor(Qt.CursorShape.CrossCursor)
+
+            # Connect matplotlib events for drag functionality
+            self._merge_motion_cid = self.window.plot_host.canvas.mpl_connect('motion_notify_event', self._on_merge_drag)
+            self._merge_release_cid = self.window.plot_host.canvas.mpl_connect('button_release_event', self._on_merge_release)
+            self._merge_key_cid = self.window.plot_host.canvas.mpl_connect('key_press_event', self._on_merge_canvas_key_press)
+        else:
+            self.window.MergeBreathsButton.setText("Merge Breaths")
+
+            # Disconnect matplotlib events
+            if self._merge_motion_cid is not None:
+                self.window.plot_host.canvas.mpl_disconnect(self._merge_motion_cid)
+                self._merge_motion_cid = None
+            if self._merge_release_cid is not None:
+                self.window.plot_host.canvas.mpl_disconnect(self._merge_release_cid)
+                self._merge_release_cid = None
+            if self._merge_key_cid is not None:
+                self.window.plot_host.canvas.mpl_disconnect(self._merge_key_cid)
+                self._merge_key_cid = None
+
+            # Clear selection and visual indicators
+            self._cancel_merge_selection()
+
+            # Only clear if no other edit mode is active
+            if not any([getattr(self, "_add_peaks_mode", False),
+                       getattr(self, "_delete_peaks_mode", False),
+                       getattr(self, "_add_sigh_mode", False),
+                       getattr(self, "_move_point_mode", False),
+                       getattr(self, "_mark_sniff_mode", False)]):
+                self.window.plot_host.clear_click_callback()
+                self.window.plot_host.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def _on_plot_click_merge_peaks(self, xdata, ydata, event):
+        """Handle clicks for merge mode: drag to select, double-click to merge, click away to deselect."""
+        if not getattr(self, "_merge_peaks_mode", False):
+            return
+        if event.inaxes is None or xdata is None:
+            return
+        if getattr(event, "button", 1) != 1:  # Only left click
+            return
+
+        # If 2 peaks are already selected, check for click on selected peaks to merge
+        if len(self._selected_peaks) == 2:
+            # Single click - check if near one of the selected peaks to merge
+            if not event.dblclick:  # Ignore double-clicks (they're for matplotlib zoom)
+                st = self.window.state
+                s = max(0, min(st.sweep_idx, self.window.navigation_manager._sweep_count() - 1))
+                t, y = self.window._current_trace()
+                if t is None:
+                    return
+
+                # Get plot time
+                spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
+                if st.stim_chan and spans:
+                    t0 = spans[0][0]
+                    t_plot = t - t0
+                else:
+                    t_plot = t
+
+                # Check if click is near either selected peak
+                peak_times = t_plot[self._selected_peaks]
+                half_win_s = float(getattr(self, "_peak_edit_half_win_s", 0.08))
+                distances = np.abs(peak_times - xdata)
+
+                if np.min(distances) < half_win_s:
+                    print(f"[merge-peaks] Click near selected peak (distance={np.min(distances):.3f}s), executing merge...")
+                    self._execute_merge()
+                    return
+                elif np.min(distances) > half_win_s * 2:  # 2x larger for deselect
+                    print(f"[merge-peaks] Click far from selected peaks (distance={np.min(distances):.3f}s), deselecting...")
+                    self._cancel_merge_selection()
+                    self.window._log_status_message("✗ Selection cleared", 1500)
+                    return
+                else:
+                    # Click in intermediate zone - start new drag (will deselect on release)
+                    pass
+
+        # Clear previous selection (if single click or starting new drag)
+        self._cancel_merge_selection()
+
+        # Start drag
+        self._merge_start_x = xdata
+        print(f"[merge-peaks] Started drag at x={xdata:.3f}")
+
+    def _on_merge_drag(self, event):
+        """Handle drag motion to show selection rectangle."""
+        if not getattr(self, "_merge_peaks_mode", False):
+            return
+        if self._merge_start_x is None:
+            return
+        if event.inaxes is None or event.xdata is None:
+            return
+
+        # Draw selection rectangle
+        x_start = self._merge_start_x
+        x_end = event.xdata
+        x_min = min(x_start, x_end)
+        x_max = max(x_start, x_end)
+
+        # Get current y-axis limits
+        ax = self.window.plot_host.fig.axes[0]
+        y_min, y_max = ax.get_ylim()
+
+        # Remove old rectangle
+        if self._merge_drag_artist:
+            try:
+                self._merge_drag_artist.remove()
+            except:
+                pass
+
+        # Draw new rectangle
+        from matplotlib.patches import Rectangle
+        self._merge_drag_artist = Rectangle(
+            (x_min, y_min), x_max - x_min, y_max - y_min,
+            facecolor='yellow', alpha=0.2, edgecolor='orange', linewidth=2
+        )
+        ax.add_patch(self._merge_drag_artist)
+        self.window.plot_host.canvas.draw_idle()
+
+    def _on_merge_release(self, event):
+        """Handle drag release to select peaks in the selected region."""
+        if not getattr(self, "_merge_peaks_mode", False):
+            return
+        if self._merge_start_x is None:
+            return
+        if event.inaxes is None or event.xdata is None:
+            return
+
+        # Get selection bounds
+        x_start = self._merge_start_x
+        x_end = event.xdata
+        x_min = min(x_start, x_end)
+        x_max = max(x_start, x_end)
+
+        self._merge_start_x = None
+
+        # Get current sweep and peaks
+        st = self.window.state
+        if st.t is None or st.analyze_chan not in st.sweeps:
+            return
+
+        s = max(0, min(st.sweep_idx, self.window.navigation_manager._sweep_count() - 1))
+        pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+        if pks.size == 0:
+            print("[merge-peaks] No peaks in this sweep")
+            self._cancel_merge_selection()
+            return
+
+        # Get plot time (may be normalized if stim channel)
+        t, y = self.window._current_trace()
+        if t is None:
+            return
+
+        spans = st.stim_spans_by_sweep.get(s, []) if st.stim_chan else []
+        if st.stim_chan and spans:
+            t0 = spans[0][0]
+            t_plot = t - t0
+        else:
+            t_plot = t
+
+        # Find peaks within selection
+        peak_times = t_plot[pks]
+        selected_mask = (peak_times >= x_min) & (peak_times <= x_max)
+        selected_peak_indices = pks[selected_mask]
+
+        if len(selected_peak_indices) == 0:
+            print("[merge-peaks] No peaks selected")
+            self._cancel_merge_selection()
+            self.window._log_status_message("✗ No peaks in selection", 2000)
+            return
+        elif len(selected_peak_indices) == 1:
+            print("[merge-peaks] Only 1 peak selected, need 2")
+            self._cancel_merge_selection()
+            self.window._log_status_message("✗ Need to select exactly 2 peaks", 2000)
+            return
+        elif len(selected_peak_indices) > 2:
+            print(f"[merge-peaks] Too many peaks selected ({len(selected_peak_indices)}), need exactly 2")
+            self._cancel_merge_selection()
+            self.window._log_status_message(f"✗ Too many peaks ({len(selected_peak_indices)}), need exactly 2", 2000)
+            return
+
+        # Exactly 2 peaks selected!
+        self._selected_peaks = list(selected_peak_indices)
+        print(f"[merge-peaks] Selected 2 peaks at indices {self._selected_peaks}. Click on one to merge.")
+        self.window._log_status_message(f"✓ 2 peaks selected. Click on one to merge, press Enter, or click away to deselect.", 5000)
+
+        # Set canvas to accept keyboard focus for Enter key
+        self.window.plot_host.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.window.plot_host.canvas.setFocus()
+
+        # Highlight selected peaks
+        ax = self.window.plot_host.fig.axes[0]
+        peak_times_selected = t_plot[self._selected_peaks]
+        peak_values_selected = y[self._selected_peaks]
+
+        # Remove old highlight
+        if self._merge_drag_artist:
+            try:
+                self._merge_drag_artist.remove()
+            except:
+                pass
+
+        # Draw highlight circles on selected peaks
+        self._merge_drag_artist = ax.scatter(
+            peak_times_selected, peak_values_selected,
+            s=200, facecolors='none', edgecolors='orange', linewidths=3, zorder=10
+        )
+        self.window.plot_host.canvas.draw_idle()
+
+    def _execute_merge(self):
+        """Merge the two selected peaks."""
+        if len(self._selected_peaks) != 2:
+            print("[merge-peaks] Cannot merge: need exactly 2 peaks selected")
+            self.window._log_status_message("✗ Need to select exactly 2 peaks first", 2000)
+            return
+
+        st = self.window.state
+        s = max(0, min(st.sweep_idx, self.window.navigation_manager._sweep_count() - 1))
+        pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
+
+        if pks.size == 0:
+            print("[merge-peaks] No peaks in this sweep")
+            self._cancel_merge_selection()
+            return
+
+        # Find the indices of the selected peaks in the peaks array
+        pk1_idx = np.where(pks == self._selected_peaks[0])[0]
+        pk2_idx = np.where(pks == self._selected_peaks[1])[0]
+
+        if len(pk1_idx) == 0 or len(pk2_idx) == 0:
+            print("[merge-peaks] Selected peaks not found in peaks array")
+            self._cancel_merge_selection()
+            return
+
+        pk1_idx = pk1_idx[0]
+        pk2_idx = pk2_idx[0]
+
+        # Determine which peak to keep (keep the larger one)
+        t, y = self.window._current_trace()
+        if t is None or y is None:
+            return
+
+        pk1_value = y[self._selected_peaks[0]]
+        pk2_value = y[self._selected_peaks[1]]
+
+        if pk1_value >= pk2_value:
+            keep_idx = pk1_idx
+            remove_idx = pk2_idx
+            keep_peak = self._selected_peaks[0]
+            remove_peak = self._selected_peaks[1]
+        else:
+            keep_idx = pk2_idx
+            remove_idx = pk1_idx
+            keep_peak = self._selected_peaks[1]
+            remove_peak = self._selected_peaks[0]
+
+        print(f"[merge-peaks] Merging peaks: keeping {keep_peak} (value={y[keep_peak]:.2f}), removing {remove_peak} (value={y[remove_peak]:.2f})")
+
+        # Record merge decision for ML training
+        import time
+        if not hasattr(st, 'user_merge_decisions'):
+            st.user_merge_decisions = {}
+        if s not in st.user_merge_decisions:
+            st.user_merge_decisions[s] = []
+
+        merge_record = {
+            'peak1_idx': int(self._selected_peaks[0]),  # Sample index of first selected peak
+            'peak2_idx': int(self._selected_peaks[1]),  # Sample index of second selected peak
+            'kept_idx': int(keep_peak),                 # Sample index of kept peak
+            'removed_idx': int(remove_peak),            # Sample index of removed peak
+            'kept_array_idx': int(keep_idx),            # Index in peaks array (before removal)
+            'removed_array_idx': int(remove_idx),       # Index in peaks array (before removal)
+            'timestamp': time.time()                    # Unix timestamp
+        }
+        st.user_merge_decisions[s].append(merge_record)
+        print(f"[merge-peaks] Recorded merge decision for ML training: kept={keep_peak}, removed={remove_peak}")
+
+        # Remove the smaller peak
+        pks_new = np.delete(pks, remove_idx)
+        st.peaks_by_sweep[s] = pks_new
+
+        # Remove corresponding breath events
+        breaths = st.breath_by_sweep.get(s, {})
+        if breaths:
+            for key in ['onsets', 'offsets', 'expmins', 'expoffs']:
+                if key in breaths:
+                    arr = np.asarray(breaths[key], dtype=int)
+                    if remove_idx < len(arr):
+                        breaths[key] = np.delete(arr, remove_idx)
+            st.breath_by_sweep[s] = breaths
+
+        # Recompute breath events for the affected peak (the one we kept)
+        # This will recalculate onset/offset/expmin based on the new peak configuration
+        from core import peaks as peakdet
+        all_breaths = peakdet.compute_breath_events(y, pks_new, st.sr_hz)
+
+        # Update only the kept peak's breath events
+        if all_breaths:
+            for key in ['onsets', 'offsets', 'expmins', 'expoffs']:
+                if key in all_breaths and key in breaths:
+                    breaths[key] = all_breaths[key]
+            st.breath_by_sweep[s] = breaths
+
+        # Recompute peak metrics for current edited peaks (for Y2 plotting)
+        # NOTE: We store in 'current_peak_metrics_by_sweep' to preserve original metrics for ML training
+        if hasattr(st, 'current_peak_metrics_by_sweep'):
+            try:
+                import core.metrics as metrics_mod
+                p_noise_all = metrics_mod.compute_p_noise(y, pks_new, st.sr_hz)
+                p_breath_all = 1.0 - p_noise_all if p_noise_all is not None else None
+            except Exception as e:
+                print(f"[merge-peaks] Could not compute p_noise: {e}")
+                p_noise_all = None
+                p_breath_all = None
+
+            peak_metrics = peakdet.compute_peak_candidate_metrics(
+                y=y,
+                all_peak_indices=pks_new,
+                breath_events=all_breaths,
+                sr_hz=st.sr_hz,
+                p_noise=p_noise_all,
+                p_breath=p_breath_all
+            )
+            st.current_peak_metrics_by_sweep[s] = peak_metrics
+            print(f"[merge-peaks] Recomputed {len(peak_metrics)} current peak metrics for sweep {s} (original metrics preserved for ML)")
+
+        # Log telemetry
+        from core import telemetry
+        telemetry.log_edit('merge_peaks',
+                          num_peaks_after=len(pks_new),
+                          sweep_index=s)
+
+        self.window._log_status_message(f"✓ Peaks merged! ({len(pks)} → {len(pks_new)} peaks)", 2000)
+
+        # Clear selection
+        self._cancel_merge_selection()
+
+        # Recompute Y2 if active
+        if getattr(st, "y2_metric_key", None):
+            self.window._compute_y2_all_sweeps()
+
+        # Refresh plot
+        self.window.redraw_main_plot()
+
+        # Re-run GMM clustering if auto-update enabled
+        if getattr(self.window, 'auto_gmm_enabled', False):
+            self.window._run_automatic_gmm_clustering()
+            self.window._refresh_eupnea_overlays_only()
+            self.window.eupnea_sniffing_out_of_date = False
+            self.window.statusBar().clearMessage()
+        else:
+            self.window.eupnea_sniffing_out_of_date = True
+            self.window._log_status_message("⚠️ Eupnea/sniffing detection out of date")
+
+    def _cancel_merge_selection(self):
+        """Clear merge selection and visual indicators."""
+        self._selected_peaks = []
+        self._merge_start_x = None
+
+        # Remove visual indicator
+        if self._merge_drag_artist:
+            try:
+                self._merge_drag_artist.remove()
+            except:
+                pass
+            self._merge_drag_artist = None
+            self.window.plot_host.canvas.draw_idle()

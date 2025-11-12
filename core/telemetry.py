@@ -101,8 +101,8 @@ def init_telemetry():
             'python_version': platform.python_version()
         })
 
-        # Send initial user_engagement event to help GA4 recognize active user
-        log_user_engagement()
+        # Note: user_engagement events are sent by the heartbeat timer (every 45s)
+        # No need to send one here during initialization
 
         print("Telemetry: Initialized (GA4 + Sentry)")
 

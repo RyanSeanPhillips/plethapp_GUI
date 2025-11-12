@@ -80,7 +80,8 @@ class PlotManager:
                 t_plot, y, spans_plot,
                 title=title,
                 max_points=None,
-                ylabel=st.analyze_chan or "Signal"
+                ylabel=st.analyze_chan or "Signal",
+                state=self.state
             )
 
         # Clear any existing region overlays (will be recomputed if needed)
@@ -95,8 +96,8 @@ class PlotManager:
         # Draw breath event markers (onsets, offsets, expiratory mins/offs)
         self._draw_breath_markers(s, t_plot, y)
 
-        # Update sniff region overlays
-        self.window.editing_modes.update_sniff_artists(t_plot, s)
+        # Sniff region overlays are now handled by _draw_region_overlays() via unified update_region_overlays()
+        # self.window.editing_modes.update_sniff_artists(t_plot, s)  # REMOVED: Causes duplicate shading
 
         # Draw Y2 metric if selected
         self._draw_y2_metric(s, t, t_plot)
@@ -179,17 +180,33 @@ class PlotManager:
             y_valid = y_values[~np.isnan(y_values)]
 
             if len(y_valid) > 0:
-                # Use percentiles to avoid artifacts and huge outliers
-                y_min = np.percentile(y_valid, 1)   # 1st percentile
-                y_max = np.percentile(y_valid, 99)  # 99th percentile
-                y_range = y_max - y_min
+                # Use percentile or full range based on user preference
+                if st.use_percentile_autoscale:
+                    # Percentile mode: Use percentiles to avoid artifacts and huge outliers
+                    y_min = np.percentile(y_valid, 1)   # 1st percentile
+                    y_max = np.percentile(y_valid, 99)  # 99th percentile
+                    y_range = y_max - y_min
 
-                # Handle edge case where all values are the same
-                if y_range == 0 or np.isnan(y_range):
-                    y_range = abs(y_min) if y_min != 0 else 1.0
+                    # Handle edge case where all values are the same
+                    if y_range == 0 or np.isnan(y_range):
+                        y_range = abs(y_min) if y_min != 0 else 1.0
 
-                # Add 25% padding to avoid clipping peaks (matching core/plotting.py)
-                padding = 0.25 * y_range
+                    # Add configurable padding
+                    padding = st.autoscale_padding * y_range
+                    mode_str = f"percentile, {st.autoscale_padding*100:.0f}% padding"
+                else:
+                    # Full range mode: Use absolute min/max
+                    y_min = np.min(y_valid)
+                    y_max = np.max(y_valid)
+                    y_range = y_max - y_min
+
+                    # Handle edge case where all values are the same
+                    if y_range == 0 or np.isnan(y_range):
+                        y_range = abs(y_min) if y_min != 0 else 1.0
+
+                    # Add small padding
+                    padding = 0.05 * y_range
+                    mode_str = "full range"
 
                 # Final validation
                 y_lower = y_min - padding
@@ -197,7 +214,7 @@ class PlotManager:
 
                 if np.isfinite(y_lower) and np.isfinite(y_upper):
                     ax.set_ylim(y_lower, y_upper)
-                    print(f"[Plot Manager] Auto-scaled Y-axis (excluding omitted): {y_lower:.3f} to {y_upper:.3f}")
+                    print(f"[Plot Manager] Auto-scaled Y-axis (excluding omitted, {mode_str}): {y_lower:.3f} to {y_upper:.3f}")
                 else:
                     print(f"[Plot Manager] Warning: Invalid Y-axis limits (NaN/Inf), using default")
             else:
@@ -251,21 +268,36 @@ class PlotManager:
         ax_pleth.set_ylabel(st.analyze_chan or "Signal")
         ax_pleth.grid(False)
 
-        # Apply percentile-based Y-axis autoscaling (matching single-panel behavior)
+        # Apply Y-axis autoscaling based on user preference (matching single-panel behavior)
         if len(y_pleth) > 0:
             # Remove NaN values before calculating percentiles
             y_valid = y_pleth[~np.isnan(y_pleth)]
 
             if len(y_valid) > 0:
-                y_min = np.percentile(y_valid, 1)   # 1st percentile
-                y_max = np.percentile(y_valid, 99)  # 99th percentile
-                y_range = y_max - y_min
+                if st.use_percentile_autoscale:
+                    # Percentile mode
+                    y_min = np.percentile(y_valid, 1)   # 1st percentile
+                    y_max = np.percentile(y_valid, 99)  # 99th percentile
+                    y_range = y_max - y_min
 
-                # Handle edge case where all values are the same
-                if y_range == 0 or np.isnan(y_range):
-                    y_range = abs(y_min) if y_min != 0 else 1.0
+                    # Handle edge case where all values are the same
+                    if y_range == 0 or np.isnan(y_range):
+                        y_range = abs(y_min) if y_min != 0 else 1.0
 
-                padding = 0.25 * y_range  # 25% padding
+                    padding = st.autoscale_padding * y_range
+                    mode_str = f"percentile, {st.autoscale_padding*100:.0f}% padding"
+                else:
+                    # Full range mode
+                    y_min = np.min(y_valid)
+                    y_max = np.max(y_valid)
+                    y_range = y_max - y_min
+
+                    # Handle edge case where all values are the same
+                    if y_range == 0 or np.isnan(y_range):
+                        y_range = abs(y_min) if y_min != 0 else 1.0
+
+                    padding = 0.05 * y_range
+                    mode_str = "full range"
 
                 # Final validation
                 y_lower = y_min - padding
@@ -273,7 +305,7 @@ class PlotManager:
 
                 if np.isfinite(y_lower) and np.isfinite(y_upper):
                     ax_pleth.set_ylim(y_lower, y_upper)
-                    print(f"[Dual Plot] Auto-scaled Y-axis: {y_lower:.3f} to {y_upper:.3f} (99th percentile)")
+                    print(f"[Dual Plot] Auto-scaled Y-axis ({mode_str}): {y_lower:.3f} to {y_upper:.3f}")
                 else:
                     print(f"[Dual Plot] Warning: Invalid Y-axis limits (NaN/Inf), using default")
             else:
@@ -477,7 +509,7 @@ class PlotManager:
             if len(normal_pks):
                 t_normal = t_plot[normal_pks]
                 y_normal = y[normal_pks]
-                self.plot_host.update_peaks(t_normal, y_normal, size=24)
+                self.plot_host.update_peaks(t_normal, y_normal, size=18)  # Reduced from 24 (25% smaller)
             else:
                 self.plot_host.clear_peaks()
 
@@ -487,7 +519,7 @@ class PlotManager:
                 y_omitted = y[omitted_pks]
                 ax = self.plot_host.ax_main
                 if ax is not None:
-                    ax.scatter(t_omitted, y_omitted, s=24, c='gray', alpha=0.5, marker='o', zorder=5, edgecolors='darkgray', linewidths=0.5)
+                    ax.scatter(t_omitted, y_omitted, s=18, c='gray', alpha=0.5, marker='o', zorder=5, edgecolors='none', linewidths=0)
         else:
             self.plot_host.clear_peaks()
 
@@ -508,12 +540,12 @@ class PlotManager:
                 y_off = offset_frac
             y_sigh = y[sigh_idx] + y_off
 
-            # Filled orange star with darker edge
+            # Orange star with black outline
             self.plot_host.update_sighs(
                 t_sigh, y_sigh,
-                size=110,
+                size=82,  # Reduced from 110 (25% smaller)
                 color="#ff9f1a",   # warm orange fill
-                edge="#a35400",    # slightly darker edge
+                edge="black",      # black outline
                 filled=True
             )
         else:
@@ -560,20 +592,20 @@ class PlotManager:
                 t_off=t_off, y_off=y_off,
                 t_exp=t_exp, y_exp=y_exp,
                 t_exoff=t_exof, y_exoff=y_exof,
-                size=36
+                size=27  # Reduced from 36 (25% smaller)
             )
 
             # Draw omitted markers in gray
             ax = self.plot_host.ax_main
             if ax is not None:
                 if len(on_omit):
-                    ax.scatter(t_plot[on_omit], y[on_omit], s=36, c='gray', alpha=0.5, marker='^', zorder=4, edgecolors='darkgray', linewidths=0.5)
+                    ax.scatter(t_plot[on_omit], y[on_omit], s=27, c='gray', alpha=0.5, marker='^', zorder=4, edgecolors='none', linewidths=0)
                 if len(off_omit):
-                    ax.scatter(t_plot[off_omit], y[off_omit], s=36, c='gray', alpha=0.5, marker='v', zorder=4, edgecolors='darkgray', linewidths=0.5)
+                    ax.scatter(t_plot[off_omit], y[off_omit], s=27, c='gray', alpha=0.5, marker='v', zorder=4, edgecolors='none', linewidths=0)
                 if len(ex_omit):
-                    ax.scatter(t_plot[ex_omit], y[ex_omit], s=36, c='gray', alpha=0.5, marker='s', zorder=4, edgecolors='darkgray', linewidths=0.5)
+                    ax.scatter(t_plot[ex_omit], y[ex_omit], s=27, c='gray', alpha=0.5, marker='s', zorder=4, edgecolors='none', linewidths=0)
                 if len(exoff_omit):
-                    ax.scatter(t_plot[exoff_omit], y[exoff_omit], s=36, c='gray', alpha=0.5, marker='D', zorder=4, edgecolors='darkgray', linewidths=0.5)
+                    ax.scatter(t_plot[exoff_omit], y[exoff_omit], s=27, c='gray', alpha=0.5, marker='D', zorder=4, edgecolors='none', linewidths=0)
         else:
             self.plot_host.clear_breath_markers()
 
@@ -601,6 +633,17 @@ class PlotManager:
                     color = "#39FF14"  # Default bright green
 
                 self.plot_host.add_or_update_y2(t_plot, arr, label=label, color=color, max_points=None)
+
+                # Force Y-axis range for onset_height_ratio to start at 0
+                if key == "onset_height_ratio":
+                    ax_y2 = getattr(self.plot_host, 'ax_y2', None)
+                    if ax_y2 is not None:
+                        import numpy as np
+                        valid_data = arr[~np.isnan(arr)]
+                        if len(valid_data) > 0:
+                            max_val = np.max(valid_data)
+                            ax_y2.set_ylim(0, max_val * 1.1)  # 0 to max + 10% padding
+
                 self.plot_host.fig.tight_layout()
             else:
                 self.plot_host.clear_y2()
@@ -627,13 +670,15 @@ class PlotManager:
                 eupnea_thresh = self.window.eupnea_freq_threshold
                 apnea_thresh = self.window._parse_float(self.window.ApneaThresh) or 0.5
 
+                # Get sniff regions from state (needed for overlay display)
+                sniff_regions = self.state.sniff_regions_by_sweep.get(sweep_idx, [])
+
                 # Compute eupnea regions based on selected mode
                 if self.window.eupnea_detection_mode == "gmm":
                     # GMM-based: Eupnea = breaths NOT classified as sniffing
                     eupnea_mask = self.window._compute_eupnea_from_gmm(sweep_idx, len(y))
                 else:
                     # Frequency-based (legacy): Use threshold method
-                    sniff_regions = self.state.sniff_regions_by_sweep.get(sweep_idx, [])
                     eupnea_mask = metrics.detect_eupnic_regions(
                         t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx,
                         freq_threshold_hz=eupnea_thresh,
@@ -652,8 +697,8 @@ class PlotManager:
                     sweep_idx, t, y, pks, on_idx, off_idx, ex_idx, exoff_idx
                 )
 
-                # Apply the overlays
-                self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask, outlier_mask, failure_mask)
+                # Apply the overlays (including sniff_regions for unified display control)
+                self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask, outlier_mask, failure_mask, sniff_regions, state=self.state)
             else:
                 self.plot_host.clear_region_overlays()
         except Exception as e:

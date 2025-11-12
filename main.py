@@ -44,7 +44,7 @@ from export import ExportManager
 # Import editing modes
 from editing import EditingModes
 # Import dialogs
-from dialogs import GMMClusteringDialog, SpectralAnalysisDialog, OutlierMetricsDialog, SaveMetaDialog
+from dialogs import GMMClusteringDialog, SpectralAnalysisDialog, OutlierMetricsDialog, SaveMetaDialog, PeakNavigatorDialog
 
 # Import version
 from version_info import VERSION_STRING
@@ -194,6 +194,9 @@ class MainWindow(QMainWindow):
         # GMM Clustering button
         self.GMMClusteringButton.clicked.connect(self.on_gmm_clustering_clicked)
 
+        # Peak Navigator/Editor button
+        self.editor_pushButton.clicked.connect(self.on_peak_navigator_clicked)
+
         # Auto-Update GMM checkbox
         # Auto-Update GMM checkbox moved to GMM dialog
         # Connect the manual update button
@@ -263,6 +266,37 @@ class MainWindow(QMainWindow):
         self.state.y2_metric_key = None
         self.y2plot_dropdown.currentIndexChanged.connect(self.on_y2_metric_changed)
 
+        # --- Display Control Widgets ---
+        # Y-axis autoscale checkbox (percentile vs min/max)
+        if hasattr(self, 'yautoscale_checkBox'):
+            self.yautoscale_checkBox.setChecked(self.state.use_percentile_autoscale)
+            self.yautoscale_checkBox.toggled.connect(self.on_yautoscale_toggled)
+
+        # Y-axis padding spinbox (for percentile mode)
+        if hasattr(self, 'ypadding_SpinBox'):
+            self.ypadding_SpinBox.setMinimum(0.0)
+            self.ypadding_SpinBox.setMaximum(1.0)
+            self.ypadding_SpinBox.setSingleStep(0.05)
+            self.ypadding_SpinBox.setDecimals(2)
+            self.ypadding_SpinBox.setValue(self.state.autoscale_padding)
+            self.ypadding_SpinBox.valueChanged.connect(self.on_ypadding_changed)
+
+        # Region display toggle checkboxes (line vs shade)
+        if hasattr(self, 'eupnea_checkBox'):
+            self.eupnea_checkBox.setChecked(self.state.eupnea_use_shade)
+            self.eupnea_checkBox.toggled.connect(self.on_eupnea_display_toggled)
+
+        if hasattr(self, 'sniffing_checkBox'):
+            self.sniffing_checkBox.setChecked(self.state.sniffing_use_shade)
+            self.sniffing_checkBox.toggled.connect(self.on_sniffing_display_toggled)
+
+        if hasattr(self, 'Apnea_checkBox'):
+            self.Apnea_checkBox.setChecked(self.state.apnea_use_shade)
+            self.Apnea_checkBox.toggled.connect(self.on_apnea_display_toggled)
+
+        if hasattr(self, 'Outliers_checkBox'):
+            self.Outliers_checkBox.setChecked(self.state.outliers_use_shade)
+            self.Outliers_checkBox.toggled.connect(self.on_outliers_display_toggled)
 
         # Initialize editing modes manager
         self.editing_modes = EditingModes(self)
@@ -2202,6 +2236,75 @@ class MainWindow(QMainWindow):
             self.peak_height_threshold = new_value
             self.plot_host.update_threshold_line(new_value)
 
+            # Synchronize with auto-threshold workflow: fit model for p_noise calculation
+            self._fit_threshold_model_for_manual_slider()
+
+    def _fit_threshold_model_for_manual_slider(self):
+        """
+        Fit the exponential + 2 Gaussians model for p_noise calculation.
+        This is called when the manual threshold slider changes to synchronize
+        with the auto-threshold workflow.
+        """
+        from scipy.signal import find_peaks
+        import core.metrics as metrics
+
+        st = self.state
+        if not st.analyze_chan or st.analyze_chan not in st.sweeps:
+            return
+
+        try:
+            # Check if we already have peak_heights from a previous auto-detect
+            if not hasattr(self, 'all_peak_heights') or self.all_peak_heights is None:
+                # Need to compute peak_heights by detecting peaks from current data
+                all_sweeps_data = []
+                n_sweeps = st.sweeps[st.analyze_chan].shape[1]
+
+                for sweep_idx in range(n_sweeps):
+                    if sweep_idx in st.omitted_sweeps:
+                        continue
+                    y_sweep = self._get_processed_for(st.analyze_chan, sweep_idx)
+                    if y_sweep is not None:
+                        all_sweeps_data.append(y_sweep)
+
+                if not all_sweeps_data:
+                    # No data available, clear model params
+                    metrics.set_threshold_model_params(None)
+                    return
+
+                y_data = np.concatenate(all_sweeps_data)
+
+                # Detect all peaks with minimal prominence AND above baseline (height > 0)
+                min_dist_samples = int(self.peak_min_dist * st.sr_hz)
+                peaks, props = find_peaks(y_data, height=0, prominence=0.001, distance=min_dist_samples)
+                peak_heights = y_data[peaks]
+
+                if len(peak_heights) < 10:
+                    # Not enough peaks, clear model params
+                    metrics.set_threshold_model_params(None)
+                    return
+
+                # Store for reuse
+                self.all_peak_heights = peak_heights
+
+            # Fit the model using the peak heights
+            local_min_threshold, model_params = self._calculate_local_minimum_threshold_silent(self.all_peak_heights)
+
+            # Store model parameters for p_noise calculation
+            if model_params is not None:
+                metrics.set_threshold_model_params(model_params)
+                print(f"[Manual Threshold] Fitted model for p_noise calculation")
+            else:
+                # Model fit failed, clear params
+                metrics.set_threshold_model_params(None)
+                print(f"[Manual Threshold] Model fit failed, p_noise will be unavailable")
+
+        except Exception as e:
+            print(f"[Manual Threshold] Error fitting model: {e}")
+            import traceback
+            traceback.print_exc()
+            # Clear model params on error
+            metrics.set_threshold_model_params(None)
+
     def _apply_peak_detection(self):
         """
         Run peak detection on the ANALYZE channel for ALL sweeps,
@@ -2238,6 +2341,7 @@ class MainWindow(QMainWindow):
         st.breath_by_sweep.clear()
         st.all_peaks_by_sweep.clear()  # ML training data: ALL peaks with labels
         st.all_breaths_by_sweep.clear()  # ML training data: breath events for ALL peaks
+        st.peak_metrics_by_sweep.clear()  # ML training data: comprehensive peak metrics
         # st.sigh_by_sweep.clear()
 
 
@@ -2272,6 +2376,57 @@ class MainWindow(QMainWindow):
                 direction=direction
             )
             st.all_peaks_by_sweep[s] = all_peaks_data
+
+            # Step 3.5: Compute comprehensive metrics for ML (merge detection, noise classification)
+            # Get P(noise) and P(breath) if available from metrics module
+            try:
+                import core.metrics as metrics_mod
+                # Extract breath events for p_noise computation
+                on = all_breaths.get('onsets', np.array([]))
+                off = all_breaths.get('offsets', np.array([]))
+                exm = all_breaths.get('expmins', np.array([]))
+                exo = all_breaths.get('expoffs', np.array([]))
+
+                # Check if threshold model is available
+                if s == 0:
+                    print(f"[peak-detection] Threshold model params: {metrics_mod._threshold_model_params}")
+
+                p_noise_all = metrics_mod.compute_p_noise(st.t, y_proc, st.sr_hz, all_peak_indices, on, off, exm, exo)
+                p_breath_all = 1.0 - p_noise_all if p_noise_all is not None else None
+                if s == 0:
+                    print(f"[peak-detection] Computed p_noise for {len(all_peak_indices)} peaks, sample values: {p_noise_all[:5] if p_noise_all is not None and len(p_noise_all) > 0 else 'None'}")
+            except Exception as e:
+                print(f"[peak-detection] Warning: Could not compute P(noise): {e}")
+                import traceback
+                traceback.print_exc()
+                p_noise_all = None
+                p_breath_all = None
+
+            peak_metrics = peakdet.compute_peak_candidate_metrics(
+                y=y_proc,
+                all_peak_indices=all_peak_indices,
+                breath_events=all_breaths,
+                sr_hz=st.sr_hz,
+                p_noise=p_noise_all,
+                p_breath=p_breath_all
+            )
+            st.peak_metrics_by_sweep[s] = peak_metrics  # Original metrics (never modified, for ML)
+            st.current_peak_metrics_by_sweep[s] = peak_metrics  # Current metrics (updated after edits, for Y2 plotting)
+
+            # Debug: Show sample metrics for first sweep
+            if s == 0 and len(peak_metrics) > 0:
+                print(f"[peak-metrics] Computed {len(peak_metrics)} peak metrics for sweep {s}")
+                # Show first potential merge candidate (small normalized gap + shallow trough)
+                merge_candidates = [m for m in peak_metrics
+                                   if m.get('gap_to_next_norm', 1.0) is not None
+                                   and m.get('gap_to_next_norm') < 0.3
+                                   and m.get('trough_ratio_next', 1.0) is not None
+                                   and m.get('trough_ratio_next') < 0.15]
+                if merge_candidates:
+                    mc = merge_candidates[0]
+                    print(f"[peak-metrics] Example merge candidate at peak {mc['peak_idx']}:")
+                    print(f"  gap_to_next_norm={mc['gap_to_next_norm']:.2f}, trough_ratio_next={mc['trough_ratio_next']:.2f}")
+                    print(f"  onset_above_zero={mc['onset_above_zero']}, prom_asymmetry={mc.get('prom_asymmetry', 'N/A')}")
 
             # Step 4: Extract only labeled breaths for display (backward compatibility)
             labeled_mask = all_peaks_data['labels'] == 1
@@ -3058,11 +3213,23 @@ class MainWindow(QMainWindow):
                 gmm_probs = st.gmm_sniff_probabilities[s]
             metrics.set_gmm_probabilities(gmm_probs)
 
+            # Set peak candidate metrics for this sweep (if available)
+            # Prefer current_peak_metrics_by_sweep (updated after edits) for Y2 plotting,
+            # fallback to peak_metrics_by_sweep (original auto-detected) for ML training
+            peak_metrics = None
+            if hasattr(st, 'current_peak_metrics_by_sweep') and s in st.current_peak_metrics_by_sweep:
+                peak_metrics = st.current_peak_metrics_by_sweep[s]
+            elif hasattr(st, 'peak_metrics_by_sweep') and s in st.peak_metrics_by_sweep:
+                peak_metrics = st.peak_metrics_by_sweep[s]
+            metrics.set_peak_metrics(peak_metrics)
+
             y2 = fn(st.t, y_proc, st.sr_hz, pks, on, off, exm, exo)
             st.y2_values_by_sweep[s] = y2
 
         # Clear GMM probabilities after computation
         metrics.set_gmm_probabilities(None)
+        # Clear peak metrics after computation
+        metrics.set_peak_metrics(None)
 
     def on_y2_metric_changed(self, idx: int):
         key = self.y2plot_dropdown.itemData(idx)
@@ -3074,6 +3241,53 @@ class MainWindow(QMainWindow):
         # Force a redraw of current sweep
         # Also reset Y2 axis so it rescales to new data
         self.plot_host.clear_y2()
+        self.redraw_main_plot()
+
+    ##################################################
+    ## Display Control Handlers ##
+    ##################################################
+
+    def on_yautoscale_toggled(self, checked: bool):
+        """Toggle Y-axis autoscale between percentile and full range mode."""
+        self.state.use_percentile_autoscale = checked
+        mode = "percentile (99th)" if checked else "full range (min/max)"
+        self._log_status_message(f"Y-axis autoscale: {mode}", 2000)
+        self.redraw_main_plot()
+
+    def on_ypadding_changed(self, value: float):
+        """Adjust padding for percentile autoscale mode."""
+        self.state.autoscale_padding = value
+        self._log_status_message(f"Y-axis padding: {value*100:.0f}%", 2000)
+        # Only redraw if in percentile mode
+        if self.state.use_percentile_autoscale:
+            self.redraw_main_plot()
+
+    def on_eupnea_display_toggled(self, checked: bool):
+        """Toggle eupnea region display between shade and line."""
+        self.state.eupnea_use_shade = checked
+        mode = "shading" if checked else "line"
+        self._log_status_message(f"Eupnea display: {mode}", 2000)
+        self.redraw_main_plot()
+
+    def on_sniffing_display_toggled(self, checked: bool):
+        """Toggle sniffing region display between shade and line."""
+        self.state.sniffing_use_shade = checked
+        mode = "shading" if checked else "line"
+        self._log_status_message(f"Sniffing display: {mode}", 2000)
+        self.redraw_main_plot()
+
+    def on_apnea_display_toggled(self, checked: bool):
+        """Toggle apnea region display between shade and line."""
+        self.state.apnea_use_shade = checked
+        mode = "shading" if checked else "line"
+        self._log_status_message(f"Apnea display: {mode}", 2000)
+        self.redraw_main_plot()
+
+    def on_outliers_display_toggled(self, checked: bool):
+        """Toggle outliers display between shade and line."""
+        self.state.outliers_use_shade = checked
+        mode = "shading" if checked else "line"
+        self._log_status_message(f"Outliers display: {mode}", 2000)
         self.redraw_main_plot()
 
     ##################################################
@@ -3164,12 +3378,16 @@ class MainWindow(QMainWindow):
             min_apnea_duration_sec=apnea_thresh
         )
 
+        # Get sniff regions for overlay display
+        sniff_regions = st.sniff_regions_by_sweep.get(s, [])
+
         # Update ONLY the region overlays (skips outlier masks entirely - huge speedup!)
         self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask,
-                                              outlier_mask=None, failure_mask=None)
+                                              outlier_mask=None, failure_mask=None,
+                                              sniff_regions=sniff_regions, state=st)
 
-        # Update sniffing region backgrounds (purple)
-        self.editing_modes.update_sniff_artists(t_plot, s)
+        # Update sniffing region backgrounds (purple) - Note: This may be redundant with update_region_overlays
+        # self.editing_modes.update_sniff_artists(t_plot, s)
 
         # Refresh canvas
         self.plot_host.canvas.draw_idle()
@@ -3307,6 +3525,26 @@ class MainWindow(QMainWindow):
             print("[gmm-clustering] Results applied to main plot")
             telemetry.log_feature_used('gmm_clustering')
             self.redraw_main_plot()
+
+    def on_peak_navigator_clicked(self):
+        """Open Peak Navigator dialog for efficient peak curation."""
+        # Check if we have peak data
+        st = self.state
+        if not st.peaks_by_sweep or len(st.peaks_by_sweep) == 0:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "No Peak Data",
+                "Please detect peaks first using 'Apply Peak Find' button.\n\n"
+                "Peak Navigator requires detected peaks to navigate through candidates."
+            )
+            return
+
+        # Create and show Peak Navigator dialog
+        dlg = PeakNavigatorDialog(parent=self, main_window=self)
+        telemetry.log_screen_view('Peak Navigator Dialog', screen_class='curation_dialog')
+        dlg.exec()  # Non-modal - user can keep it open while curating
+        telemetry.log_feature_used('peak_navigator')
 
     def _refresh_omit_button_label(self):
         """Update Omit button text based on whether current sweep is omitted."""

@@ -342,7 +342,7 @@ class PlotHost(QWidget):
     #     self._store_from_axes(mode="single")
     #     self.canvas.draw_idle()
 
-    def show_trace_with_spans(self, t, y, spans_s, title: str = "", max_points: int = 2000, ylabel: str = "Signal"):
+    def show_trace_with_spans(self, t, y, spans_s, title: str = "", max_points: int = 2000, ylabel: str = "Signal", state=None):
         prev_xlim = self._last_single["xlim"] if self._preserve_x else None
         prev_ylim = self._last_single["ylim"] if self._preserve_y else None
 
@@ -385,14 +385,25 @@ class PlotHost(QWidget):
         # Single-panel: no grid
         self.ax_main.grid(False)
 
-        # Intelligent y-axis scaling: ALWAYS use 99th percentile + padding to avoid artifacts
-        # This prevents huge outliers from distorting the view
-        y_min = np.percentile(y, 1)  # 1st percentile for lower bound
-        y_max = np.percentile(y, 99)  # 99th percentile for upper bound
-        y_range = y_max - y_min
-        padding = 0.25 * y_range  # 25% padding to avoid clipping peaks
+        # Intelligent y-axis scaling: percentile or full range based on user preference
+        if state and hasattr(state, 'use_percentile_autoscale') and state.use_percentile_autoscale:
+            # Percentile mode: Use 99th percentile + configurable padding to avoid artifacts
+            y_min = np.percentile(y, 1)  # 1st percentile for lower bound
+            y_max = np.percentile(y, 99)  # 99th percentile for upper bound
+            y_range = y_max - y_min
+            padding_factor = getattr(state, 'autoscale_padding', 0.25)
+            padding = padding_factor * y_range
+            mode_str = f"99th percentile, {padding_factor*100:.0f}% padding"
+        else:
+            # Full range mode: Use absolute min/max
+            y_min = np.min(y)
+            y_max = np.max(y)
+            y_range = y_max - y_min
+            padding = 0.05 * y_range  # Small padding to avoid clipping edges
+            mode_str = "full range (min/max)"
+
         self.ax_main.set_ylim(y_min - padding, y_max + padding)
-        print(f"[Plot] Auto-scaled Y-axis: {y_min - padding:.3f} to {y_max + padding:.3f} (99th percentile)")
+        print(f"[Plot] Auto-scaled Y-axis: {y_min - padding:.3f} to {y_max + padding:.3f} ({mode_str})")
 
         # Restore preserved X view if desired (but always auto-scale Y)
         if prev_xlim is not None:
@@ -1043,7 +1054,7 @@ class PlotHost(QWidget):
             if sc is None or sc.axes is not ax:
                 setattr(self, scatter_attr,
                         ax.scatter(pts[:, 0], pts[:, 1], s=size, c=color, marker=marker,
-                                 zorder=5, edgecolors='white', linewidths=0.5))
+                                 zorder=5, edgecolors='none', linewidths=0))
             else:
                 sc.set_offsets(pts)
 
@@ -1345,10 +1356,43 @@ class PlotHost(QWidget):
             self.canvas.draw_idle()
 
     # ------- Region overlays (eupnea/apnea/problems) -------
-    def update_region_overlays(self, t, eupnea_mask, apnea_mask, outlier_mask=None, failure_mask=None):
+    def _draw_regions_with_mode(self, regions, use_shade, color, y_position_fraction=0.99):
         """
-        Add horizontal line overlays for eupnea (green lines), apnea (red lines),
-        outliers (orange background), and calculation failures (red background).
+        Draw regions as either lines or shaded spans based on user preference.
+
+        Args:
+            regions: List of (start_t, end_t) tuples
+            use_shade: If True, draw axvspan shading; if False, draw line at specified Y position
+            color: Color string (e.g., '#2e7d32', 'red', 'purple', '#FFA500')
+            y_position_fraction: For line mode, Y position as fraction of range (0.0 to 1.0)
+                                0.01 = bottom, 0.50 = middle, 0.99 = top
+        """
+        if use_shade:
+            # Full-height shaded background
+            for start_t, end_t in regions:
+                span = self.ax_main.axvspan(
+                    start_t, end_t,
+                    color=color, alpha=0.25,
+                    zorder=1, linewidth=0
+                )
+                self._region_overlays.append(span)
+        else:
+            # Thin line at specified Y position
+            y_lim = self.ax_main.get_ylim()
+            y_val = y_lim[0] + y_position_fraction * (y_lim[1] - y_lim[0])
+
+            for start_t, end_t in regions:
+                line = self.ax_main.plot(
+                    [start_t, end_t], [y_val, y_val],
+                    color=color, linewidth=1.5,
+                    alpha=0.8, zorder=10
+                )[0]
+                self._region_overlays.append(line)
+
+    def update_region_overlays(self, t, eupnea_mask, apnea_mask, outlier_mask=None, failure_mask=None, sniff_regions=None, state=None):
+        """
+        Add overlays for eupnea, sniffing, apnea, outliers, and calculation failures.
+        Display mode (line vs shade) is controlled by state variables.
 
         Args:
             t: time array
@@ -1356,55 +1400,71 @@ class PlotHost(QWidget):
             apnea_mask: binary array (0/1) indicating apneic regions
             outlier_mask: binary array (0/1) indicating outlier breath cycles (orange)
             failure_mask: binary array (0/1) indicating calculation failure cycles (red)
+            sniff_regions: list of (start_t, end_t) tuples for sniffing regions (purple)
         """
         self.clear_region_overlays()
 
         if self.ax_main is None:
             return
 
-        # Get current y-axis limits to position the overlay lines
-        ylim = self.ax_main.get_ylim()
-        y_eupnea = ylim[1] - 0.01 * (ylim[1] - ylim[0])  # 99% of y-range (near top)
-        y_apnea = ylim[0] + 0.01 * (ylim[1] - ylim[0])   # 1% of y-range (near bottom)
-
         # Storage for overlay artists
         if not hasattr(self, '_region_overlays'):
             self._region_overlays = []
 
-        # Add eupnea regions (thin black lines at top)
+        # Get display modes from state (defaults to current behavior if not set)
+        eupnea_shade = getattr(state, 'eupnea_use_shade', False) if state else False
+        sniffing_shade = getattr(state, 'sniffing_use_shade', True) if state else True
+        apnea_shade = getattr(state, 'apnea_use_shade', False) if state else False
+        outliers_shade = getattr(state, 'outliers_use_shade', True) if state else True
+
+        # Draw eupnea regions (green)
         if eupnea_mask is not None and len(eupnea_mask) == len(t):
             eupnea_regions = self._extract_regions(t, eupnea_mask)
-            for start_t, end_t in eupnea_regions:
-                line = self.ax_main.plot([start_t, end_t], [y_eupnea, y_eupnea],
-                                       color='#2e7d32', linewidth=1.5, alpha=0.8, zorder=10)[0]
-                self._region_overlays.append(line)
+            self._draw_regions_with_mode(
+                eupnea_regions,
+                use_shade=eupnea_shade,
+                color='#2e7d32',  # Dark green
+                y_position_fraction=0.99  # Top of plot
+            )
 
-        # Add apnea regions (thin red lines at bottom)
+        # Draw sniffing regions (purple) - same Y position as eupnea since they don't overlap
+        if sniff_regions is not None and len(sniff_regions) > 0:
+            self._draw_regions_with_mode(
+                sniff_regions,
+                use_shade=sniffing_shade,
+                color='purple',
+                y_position_fraction=0.99  # Top of plot (same as eupnea)
+            )
+
+        # Draw apnea regions (red)
         if apnea_mask is not None and len(apnea_mask) == len(t):
             apnea_regions = self._extract_regions(t, apnea_mask)
-            for start_t, end_t in apnea_regions:
-                line = self.ax_main.plot([start_t, end_t], [y_apnea, y_apnea],
-                                       color='red', linewidth=1.5, alpha=0.8, zorder=10)[0]
-                self._region_overlays.append(line)
+            self._draw_regions_with_mode(
+                apnea_regions,
+                use_shade=apnea_shade,
+                color='red',
+                y_position_fraction=0.01  # Bottom of plot
+            )
 
-        # Add outlier regions (orange background) - full height, visible rectangles
+        # Draw outlier regions (orange)
         if outlier_mask is not None and len(outlier_mask) == len(t):
             outlier_regions = self._extract_regions(t, outlier_mask)
-            # Debug: print(f"Found {len(outlier_regions)} outlier regions")
+            # Ensure minimum width for visibility (0.1 seconds)
+            adjusted_regions = []
             for start_t, end_t in outlier_regions:
                 width = end_t - start_t
-                # Ensure minimum width for visibility (0.1 seconds)
                 if width < 0.1:
                     mid = (start_t + end_t) / 2
                     start_t = mid - 0.05
                     end_t = mid + 0.05
-                # Outlier region visualization (debug: uncomment to see timing)
-                # print(f"  Outlier region: {start_t:.3f} to {end_t:.3f} (width={end_t-start_t:.3f}s)")
-                # Full-height rectangle with orange color
-                span = self.ax_main.axvspan(start_t, end_t,
-                                          color='#FFA500', alpha=0.25,
-                                          zorder=1, linewidth=0)
-                self._region_overlays.append(span)
+                adjusted_regions.append((start_t, end_t))
+
+            self._draw_regions_with_mode(
+                adjusted_regions,
+                use_shade=outliers_shade,
+                color='#FFA500',  # Orange
+                y_position_fraction=0.50  # Middle (if line mode)
+            )
 
         # Add failure regions (red background) - full height, visible rectangles
         if failure_mask is not None and len(failure_mask) == len(t):
