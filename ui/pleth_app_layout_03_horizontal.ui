@@ -137,7 +137,7 @@ QPushButton:pressed {
 </string>
    </property>
    <layout class="QGridLayout" name="gridLayout">
-    <item row="1" column="0">
+    <item row="0" column="0">
      <widget class="QTabWidget" name="Tabs">
       <property name="font">
        <font>
@@ -228,6 +228,98 @@ QTabBar::tab:bottom:selected {
           <item>
            <layout class="QHBoxLayout" name="horizontalLayout_7">
             <item>
+             <widget class="QLineEdit" name="BrowseFilePath">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="minimumSize">
+               <size>
+                <width>670</width>
+                <height>0</height>
+               </size>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacer_2">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QPushButton" name="helpbutton">
+              <property name="font">
+               <font>
+                <pointsize>8</pointsize>
+                <underline>true</underline>
+               </font>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">QPushButton {
+    text-align: left;
+    border: none;
+    background: transparent;
+    text-decoration: underline;
+    color: #4A9EFF;
+}
+QPushButton:hover {
+    color: #6BB6FF;
+}</string>
+              </property>
+              <property name="text">
+               <string>Help</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="update_notification_label">
+              <property name="font">
+               <font>
+                <pointsize>8</pointsize>
+                <underline>true</underline>
+               </font>
+              </property>
+              <property name="visible">
+               <bool>false</bool>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">QLabel {
+    text-align: left;
+    border: none;
+    background: transparent;
+    text-decoration: underline;
+    color: #FFD700;
+}
+QLabel:hover {
+    color: #FFED4E;
+}</string>
+              </property>
+              <property name="text">
+               <string/>
+              </property>
+              <property name="textFormat">
+               <enum>Qt::RichText</enum>
+              </property>
+              <property name="openExternalLinks">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_10">
+            <item>
              <widget class="QPushButton" name="BrowseButton">
               <property name="sizePolicy">
                <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
@@ -237,8 +329,8 @@ QTabBar::tab:bottom:selected {
               </property>
               <property name="minimumSize">
                <size>
-                <width>100</width>
-                <height>0</height>
+                <width>58</width>
+                <height>58</height>
                </size>
               </property>
               <property name="maximumSize">
@@ -488,98 +580,6 @@ QPushButton#BrowseButton:disabled {
               </property>
              </widget>
             </item>
-            <item>
-             <widget class="QLineEdit" name="BrowseFilePath">
-              <property name="sizePolicy">
-               <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                <horstretch>0</horstretch>
-                <verstretch>0</verstretch>
-               </sizepolicy>
-              </property>
-              <property name="minimumSize">
-               <size>
-                <width>670</width>
-                <height>0</height>
-               </size>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <spacer name="horizontalSpacer_2">
-              <property name="orientation">
-               <enum>Qt::Horizontal</enum>
-              </property>
-              <property name="sizeHint" stdset="0">
-               <size>
-                <width>40</width>
-                <height>20</height>
-               </size>
-              </property>
-             </spacer>
-            </item>
-            <item>
-             <widget class="QPushButton" name="helpbutton">
-              <property name="font">
-               <font>
-                <pointsize>8</pointsize>
-                <underline>true</underline>
-               </font>
-              </property>
-              <property name="styleSheet">
-               <string notr="true">QPushButton {
-    text-align: left;
-    border: none;
-    background: transparent;
-    text-decoration: underline;
-    color: #4A9EFF;
-}
-QPushButton:hover {
-    color: #6BB6FF;
-}</string>
-              </property>
-              <property name="text">
-               <string>Help</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QLabel" name="update_notification_label">
-              <property name="font">
-               <font>
-                <pointsize>8</pointsize>
-                <underline>true</underline>
-               </font>
-              </property>
-              <property name="visible">
-               <bool>false</bool>
-              </property>
-              <property name="styleSheet">
-               <string notr="true">QLabel {
-    text-align: left;
-    border: none;
-    background: transparent;
-    text-decoration: underline;
-    color: #FFD700;
-}
-QLabel:hover {
-    color: #FFED4E;
-}</string>
-              </property>
-              <property name="text">
-               <string/>
-              </property>
-              <property name="textFormat">
-               <enum>Qt::RichText</enum>
-              </property>
-              <property name="openExternalLinks">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </item>
-          <item>
-           <layout class="QHBoxLayout" name="horizontalLayout_10">
             <item>
              <widget class="QGroupBox" name="groupBox_2">
               <property name="sizePolicy">
@@ -1173,7 +1173,7 @@ Options</string>
               </property>
               <property name="minimumSize">
                <size>
-                <width>239</width>
+                <width>535</width>
                 <height>71</height>
                </size>
               </property>
@@ -1204,13 +1204,13 @@ Options</string>
         }</string>
               </property>
               <property name="title">
-               <string>Peak Detection</string>
+               <string>Peak Detection &amp;&amp; Breath Characterization</string>
               </property>
               <widget class="QPushButton" name="ApplyPeakFindPushButton">
                <property name="geometry">
                 <rect>
-                 <x>20</x>
-                 <y>40</y>
+                 <x>220</x>
+                 <y>20</y>
                  <width>100</width>
                  <height>25</height>
                 </rect>
@@ -1295,13 +1295,13 @@ QPushButton:disabled {
                 <string>Minimum vertical distance between peak and surrounding baseline required to detect a breath</string>
                </property>
                <property name="text">
-                <string>Prom/Thresh:</string>
+                <string>Detection</string>
                </property>
               </widget>
               <widget class="QPushButton" name="ThreshOptions">
                <property name="geometry">
                 <rect>
-                 <x>150</x>
+                 <x>230</x>
                  <y>40</y>
                  <width>91</width>
                  <height>24</height>
@@ -1335,107 +1335,208 @@ QPushButton:hover {
                 <string>More Options</string>
                </property>
               </widget>
-              <widget class="QDoubleSpinBox" name="PeakPromValueSpinBox">
+              <widget class="QComboBox" name="comboBox">
                <property name="geometry">
                 <rect>
-                 <x>90</x>
-                 <y>20</y>
-                 <width>81</width>
+                 <x>10</x>
+                 <y>40</y>
+                 <width>68</width>
                  <height>22</height>
                 </rect>
                </property>
+               <property name="font">
+                <font>
+                 <pointsize>8</pointsize>
+                </font>
+               </property>
+              </widget>
+              <widget class="QComboBox" name="comboBox_2">
+               <property name="geometry">
+                <rect>
+                 <x>80</x>
+                 <y>40</y>
+                 <width>68</width>
+                 <height>22</height>
+                </rect>
+               </property>
+               <property name="font">
+                <font>
+                 <pointsize>8</pointsize>
+                </font>
+               </property>
+              </widget>
+              <widget class="QComboBox" name="comboBox_3">
+               <property name="geometry">
+                <rect>
+                 <x>150</x>
+                 <y>40</y>
+                 <width>68</width>
+                 <height>22</height>
+                </rect>
+               </property>
+               <property name="font">
+                <font>
+                 <pointsize>8</pointsize>
+                </font>
+               </property>
+              </widget>
+              <widget class="QLabel" name="PeakProminenceLabel_2">
+               <property name="geometry">
+                <rect>
+                 <x>80</x>
+                 <y>20</y>
+                 <width>71</width>
+                 <height>16</height>
+                </rect>
+               </property>
                <property name="sizePolicy">
-                <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
-                 <horstretch>81</horstretch>
-                 <verstretch>18</verstretch>
+                <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>85</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="font">
+                <font>
+                 <pointsize>9</pointsize>
+                 <bold>false</bold>
+                </font>
+               </property>
+               <property name="toolTip">
+                <string>Minimum vertical distance between peak and surrounding baseline required to detect a breath</string>
+               </property>
+               <property name="text">
+                <string>Eup/Sniff</string>
+               </property>
+              </widget>
+              <widget class="QLabel" name="PeakProminenceLabel_3">
+               <property name="geometry">
+                <rect>
+                 <x>150</x>
+                 <y>20</y>
+                 <width>71</width>
+                 <height>16</height>
+                </rect>
+               </property>
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>85</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="font">
+                <font>
+                 <pointsize>9</pointsize>
+                 <bold>false</bold>
+                </font>
+               </property>
+               <property name="toolTip">
+                <string>Minimum vertical distance between peak and surrounding baseline required to detect a breath</string>
+               </property>
+               <property name="text">
+                <string>Sigh</string>
+               </property>
+              </widget>
+              <widget class="QLineEdit" name="ApneaThresh">
+               <property name="geometry">
+                <rect>
+                 <x>436</x>
+                 <y>39</y>
+                 <width>30</width>
+                 <height>18</height>
+                </rect>
+               </property>
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
                 </sizepolicy>
                </property>
                <property name="minimumSize">
                 <size>
-                 <width>81</width>
+                 <width>0</width>
                  <height>18</height>
                 </size>
                </property>
+               <property name="maximumSize">
+                <size>
+                 <width>30</width>
+                 <height>18</height>
+                </size>
+               </property>
+               <property name="font">
+                <font>
+                 <pointsize>8</pointsize>
+                </font>
+               </property>
               </widget>
-             </widget>
-            </item>
-            <item>
-             <widget class="QGroupBox" name="groupBox_7">
-              <property name="minimumSize">
-               <size>
-                <width>301</width>
-                <height>71</height>
-               </size>
-              </property>
-              <property name="maximumSize">
-               <size>
-                <width>250</width>
-                <height>71</height>
-               </size>
-              </property>
-              <property name="font">
-               <font>
-                <pointsize>10</pointsize>
-                <bold>true</bold>
-               </font>
-              </property>
-              <property name="styleSheet">
-               <string notr="true">QGroupBox {
-            border: 1px solid #ffffff;
-            border-radius: 4px;
-            margin-top: 0.5em;
-            padding-top: 0.5em;
-        }
-
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 3px 0 3px;
-        }</string>
-              </property>
-              <property name="title">
-               <string>Breath Characterization</string>
-              </property>
-              <layout class="QVBoxLayout" name="verticalLayout_14">
-               <property name="spacing">
-                <number>0</number>
+              <widget class="QLineEdit" name="OutlierSD">
+               <property name="geometry">
+                <rect>
+                 <x>440</x>
+                 <y>20</y>
+                 <width>30</width>
+                 <height>18</height>
+                </rect>
                </property>
-               <property name="topMargin">
-                <number>0</number>
+               <property name="minimumSize">
+                <size>
+                 <width>30</width>
+                 <height>18</height>
+                </size>
                </property>
-               <property name="bottomMargin">
-                <number>2</number>
+               <property name="maximumSize">
+                <size>
+                 <width>30</width>
+                 <height>18</height>
+                </size>
                </property>
-               <item>
-                <layout class="QHBoxLayout" name="horizontalLayout_11">
-                 <item>
-                  <widget class="QPushButton" name="GMMClusteringButton">
-                   <property name="sizePolicy">
-                    <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
-                     <horstretch>0</horstretch>
-                     <verstretch>0</verstretch>
-                    </sizepolicy>
-                   </property>
-                   <property name="minimumSize">
-                    <size>
-                     <width>150</width>
-                     <height>0</height>
-                    </size>
-                   </property>
-                   <property name="maximumSize">
-                    <size>
-                     <width>150</width>
-                     <height>16777215</height>
-                    </size>
-                   </property>
-                   <property name="cursor">
-                    <cursorShape>PointingHandCursor</cursorShape>
-                   </property>
-                   <property name="toolTip">
-                    <string>Open eupnea/sniffing detection dialog to automatically classify breathing patterns</string>
-                   </property>
-                   <property name="styleSheet">
-                    <string>QPushButton {
+               <property name="font">
+                <font>
+                 <pointsize>8</pointsize>
+                </font>
+               </property>
+              </widget>
+              <widget class="QPushButton" name="OutlierThreshButton">
+               <property name="geometry">
+                <rect>
+                 <x>329</x>
+                 <y>18</y>
+                 <width>105</width>
+                 <height>23</height>
+                </rect>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>105</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>105</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="cursor">
+                <cursorShape>PointingHandCursor</cursorShape>
+               </property>
+               <property name="toolTip">
+                <string>Click to select which metrics to use for outlier detection</string>
+               </property>
+               <property name="styleSheet">
+                <string>QPushButton {
     text-align: left;
     border: none;
     background: transparent;
@@ -1445,30 +1546,70 @@ QPushButton:hover {
 QPushButton:hover {
     color: #6BB6FF;
 }</string>
-                   </property>
-                   <property name="text">
-                    <string>Eup./Sniff Detection</string>
-                   </property>
-                  </widget>
-                 </item>
-                 <item>
-                  <widget class="QPushButton" name="UpdateEupneaSniffingButton">
-                   <property name="minimumSize">
-                    <size>
-                     <width>125</width>
-                     <height>0</height>
-                    </size>
-                   </property>
-                   <property name="font">
-                    <font>
-                     <bold>true</bold>
-                    </font>
-                   </property>
-                   <property name="toolTip">
-                    <string>Manually update eupnea/sniffing detection (rerun GMM clustering and apply results to plot)</string>
-                   </property>
-                   <property name="styleSheet">
-                    <string notr="true">QPushButton {
+               </property>
+               <property name="text">
+                <string>Outlier Thr (SD):</string>
+               </property>
+              </widget>
+              <widget class="QLabel" name="ApneaDurLabel">
+               <property name="geometry">
+                <rect>
+                 <x>350</x>
+                 <y>40</y>
+                 <width>80</width>
+                 <height>16</height>
+                </rect>
+               </property>
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>80</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>80</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="toolTip">
+                <string>Minimum gap duration (in seconds) between breaths to be classified as an apnea event</string>
+               </property>
+               <property name="text">
+                <string>Apnea Dur (s)</string>
+               </property>
+              </widget>
+              <widget class="QPushButton" name="UpdateEupneaSniffingButton">
+               <property name="geometry">
+                <rect>
+                 <x>490</x>
+                 <y>30</y>
+                 <width>41</width>
+                 <height>27</height>
+                </rect>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>25</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="font">
+                <font>
+                 <bold>true</bold>
+                </font>
+               </property>
+               <property name="toolTip">
+                <string>Manually update eupnea/sniffing detection (rerun GMM clustering and apply results to plot)</string>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">QPushButton {
     background-color: #0d6efd;
     color: white;
     font-weight: bold;
@@ -1482,51 +1623,46 @@ QPushButton:hover {
 QPushButton:pressed {
     background-color: #0a58ca;
 }</string>
-                   </property>
-                   <property name="text">
-                    <string>Update Eup./Sniff</string>
-                   </property>
-                  </widget>
-                 </item>
-                 <item>
-                  <spacer name="horizontalSpacer_3">
-                   <property name="orientation">
-                    <enum>Qt::Horizontal</enum>
-                   </property>
-                   <property name="sizeHint" stdset="0">
-                    <size>
-                     <width>40</width>
-                     <height>20</height>
-                    </size>
-                   </property>
-                  </spacer>
-                 </item>
-                </layout>
-               </item>
-               <item>
-                <layout class="QHBoxLayout" name="horizontalLayout_14">
-                 <item>
-                  <widget class="QPushButton" name="OutlierThreshButton">
-                   <property name="minimumSize">
-                    <size>
-                     <width>105</width>
-                     <height>0</height>
-                    </size>
-                   </property>
-                   <property name="maximumSize">
-                    <size>
-                     <width>105</width>
-                     <height>16777215</height>
-                    </size>
-                   </property>
-                   <property name="cursor">
-                    <cursorShape>PointingHandCursor</cursorShape>
-                   </property>
-                   <property name="toolTip">
-                    <string>Click to select which metrics to use for outlier detection</string>
-                   </property>
-                   <property name="styleSheet">
-                    <string>QPushButton {
+               </property>
+               <property name="text">
+                <string>Update Eup./Sniff</string>
+               </property>
+              </widget>
+              <widget class="QPushButton" name="GMMClusteringButton">
+               <property name="geometry">
+                <rect>
+                 <x>460</x>
+                 <y>10</y>
+                 <width>150</width>
+                 <height>26</height>
+                </rect>
+               </property>
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>25</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>150</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="cursor">
+                <cursorShape>PointingHandCursor</cursorShape>
+               </property>
+               <property name="toolTip">
+                <string>Open eupnea/sniffing detection dialog to automatically classify breathing patterns</string>
+               </property>
+               <property name="styleSheet">
+                <string>QPushButton {
     text-align: left;
     border: none;
     background: transparent;
@@ -1536,104 +1672,11 @@ QPushButton:pressed {
 QPushButton:hover {
     color: #6BB6FF;
 }</string>
-                   </property>
-                   <property name="text">
-                    <string>Outlier Thr (SD):</string>
-                   </property>
-                  </widget>
-                 </item>
-                 <item>
-                  <widget class="QLineEdit" name="OutlierSD">
-                   <property name="minimumSize">
-                    <size>
-                     <width>30</width>
-                     <height>18</height>
-                    </size>
-                   </property>
-                   <property name="maximumSize">
-                    <size>
-                     <width>30</width>
-                     <height>18</height>
-                    </size>
-                   </property>
-                   <property name="font">
-                    <font>
-                     <pointsize>8</pointsize>
-                    </font>
-                   </property>
-                  </widget>
-                 </item>
-                 <item>
-                  <spacer name="horizontalSpacer_5">
-                   <property name="orientation">
-                    <enum>Qt::Horizontal</enum>
-                   </property>
-                   <property name="sizeHint" stdset="0">
-                    <size>
-                     <width>40</width>
-                     <height>20</height>
-                    </size>
-                   </property>
-                  </spacer>
-                 </item>
-                 <item>
-                  <widget class="QLabel" name="ApneaDurLabel">
-                   <property name="sizePolicy">
-                    <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                     <horstretch>0</horstretch>
-                     <verstretch>0</verstretch>
-                    </sizepolicy>
-                   </property>
-                   <property name="minimumSize">
-                    <size>
-                     <width>80</width>
-                     <height>0</height>
-                    </size>
-                   </property>
-                   <property name="maximumSize">
-                    <size>
-                     <width>80</width>
-                     <height>16777215</height>
-                    </size>
-                   </property>
-                   <property name="toolTip">
-                    <string>Minimum gap duration (in seconds) between breaths to be classified as an apnea event</string>
-                   </property>
-                   <property name="text">
-                    <string>Apnea Dur (s)</string>
-                   </property>
-                  </widget>
-                 </item>
-                 <item>
-                  <widget class="QLineEdit" name="ApneaThresh">
-                   <property name="sizePolicy">
-                    <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                     <horstretch>0</horstretch>
-                     <verstretch>0</verstretch>
-                    </sizepolicy>
-                   </property>
-                   <property name="minimumSize">
-                    <size>
-                     <width>0</width>
-                     <height>18</height>
-                    </size>
-                   </property>
-                   <property name="maximumSize">
-                    <size>
-                     <width>30</width>
-                     <height>18</height>
-                    </size>
-                   </property>
-                   <property name="font">
-                    <font>
-                     <pointsize>8</pointsize>
-                    </font>
-                   </property>
-                  </widget>
-                 </item>
-                </layout>
-               </item>
-              </layout>
+               </property>
+               <property name="text">
+                <string>Eup./Sniff Detection</string>
+               </property>
+              </widget>
              </widget>
             </item>
             <item>
@@ -3131,7 +3174,7 @@ QListWidget#selectedFilesList:focus {
               <property name="font">
                <font>
                 <family>Segoe UI</family>
-                <pointsize>9</pointsize>
+                <pointsize>-1</pointsize>
                 <bold>true</bold>
                </font>
               </property>
@@ -3168,7 +3211,7 @@ QPushButton#moveAllRight:pressed {
               <property name="font">
                <font>
                 <family>Segoe UI</family>
-                <pointsize>9</pointsize>
+                <pointsize>-1</pointsize>
                 <bold>true</bold>
                </font>
               </property>
@@ -3205,7 +3248,7 @@ QPushButton#moveSingleRight:pressed {
               <property name="font">
                <font>
                 <family>Segoe UI</family>
-                <pointsize>9</pointsize>
+                <pointsize>-1</pointsize>
                 <bold>true</bold>
                </font>
               </property>
@@ -3242,7 +3285,7 @@ QPushButton#moveSingleLeft:pressed {
               <property name="font">
                <font>
                 <family>Segoe UI</family>
-                <pointsize>9</pointsize>
+                <pointsize>-1</pointsize>
                 <bold>true</bold>
                </font>
               </property>

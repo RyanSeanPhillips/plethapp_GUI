@@ -409,10 +409,10 @@ class GMMClusteringDialog(QDialog):
         sniff_app_group = QGroupBox("Sniffing Region Application")
         sniff_app_layout = QVBoxLayout()
 
-        # Checkbox to enable/disable sniffing detection application
-        self.apply_sniffing_cb = QCheckBox("Apply Sniffing Detection to Plot")
-        self.apply_sniffing_cb.setChecked(False)  # Default to OFF
-        self.apply_sniffing_cb.setToolTip("When enabled, detected sniffing regions will be marked on the main plot.\n"
+        # Checkbox to enable/disable eupnea/sniffing detection application
+        self.apply_sniffing_cb = QCheckBox("Apply Eupnea/Sniffing Detection to Plot")
+        self.apply_sniffing_cb.setChecked(True)  # Default to ON
+        self.apply_sniffing_cb.setToolTip("When enabled, detected eupnea (green) and sniffing (purple) regions will be marked on the main plot.\n"
                                           "Turn off if baseline respiratory rate is high or plot is too cluttered.")
         sniff_app_layout.addWidget(self.apply_sniffing_cb)
 
@@ -692,40 +692,48 @@ class GMMClusteringDialog(QDialog):
             self.main_window.redraw_main_plot()
 
     def _on_clear_sniffing_regions(self):
-        """Clear all sniffing regions from the main plot."""
-        if not hasattr(self.main_window.state, 'sniff_regions_by_sweep'):
-            print("[gmm-dialog] No sniffing regions to clear")
-            return
+        """Clear all eupnea and sniffing regions from the main plot."""
+        regions_cleared = False
 
         # Clear all sniffing regions
-        self.main_window.state.sniff_regions_by_sweep.clear()
+        if hasattr(self.main_window.state, 'sniff_regions_by_sweep'):
+            self.main_window.state.sniff_regions_by_sweep.clear()
+            regions_cleared = True
+
+        # Clear all eupnea regions
+        if hasattr(self.main_window.state, 'eupnea_regions_by_sweep'):
+            self.main_window.state.eupnea_regions_by_sweep.clear()
+            regions_cleared = True
 
         # Clear GMM probabilities as well
         if hasattr(self.main_window.state, 'gmm_sniff_probabilities'):
             self.main_window.state.gmm_sniff_probabilities.clear()
 
-        print("[gmm-dialog] Cleared all sniffing regions")
+        if regions_cleared:
+            print("[gmm-dialog] Cleared all eupnea and sniffing regions")
+        else:
+            print("[gmm-dialog] No eupnea/sniffing regions to clear")
 
-        # Redraw main plot to remove purple markings
+        # Redraw main plot to remove green/purple markings
         self.main_window.redraw_main_plot()
 
     def _on_sniffing_application_toggled(self, checked):
-        """Handle toggling of the Apply Sniffing checkbox.
+        """Handle toggling of the Apply Eupnea/Sniffing checkbox.
 
-        When checked: Apply sniffing detection to main plot immediately
-        When unchecked: Clear all sniffing regions from main plot
+        When checked: Apply eupnea and sniffing detection to main plot immediately
+        When unchecked: Clear all eupnea and sniffing regions from main plot
         """
         if checked:
-            # User wants to apply sniffing detection
+            # User wants to apply eupnea/sniffing detection
             # Only apply if we have GMM results
             if self.cluster_labels is not None and self.sniffing_cluster_id is not None:
-                print("[gmm-dialog] Sniffing application enabled - applying to plot")
+                print("[gmm-dialog] Eupnea/sniffing application enabled - applying to plot")
                 self._apply_sniffing_to_plot()
             else:
-                print("[gmm-dialog] Sniffing application enabled, but no GMM results available yet")
+                print("[gmm-dialog] Eupnea/sniffing application enabled, but no GMM results available yet")
         else:
-            # User wants to remove sniffing detection
-            print("[gmm-dialog] Sniffing application disabled - clearing sniffing regions")
+            # User wants to remove eupnea/sniffing detection
+            print("[gmm-dialog] Eupnea/sniffing application disabled - clearing regions")
             self._on_clear_sniffing_regions()
 
     def _on_auto_update_gmm_toggled(self, checked):
@@ -740,11 +748,12 @@ class GMMClusteringDialog(QDialog):
             self.main_window.statusBar().showMessage(f"Auto-Update GMM {status}", 2000)
 
     def _apply_sniffing_to_plot(self):
-        """Apply sniffing regions to main plot (helper method called by toggle and auto-apply).
+        """Apply sniffing regions to main plot using shared core.gmm_clustering functions.
 
         Uses the confidence threshold slider to determine which breaths to mark as sniffing.
         """
         import numpy as np
+        from core import gmm_clustering
 
         if self.sniffing_cluster_id is None:
             print("[gmm-dialog] Cannot apply: no sniffing cluster identified")
@@ -754,112 +763,36 @@ class GMMClusteringDialog(QDialog):
         confidence_threshold = self.confidence_threshold_slider.value()
         print(f"[gmm-dialog] Using confidence threshold: {confidence_threshold:.2f}")
 
-        # Store GMM probabilities for each breath (needed for GMM-based eupnea detection)
-        # Format: {sweep_idx: {breath_idx: sniffing_probability}}
-        if not hasattr(self.main_window.state, 'gmm_sniff_probabilities'):
-            self.main_window.state.gmm_sniff_probabilities = {}
+        # Store GMM classifications in all_peaks_by_sweep using shared function
+        n_classified = gmm_clustering.store_gmm_classifications_in_peaks(
+            self.main_window.state,
+            self.breath_cycles,
+            self.cluster_labels,
+            self.sniffing_cluster_id,
+            self.cluster_probabilities,
+            confidence_threshold=confidence_threshold
+        )
 
-        for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
-            if sweep_idx not in self.main_window.state.gmm_sniff_probabilities:
-                self.main_window.state.gmm_sniff_probabilities[sweep_idx] = {}
+        # Build BOTH eupnea AND sniffing regions using shared function
+        results = gmm_clustering.build_eupnea_sniffing_regions(
+            self.main_window.state,
+            verbose=True,
+            log_prefix="[gmm-dialog]"
+        )
 
-            # Get probability of being in sniffing cluster
-            sniff_prob = self.cluster_probabilities[i, self.sniffing_cluster_id]
-            self.main_window.state.gmm_sniff_probabilities[sweep_idx][breath_idx] = sniff_prob
-
-        # Collect sniffing breaths that meet confidence threshold
-        sniffing_breaths_by_sweep = {}  # sweep_idx -> list of breath indices
-        n_confident_sniffs = 0
-
-        for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
-            # Get sniffing probability for this breath
-            sniff_prob = self.cluster_probabilities[i, self.sniffing_cluster_id]
-
-            # Only classify as sniffing if probability exceeds threshold
-            if sniff_prob >= confidence_threshold:
-                n_confident_sniffs += 1
-
-                # Store the breath index (we'll convert to time ranges after merging)
-                if sweep_idx not in sniffing_breaths_by_sweep:
-                    sniffing_breaths_by_sweep[sweep_idx] = []
-                sniffing_breaths_by_sweep[sweep_idx].append(breath_idx)
-
-        # Clear existing sniffing regions first
-        if not hasattr(self.main_window.state, 'sniff_regions_by_sweep'):
-            self.main_window.state.sniff_regions_by_sweep = {}
-        self.main_window.state.sniff_regions_by_sweep.clear()
-
-        # Convert breath indices to merged time ranges
-        total_regions = 0
-        for sweep_idx, breath_indices in sniffing_breaths_by_sweep.items():
-            if not breath_indices:
-                continue
-
-            # Sort breath indices
-            breath_indices = sorted(breath_indices)
-
-            # Group consecutive breath indices into runs
-            # Example: [1, 2, 3, 7, 8, 12] -> [[1,2,3], [7,8], [12]]
-            runs = []
-            current_run = [breath_indices[0]]
-
-            for idx in breath_indices[1:]:
-                if idx == current_run[-1] + 1:  # Consecutive breath
-                    current_run.append(idx)
-                else:  # Gap in breath indices
-                    runs.append(current_run)
-                    current_run = [idx]
-            runs.append(current_run)  # Add the last run
-
-            # Convert each run to a time range
-            breath_data = self.main_window.state.breath_by_sweep.get(sweep_idx)
-            if breath_data is None:
-                continue
-
-            onsets = breath_data.get('onsets', np.array([]))
-            offsets = breath_data.get('offsets', np.array([]))
-            t = self.main_window.state.t
-
-            if sweep_idx not in self.main_window.state.sniff_regions_by_sweep:
-                self.main_window.state.sniff_regions_by_sweep[sweep_idx] = []
-
-            for run in runs:
-                # Start time = onset of first breath in run
-                first_breath = run[0]
-                last_breath = run[-1]
-
-                if first_breath >= len(onsets):
-                    continue
-
-                start_time = t[int(onsets[first_breath])]
-
-                # End time = offset of last breath in run
-                if last_breath < len(offsets):
-                    end_idx = int(offsets[last_breath])
-                else:
-                    # Fallback: use next onset or end of trace
-                    if last_breath + 1 < len(onsets):
-                        end_idx = int(onsets[last_breath + 1])
-                    else:
-                        end_idx = len(t) - 1
-
-                end_time = t[end_idx]
-
-                # Add merged region
-                self.main_window.state.sniff_regions_by_sweep[sweep_idx].append((start_time, end_time))
-                print(f"[gmm-dialog] Created merged region from breaths {run[0]}-{run[-1]}: {start_time:.3f} - {end_time:.3f} s")
-
-            total_regions += len(self.main_window.state.sniff_regions_by_sweep[sweep_idx])
-
-        # Redraw main plot to show sniffing regions
+        # Redraw main plot to show eupnea and sniffing regions
         self.main_window.redraw_main_plot()
 
-        # Log results
+        # Log summary results
         n_total_sniff_cluster = np.sum(self.cluster_labels == self.sniffing_cluster_id)
+        n_sweeps_with_sniffing = len(self.main_window.state.sniff_regions_by_sweep)
+        n_sweeps_with_eupnea = len(self.main_window.state.eupnea_regions_by_sweep)
         print(f"[gmm-dialog] Total breaths in sniffing cluster: {n_total_sniff_cluster}")
-        print(f"[gmm-dialog] Breaths meeting confidence threshold ({confidence_threshold:.2f}): {n_confident_sniffs}")
-        print(f"[gmm-dialog] Applied {n_confident_sniffs} sniffing breaths across {len(sniffing_breaths_by_sweep)} sweep(s)")
-        print(f"[gmm-dialog] Created {total_regions} merged sniffing regions")
+        print(f"[gmm-dialog] Classified {n_classified} breaths using threshold {confidence_threshold:.2f}")
+        print(f"[gmm-dialog] Sniffing breaths: {results['n_sniffing']}")
+        print(f"[gmm-dialog] Eupnea breaths: {results['n_eupnea']}")
+        print(f"[gmm-dialog] Created {results['total_sniff_regions']} sniffing regions across {n_sweeps_with_sniffing} sweep(s)")
+        print(f"[gmm-dialog] Created {results['total_eupnea_regions']} eupnea regions across {n_sweeps_with_eupnea} sweep(s)")
 
     def _on_apply_variability(self):
         """Re-plot waveforms with new variability mode and number of breaths without re-running GMM."""
@@ -2161,10 +2094,12 @@ GMM is an unsupervised machine learning technique that automatically identifies 
     def _auto_apply_gmm_results(self):
         """Automatically apply GMM clustering results to main plot (called after successful GMM run).
 
-        NOTE: This now only applies if the user has the "Apply Sniffing Detection" checkbox enabled.
-        If the checkbox is checked when GMM completes, sniffing regions will be applied automatically.
+        NOTE: This now only applies if the user has the "Apply Eupnea/Sniffing Detection" checkbox enabled.
+        If the checkbox is checked when GMM completes, eupnea and sniffing regions will be applied automatically.
         """
         import numpy as np
+        
+        print(f"[gmm-dialog] _auto_apply_gmm_results() called. Checkbox state: {self.apply_sniffing_cb.isChecked()}")
 
         if self.sniffing_cluster_id is None:
             print("[gmm-dialog] Cannot auto-apply: no sniffing cluster identified")
@@ -2183,13 +2118,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         print(f"[gmm-dialog] Auto-apply: Eupnea detection mode: {selected_mode}")
         print(f"[gmm-dialog] Auto-apply: Frequency threshold: {self.main_window.eupnea_freq_threshold} Hz, Min duration: {self.main_window.eupnea_min_duration} s")
 
-        # Only apply sniffing regions if the checkbox is enabled
+        # Only apply eupnea/sniffing regions if the checkbox is enabled
         if self.apply_sniffing_cb.isChecked():
-            print("[gmm-dialog] Auto-apply: Checkbox is enabled, applying sniffing regions")
+            print("[gmm-dialog] Auto-apply: Checkbox is enabled, applying eupnea and sniffing regions")
             self._apply_sniffing_to_plot()
         else:
-            print("[gmm-dialog] Auto-apply: Checkbox is disabled, NOT applying sniffing regions")
-            # Just update eupnea mode, but don't apply sniffing
+            print("[gmm-dialog] Auto-apply: Checkbox is disabled, NOT applying eupnea/sniffing regions")
+            # Just update eupnea mode, but don't apply regions
             self.main_window.redraw_main_plot()
 
     def on_apply_to_plot(self):
@@ -2233,18 +2168,34 @@ GMM is an unsupervised machine learning technique that automatically identifies 
         print(f"[gmm-clustering] Updated eupnea detection mode to: {selected_mode}")
         print(f"[gmm-clustering] Frequency threshold: {self.main_window.eupnea_freq_threshold} Hz, Min duration: {self.main_window.eupnea_min_duration} s")
 
-        # Store GMM probabilities for each breath (needed for GMM-based eupnea detection)
-        # Format: {sweep_idx: {breath_idx: sniffing_probability}}
-        if not hasattr(self.main_window.state, 'gmm_sniff_probabilities'):
-            self.main_window.state.gmm_sniff_probabilities = {}
-
+        # Store GMM classification directly in all_peaks_by_sweep
+        # Add 'gmm_class' field: 0=eupnea, 1=sniffing, -1=unclassified
         for i, (sweep_idx, breath_idx) in enumerate(self.breath_cycles):
-            if sweep_idx not in self.main_window.state.gmm_sniff_probabilities:
-                self.main_window.state.gmm_sniff_probabilities[sweep_idx] = {}
+            # Get peak sample index for this breath
+            peaks = self.main_window.state.peaks_by_sweep.get(sweep_idx)
+            if peaks is None or breath_idx >= len(peaks):
+                continue
+            peak_sample_idx = int(peaks[breath_idx])
 
-            # Get probability of being in sniffing cluster
+            # Get all_peaks for this sweep
+            all_peaks = self.main_window.state.all_peaks_by_sweep.get(sweep_idx)
+            if all_peaks is None:
+                continue
+
+            # Initialize gmm_class array if it doesn't exist
+            if 'gmm_class' not in all_peaks:
+                all_peaks['gmm_class'] = np.full(len(all_peaks['indices']), -1, dtype=np.int8)
+
+            # Find this peak in all_peaks_by_sweep
+            peak_mask = all_peaks['indices'] == peak_sample_idx
+            if not peak_mask.any():
+                continue
+            peak_pos = np.where(peak_mask)[0][0]
+
+            # Get probability and classify
             sniff_prob = self.cluster_probabilities[i, self.sniffing_cluster_id]
-            self.main_window.state.gmm_sniff_probabilities[sweep_idx][breath_idx] = sniff_prob
+            gmm_class = 1 if sniff_prob >= confidence_threshold else 0
+            all_peaks['gmm_class'][peak_pos] = gmm_class
 
         # Collect all sniffing breaths (just breath indices, not time ranges yet)
         sniffing_breaths_by_sweep = {}  # sweep_idx -> list of breath indices

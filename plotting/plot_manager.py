@@ -103,7 +103,7 @@ class PlotManager:
         self._draw_y2_metric(s, t, t_plot)
 
         # Draw automatic region overlays (eupnea, apnea, outliers)
-        self._draw_region_overlays(s, t, y, t_plot)
+        self._draw_region_overlays(s, t, y, t_plot, t0)
 
         # Draw omitted region overlays
         self._draw_omitted_regions(s, t_plot)
@@ -211,6 +211,12 @@ class PlotManager:
                 # Final validation
                 y_lower = y_min - padding
                 y_upper = y_max + padding
+
+                # Account for sigh marker vertical offset if present
+                if len(sigh_idx) > 0:
+                    offset_frac = float(getattr(self.window, "_sigh_offset_frac", 0.07))
+                    sigh_offset = offset_frac * y_range
+                    y_upper += sigh_offset  # Extend y_max to include sigh markers
 
                 if np.isfinite(y_lower) and np.isfinite(y_upper):
                     ax.set_ylim(y_lower, y_upper)
@@ -652,8 +658,16 @@ class PlotManager:
             self.plot_host.clear_y2()
             self.plot_host.fig.tight_layout()
 
-    def _draw_region_overlays(self, sweep_idx, t, y, t_plot):
-        """Draw automatic region overlays (eupnea, apnea, outliers)."""
+    def _draw_region_overlays(self, sweep_idx, t, y, t_plot, t0=0.0):
+        """Draw automatic region overlays (eupnea, apnea, outliers).
+
+        Args:
+            sweep_idx: Current sweep index
+            t: Time array (absolute time)
+            y: Signal array
+            t_plot: Time array for plotting (normalized if stimulus active)
+            t0: Time offset for normalization (0.0 if no stimulus)
+        """
         st = self.state
 
         try:
@@ -670,15 +684,18 @@ class PlotManager:
                 eupnea_thresh = self.window.eupnea_freq_threshold
                 apnea_thresh = self.window._parse_float(self.window.ApneaThresh) or 0.5
 
-                # Get sniff regions from state (needed for overlay display)
-                sniff_regions = self.state.sniff_regions_by_sweep.get(sweep_idx, [])
+                # Get sniff and eupnea regions from state (stored in absolute time)
+                sniff_regions_raw = self.state.sniff_regions_by_sweep.get(sweep_idx, [])
+                eupnea_regions_raw = getattr(self.state, 'eupnea_regions_by_sweep', {}).get(sweep_idx, [])
 
-                # Compute eupnea regions based on selected mode
-                if self.window.eupnea_detection_mode == "gmm":
-                    # GMM-based: Eupnea = breaths NOT classified as sniffing
-                    eupnea_mask = self.window._compute_eupnea_from_gmm(sweep_idx, len(y))
-                else:
-                    # Frequency-based (legacy): Use threshold method
+                # Normalize region times to match t_plot (subtract t0 if stimulus active)
+                sniff_regions = [(start - t0, end - t0) for start, end in sniff_regions_raw]
+                eupnea_regions = [(start - t0, end - t0) for start, end in eupnea_regions_raw]
+
+                # For backward compatibility, also support mask-based eupnea from frequency mode
+                eupnea_mask = None
+                if self.window.eupnea_detection_mode != "gmm":
+                    # Frequency-based (legacy): Use threshold method to create mask
                     eupnea_mask = metrics.detect_eupnic_regions(
                         t, y, st.sr_hz, pks, on_idx, off_idx, ex_idx, exoff_idx,
                         freq_threshold_hz=eupnea_thresh,
@@ -697,8 +714,8 @@ class PlotManager:
                     sweep_idx, t, y, pks, on_idx, off_idx, ex_idx, exoff_idx
                 )
 
-                # Apply the overlays (including sniff_regions for unified display control)
-                self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask, outlier_mask, failure_mask, sniff_regions, state=self.state)
+                # Apply the overlays (including sniff_regions and eupnea_regions for unified display control)
+                self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask, outlier_mask, failure_mask, sniff_regions, eupnea_regions, state=self.state)
             else:
                 self.plot_host.clear_region_overlays()
         except Exception as e:

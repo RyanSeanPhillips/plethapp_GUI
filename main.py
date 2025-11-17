@@ -204,7 +204,7 @@ class MainWindow(QMainWindow):
 
         # --- Initialize Navigation Manager ---
         self.navigation_manager = NavigationManager(self)
-        self.WindowRangeValue.setText("20")  # Default window length
+        self.WindowRangeValue.setText("10")  # Default window length
 
         # --- Initialize Plot Manager (BEFORE signal connections that may trigger plotting) ---
         self.plot_manager = PlotManager(self)
@@ -261,6 +261,18 @@ class MainWindow(QMainWindow):
         self.y2plot_dropdown.addItem("None", userData=None)
         for label, key in metrics.METRIC_SPECS:
             self.y2plot_dropdown.addItem(label, userData=key)
+
+        # Make dropdown searchable by typing
+        self.y2plot_dropdown.setEditable(True)
+        self.y2plot_dropdown.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+
+        # Add completer for case-insensitive searching
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QCompleter
+        completer = QCompleter([self.y2plot_dropdown.itemText(i) for i in range(self.y2plot_dropdown.count())])
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)  # Match anywhere in the string
+        self.y2plot_dropdown.setCompleter(completer)
 
         # ADD/DELETE Peak Mode: track selection in state
         self.state.y2_metric_key = None
@@ -324,6 +336,9 @@ class MainWindow(QMainWindow):
 
         #wire save analyzed data button
         self.SaveAnalyzedDataButton.clicked.connect(self.on_save_analyzed_clicked)
+
+        # Wire save options button to configure export metrics
+        self.saveoptions_pushButton.clicked.connect(self.on_save_options_clicked)
 
         # Wire view summary button to show PDF preview
         self.ViewSummary_pushButton.clicked.connect(self.on_view_summary_clicked)
@@ -2442,6 +2457,41 @@ class MainWindow(QMainWindow):
 
             st.breath_by_sweep[s] = breaths
 
+            # Recalculate current_peak_metrics_by_sweep using ONLY labeled peaks as neighbors
+            # This ensures neighbor features (next_peak_*, prev_peak_*, etc.) are calculated
+            # based on the filtered peak list, not the original all_peaks list
+            try:
+                import core.metrics as metrics_mod
+
+                # Recompute p_noise for labeled peaks only
+                p_noise_labeled = metrics_mod.compute_p_noise(st.t, y_proc, st.sr_hz, labeled_indices,
+                                                               breaths.get('onsets', np.array([])),
+                                                               breaths.get('offsets', np.array([])),
+                                                               breaths.get('expmins', np.array([])),
+                                                               breaths.get('expoffs', np.array([])))
+                p_breath_labeled = 1.0 - p_noise_labeled if p_noise_labeled is not None else None
+
+                # Recalculate metrics with labeled peaks only
+                current_metrics = peakdet.compute_peak_candidate_metrics(
+                    y=y_proc,
+                    all_peak_indices=labeled_indices,  # Use filtered peaks as neighbors
+                    breath_events=breaths,
+                    sr_hz=st.sr_hz,
+                    p_noise=p_noise_labeled,
+                    p_breath=p_breath_labeled
+                )
+                st.current_peak_metrics_by_sweep[s] = current_metrics
+
+                if s == 0:
+                    print(f"[peak-metrics] Recalculated {len(current_metrics)} current metrics using {len(labeled_indices)} labeled peaks as neighbors")
+
+            except Exception as e:
+                print(f"[peak-metrics] Warning: Could not recalculate current metrics: {e}")
+                import traceback
+                traceback.print_exc()
+                # Keep original metrics as fallback
+                st.current_peak_metrics_by_sweep[s] = st.peak_metrics_by_sweep[s]
+
             # Debug: Show peak detection stats
             n_all = len(all_peak_indices)
             n_labeled = len(labeled_indices)
@@ -2680,8 +2730,18 @@ class MainWindow(QMainWindow):
         current_group_end = None
         last_eupnic_idx = None
 
+        # Get peaks for this sweep (needed to map breath → peak)
+        peaks = self.state.peaks_by_sweep.get(sweep_idx)
+        if peaks is None or len(peaks) != len(onsets):
+            return eupnea_mask.astype(float)  # Peaks and onsets must be aligned
+
         for breath_idx in range(len(onsets)):
-            if breath_idx not in gmm_probs:
+            # Get peak sample index for this breath
+            # Peaks and breaths are 1:1 aligned by array index
+            peak_sample_idx = int(peaks[breath_idx])
+
+            # Look up GMM probability using peak sample index
+            if peak_sample_idx not in gmm_probs:
                 # Close current group if exists
                 if current_group_start is not None:
                     eupnic_groups.append((current_group_start, current_group_end))
@@ -2690,7 +2750,7 @@ class MainWindow(QMainWindow):
                     last_eupnic_idx = None
                 continue
 
-            sniff_prob = gmm_probs[breath_idx]
+            sniff_prob = gmm_probs[peak_sample_idx]
 
             # Eupnea if sniffing probability < 0.5 (i.e., more likely eupnea)
             if sniff_prob < 0.5:
@@ -2998,10 +3058,10 @@ class MainWindow(QMainWindow):
         return sniffing_cluster_id
 
     def _apply_gmm_sniffing_regions(self, breath_cycles, cluster_labels, cluster_probabilities, sniffing_cluster_id):
-        """Apply GMM sniffing cluster results by marking regions on the plot.
+        """Apply GMM cluster results using shared functions from core.gmm_clustering.
 
-        Groups consecutive sniffing breaths into continuous regions.
-        Stores probabilities for each breath.
+        Stores classifications in all_peaks_by_sweep and builds both eupnea and sniffing regions.
+        Stores probabilities for each breath (for backward compatibility).
 
         Args:
             breath_cycles: List of (sweep_idx, breath_idx) tuples
@@ -3010,18 +3070,14 @@ class MainWindow(QMainWindow):
             sniffing_cluster_id: Which cluster is sniffing
         """
         import numpy as np
+        from core import gmm_clustering
 
-        # Store probabilities by (sweep_idx, breath_idx)
+        # Store probabilities by (sweep_idx, breath_idx) for backward compatibility
         if not hasattr(self.state, 'gmm_sniff_probabilities'):
             self.state.gmm_sniff_probabilities = {}
         self.state.gmm_sniff_probabilities.clear()
 
-        # Group breath cycles by sweep
-        breaths_by_sweep = {}
         for i, (sweep_idx, breath_idx) in enumerate(breath_cycles):
-            if sweep_idx not in breaths_by_sweep:
-                breaths_by_sweep[sweep_idx] = []
-
             # Get probability of this breath being sniffing
             sniff_prob = cluster_probabilities[i, sniffing_cluster_id]
 
@@ -3030,82 +3086,17 @@ class MainWindow(QMainWindow):
                 self.state.gmm_sniff_probabilities[sweep_idx] = {}
             self.state.gmm_sniff_probabilities[sweep_idx][breath_idx] = sniff_prob
 
-            breaths_by_sweep[sweep_idx].append((breath_idx, cluster_labels[i], sniff_prob))
+        # Store classifications in all_peaks_by_sweep['gmm_class'] field
+        # This makes classifications persist through manual peak edits
+        n_classified = gmm_clustering.store_gmm_classifications_in_peaks(
+            self.state, breath_cycles, cluster_labels, sniffing_cluster_id,
+            cluster_probabilities, confidence_threshold=0.5
+        )
 
-        sniffing_regions_by_sweep = {}
-        n_sniffing = 0
-
-        for sweep_idx, breath_list in breaths_by_sweep.items():
-            breath_data = self.state.breath_by_sweep.get(sweep_idx)
-            if breath_data is None:
-                continue
-
-            onsets = breath_data.get('onsets', np.array([]))
-            offsets = breath_data.get('offsets', np.array([]))
-            t = self.state.t
-
-            # Sort breaths by index
-            breath_list = sorted(breath_list, key=lambda x: x[0])
-
-            # Group consecutive sniffing breaths into continuous regions
-            regions = []
-            current_group_start = None
-            current_group_end = None
-            last_sniff_idx = None
-
-            for breath_idx, cluster_id, sniff_prob in breath_list:
-                if cluster_id == sniffing_cluster_id:
-                    n_sniffing += 1
-
-                    if breath_idx >= len(onsets):
-                        continue
-
-                    # Get time range for this breath
-                    start_time = t[int(onsets[breath_idx])]
-
-                    # Get offset time
-                    if breath_idx < len(offsets):
-                        end_idx = int(offsets[breath_idx])
-                    else:
-                        # Fallback: use next onset or end of trace
-                        if breath_idx + 1 < len(onsets):
-                            end_idx = int(onsets[breath_idx + 1])
-                        else:
-                            end_idx = len(t) - 1
-                    end_time = t[end_idx]
-
-                    # Check if this is consecutive with the last sniffing breath (no eupnea breath in between)
-                    if last_sniff_idx is None or breath_idx != last_sniff_idx + 1:
-                        # Not consecutive - save current group and start new one
-                        if current_group_start is not None:
-                            regions.append((current_group_start, current_group_end))
-                        current_group_start = start_time
-                        current_group_end = end_time
-                    else:
-                        # Consecutive breath - extend the current group
-                        current_group_end = end_time
-
-                    last_sniff_idx = breath_idx
-                else:
-                    # Non-sniffing breath - close current group if exists
-                    if current_group_start is not None:
-                        regions.append((current_group_start, current_group_end))
-                        current_group_start = None
-                        current_group_end = None
-                        last_sniff_idx = None
-
-            # Save final group if exists
-            if current_group_start is not None:
-                regions.append((current_group_start, current_group_end))
-
-            if regions:
-                sniffing_regions_by_sweep[sweep_idx] = regions
-
-        # Replace existing sniffing regions with GMM-detected ones
-        total_merged = 0
-        for sweep_idx, regions in sniffing_regions_by_sweep.items():
-            self.state.sniff_regions_by_sweep[sweep_idx] = regions
-            total_merged += len(regions)
+        # Build BOTH eupnea AND sniffing regions from stored classifications
+        results = gmm_clustering.build_eupnea_sniffing_regions(
+            self.state, verbose=False, log_prefix="[auto-gmm]"
+        )
 
         # Calculate probability statistics
         all_sniff_probs = []
@@ -3125,9 +3116,11 @@ class MainWindow(QMainWindow):
                 if uncertain_count > 0:
                     print(f"[auto-gmm]   ⚠️ {uncertain_count} breaths have uncertain classification (50-70% sniffing probability)")
 
-        print(f"[auto-gmm]   Created {total_merged} continuous sniffing region(s) across {len(sniffing_regions_by_sweep)} sweep(s)")
+        # Report results
+        print(f"[auto-gmm]   Created {results['total_sniff_regions']} sniffing region(s) across sweeps")
+        print(f"[auto-gmm]   Created {results['total_eupnea_regions']} eupnea region(s) across sweeps")
 
-        return n_sniffing
+        return results['n_sniffing']
 
     def _store_gmm_probabilities_only(self, breath_cycles, cluster_probabilities, sniffing_cluster_id):
         """Store GMM sniffing probabilities without applying regions to plot.
@@ -3352,6 +3345,7 @@ class MainWindow(QMainWindow):
             t0 = spans[0][0]
             t_plot = t - t0
         else:
+            t0 = 0.0
             t_plot = t
 
         # Get breath data
@@ -3378,13 +3372,21 @@ class MainWindow(QMainWindow):
             min_apnea_duration_sec=apnea_thresh
         )
 
-        # Get sniff regions for overlay display
-        sniff_regions = st.sniff_regions_by_sweep.get(s, [])
+        # Get eupnea and sniff regions for overlay display
+        # IMPORTANT: Apply same time normalization as the trace (shift by t0 if stimulus active)
+        sniff_regions_raw = st.sniff_regions_by_sweep.get(s, [])
+        eupnea_regions_raw = st.eupnea_regions_by_sweep.get(s, [])
+
+        # Normalize region times to match t_plot (shift by t0)
+        sniff_regions = [(start - t0, end - t0) for start, end in sniff_regions_raw]
+        eupnea_regions = [(start - t0, end - t0) for start, end in eupnea_regions_raw]
 
         # Update ONLY the region overlays (skips outlier masks entirely - huge speedup!)
         self.plot_host.update_region_overlays(t_plot, eupnea_mask, apnea_mask,
                                               outlier_mask=None, failure_mask=None,
-                                              sniff_regions=sniff_regions, state=st)
+                                              sniff_regions=sniff_regions,
+                                              eupnea_regions=eupnea_regions,
+                                              state=st)
 
         # Update sniffing region backgrounds (purple) - Note: This may be redundant with update_region_overlays
         # self.editing_modes.update_sniff_artists(t_plot, s)
@@ -3394,11 +3396,19 @@ class MainWindow(QMainWindow):
         print("[update-eupnea] Lightweight overlay refresh complete (skipped outlier detection)")
 
     def on_help_clicked(self):
-        """Open the help dialog (F1)."""
+        """Open the help dialog (F1) - non-modal."""
         from dialogs.help_dialog import HelpDialog
-        dialog = HelpDialog(self, update_info=self.update_info)
+
+        # If help already open, bring to front instead of creating new window
+        if hasattr(self, 'help_dialog') and self.help_dialog is not None:
+            self.help_dialog.raise_()
+            self.help_dialog.activateWindow()
+            return
+
+        # Create non-modal dialog
+        self.help_dialog = HelpDialog(self, update_info=self.update_info)
+        self.help_dialog.show()  # Non-modal - doesn't block
         telemetry.log_screen_view('Help Dialog', screen_class='info_dialog')
-        dialog.exec()
 
     def _check_for_updates_on_startup(self):
         """Check for updates in background and update UI if available."""
@@ -3550,10 +3560,10 @@ class MainWindow(QMainWindow):
         """Update Omit button text based on whether current sweep is omitted."""
         s = max(0, min(self.state.sweep_idx, self.navigation_manager._sweep_count() - 1))
         if s in self.state.omitted_sweeps:
-            self.OmitSweepButton.setText("Un-omit Sweep")
+            self.OmitSweepButton.setText("Un-omit")
             self.OmitSweepButton.setToolTip("This sweep will be excluded from saving and stats.")
         else:
-            self.OmitSweepButton.setText("Omit Sweep")
+            self.OmitSweepButton.setText("Omit")
             self.OmitSweepButton.setToolTip("Mark this sweep to be excluded from saving and stats.")
 
     def on_omit_sweep_clicked(self):
@@ -3608,6 +3618,24 @@ class MainWindow(QMainWindow):
     def on_view_summary_clicked(self):
         """Display interactive preview of the PDF summary without saving."""
         return self.export_manager.on_view_summary_clicked()
+
+    def on_save_options_clicked(self):
+        """Open dialog to configure which metrics to export."""
+        from dialogs.export_options_dialog import ExportOptionsDialog
+
+        # Get current export options from state (or None for defaults)
+        current_options = getattr(self.state, 'export_metric_options', None)
+
+        # Create and show dialog
+        dialog = ExportOptionsDialog(self, current_options)
+
+        # Connect signal to save changes
+        def on_options_changed(new_options):
+            self.state.export_metric_options = new_options
+            self._log_status_message(f"Export options updated ({sum(new_options.values())} metrics enabled)", 2000)
+
+        dialog.options_changed.connect(on_options_changed)
+        dialog.exec()
 
     def _metric_keys_in_order(self):
         """Return metric keys in the UI order (from metrics.METRIC_SPECS)."""

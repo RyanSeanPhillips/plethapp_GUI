@@ -706,7 +706,7 @@ class ExportManager:
             return None
 
     @profile
-    def _export_ml_training_data(self, npz_path, source_name, include_waveforms=False):
+    def _export_ml_training_data(self, npz_path, source_name, include_waveforms=False, metadata=None):
         """
         Export ML training data as compact .npz file.
 
@@ -715,12 +715,14 @@ class ExportManager:
         - Labels (still_exists, was_modified)
         - Merge decisions
         - Source file metadata
+        - User metadata (quality score, labeler info)
         - [Optional] Waveform cutouts around each peak
 
         Args:
             npz_path: Path for output .npz file
             source_name: Source filename (for metadata)
             include_waveforms: If True, include raw waveform segments for neural net training
+            metadata: Dict with 'system_username', 'computer_name', 'user_name', 'quality_score'
         """
         st = self.window.state
 
@@ -728,76 +730,282 @@ class ExportManager:
         if include_waveforms:
             print(f"[ML training] Including waveform cutouts (this will increase file size)")
 
-        # Collect all peak metrics as structured arrays
-        # IMPORTANT: Include BOTH original auto-detected peaks AND user-added peaks
+        # ========================================================================
+        # SIMPLIFIED: Just read labels directly from all_peaks_by_sweep!
+        # ========================================================================
         peak_data = []
 
-        for sweep_idx in sorted(st.peaks_by_sweep.keys()):
-            original_metrics = st.peak_metrics_by_sweep.get(sweep_idx, [])
-            current_metrics = st.current_peak_metrics_by_sweep.get(sweep_idx, [])
+        # Check if all_peaks_by_sweep exists (needed for label-based export)
+        if not hasattr(st, 'all_peaks_by_sweep') or not st.all_peaks_by_sweep:
+            error_msg = (
+                "ML export requires peak detection data.\n\n"
+                "Please run peak detection first:\n"
+                "1. Click 'Detect Peaks' button\n"
+                "2. Then try exporting ML training data again\n\n"
+                "Note: If you loaded an old session file, you'll need to re-run peak detection."
+            )
+            raise ValueError(error_msg)
 
-            # Get sigh labels for this sweep
+        # Check if data is in new format (dict with labels) vs old format (just arrays)
+        first_sweep = next(iter(st.all_peaks_by_sweep.keys()))
+        sample_data = st.all_peaks_by_sweep[first_sweep]
+
+        if isinstance(sample_data, np.ndarray):
+            # Old format detected - data is just arrays, not dicts with labels
+            error_msg = (
+                "ML export requires updated peak detection data.\n\n"
+                "This file was processed with an older version.\n"
+                "Please re-run peak detection:\n"
+                "1. Click 'Detect Peaks' button\n"
+                "2. Then try exporting ML training data again\n\n"
+                "Your manual edits will be preserved if you saved them in a session file."
+            )
+            raise ValueError(error_msg)
+
+        # Build merge lookup for labeling peaks involved in merges
+        # This creates labels for ML merge detection training
+        merge_lookup = {}  # {(sweep_idx, peak_idx): {'was_merged_away': bool, 'merged_with_next_peak': peak_idx}}
+
+        if hasattr(st, 'user_merge_decisions'):
+            for sweep_idx, decisions in st.user_merge_decisions.items():
+                for decision in decisions:
+                    peak1_idx = decision.get('peak1_idx')
+                    peak2_idx = decision.get('peak2_idx')
+                    removed_idx = decision.get('removed_idx')
+                    kept_idx = decision.get('kept_idx')
+
+                    # Mark the removed peak as merged away
+                    if removed_idx is not None:
+                        merge_lookup[(sweep_idx, removed_idx)] = {
+                            'was_merged_away': True,
+                            'merged_with_next_peak': None
+                        }
+
+                    # Mark the first peak as having been merged with next
+                    # (The one that initiated the merge, even if it was removed)
+                    if peak1_idx is not None and peak2_idx is not None:
+                        if (sweep_idx, peak1_idx) not in merge_lookup:
+                            merge_lookup[(sweep_idx, peak1_idx)] = {
+                                'was_merged_away': False,
+                                'merged_with_next_peak': peak2_idx
+                            }
+                        else:
+                            # Already marked as merged away, just add the next peak info
+                            merge_lookup[(sweep_idx, peak1_idx)]['merged_with_next_peak'] = peak2_idx
+
+        for sweep_idx in sorted(st.all_peaks_by_sweep.keys()):
+            all_peaks = st.all_peaks_by_sweep.get(sweep_idx)
+            if all_peaks is None or 'indices' not in all_peaks:
+                continue
+
+            metrics = st.peak_metrics_by_sweep.get(sweep_idx, [])
             sigh_indices = set(st.sigh_by_sweep.get(sweep_idx, []))
 
-            # Create lookups
-            original_peak_indices = {m['peak_idx']: m for m in original_metrics} if original_metrics else {}
-            current_peak_indices = {m['peak_idx']: m for m in current_metrics} if current_metrics else {}
+            # Get GMM classification if available (stored in all_peaks_by_sweep)
+            gmm_class_array = all_peaks.get('gmm_class', None)
 
-            # Process all ORIGINAL peaks (auto-detected)
-            for orig_metric in original_metrics:
-                peak_idx = orig_metric.get('peak_idx')
-                still_exists = peak_idx in current_peak_indices
-                was_modified = False
-                user_added = 0  # Original peaks are not user-added
-
-                if still_exists:
-                    current_metric = current_peak_indices[peak_idx]
-                    for key in ['amplitude_absolute', 'duration', 'onset_height_ratio']:
-                        orig_val = orig_metric.get(key)
-                        curr_val = current_metric.get(key)
-                        if orig_val is not None and curr_val is not None:
-                            if abs(orig_val - curr_val) > 1e-6:
-                                was_modified = True
-                                break
+            # Iterate through ALL peaks (label=0 and label=1)
+            for i, (peak_idx, label, label_source) in enumerate(zip(
+                all_peaks['indices'],
+                all_peaks['labels'],
+                all_peaks['label_source']
+            )):
+                # Get metrics for this peak (aligned by index)
+                metric_dict = metrics[i] if i < len(metrics) else {}
 
                 # Check if this peak is labeled as a sigh
                 is_sigh = 1 if peak_idx in sigh_indices else 0
 
-                # Build record with all metrics + labels
+                # Determine eupnea/sniffing classification from GMM labels
+                is_eupnea = 0
+                is_sniffing = 0
+
+                # Only classify if this is a labeled breath (label=1) and GMM was run
+                if label == 1 and gmm_class_array is not None and i < len(gmm_class_array):
+                    gmm_class = gmm_class_array[i]
+                    if gmm_class == 0:
+                        is_eupnea = 1
+                    elif gmm_class == 1:
+                        is_sniffing = 1
+                    # gmm_class == -1 means unclassified, leave both at 0
+
+                # Get export options (which metrics to include)
+                export_options = getattr(st, 'export_metric_options', None)
+
+                # Build record with core fields (always exported)
                 record = {
                     'sweep_idx': sweep_idx,
                     'peak_idx': peak_idx,
-                    'still_exists': 1 if still_exists else 0,
-                    'was_modified': 1 if was_modified else 0,
-                    'user_added': user_added,
-                    'is_sigh': is_sigh,
+                    'is_breath': label,  # 0 or 1 (THE KEY LABEL!)
+                    'label_source': label_source,  # 'auto' or 'user'
                 }
-                for key, value in orig_metric.items():
+
+                # Add classification labels (respecting export options)
+                if export_options is None or export_options.get('is_sigh', True):
+                    record['is_sigh'] = is_sigh
+                if export_options is None or export_options.get('is_eupnea', True):
+                    record['is_eupnea'] = is_eupnea
+                if export_options is None or export_options.get('is_sniffing', True):
+                    record['is_sniffing'] = is_sniffing
+
+                # Add merge labels (for ML merge detection training)
+                merge_info = merge_lookup.get((sweep_idx, peak_idx), None)
+                if merge_info:
+                    record['was_merged_away'] = 1 if merge_info['was_merged_away'] else 0
+                    record['merge_with_next'] = 1 if merge_info['merged_with_next_peak'] is not None else 0
+                else:
+                    record['was_merged_away'] = 0
+                    record['merge_with_next'] = 0
+
+                # Add all metrics (filtered by export options if available)
+                for key, value in metric_dict.items():
                     if key not in ['sweep_idx', 'peak_idx'] and not isinstance(value, dict):
-                        record[key] = value
+                        # Check if this metric should be exported
+                        if export_options is None or export_options.get(key, True):
+                            record[key] = value
 
                 peak_data.append(record)
 
-            # Process USER-ADDED peaks (not in original detection)
-            for peak_idx, curr_metric in current_peak_indices.items():
-                if peak_idx not in original_peak_indices:
-                    # This is a user-added peak!
-                    is_sigh = 1 if peak_idx in sigh_indices else 0
+        # ========================================================================
+        # DATASET 2: Export BREATHS ONLY with recalculated features
+        # (for Model 2 - breath type classification)
+        # ========================================================================
+        breaths_only_data = []
 
-                    record = {
-                        'sweep_idx': sweep_idx,
-                        'peak_idx': peak_idx,
-                        'still_exists': 1,  # User added it, so it exists
-                        'was_modified': 0,  # Not modified (newly created)
-                        'user_added': 1,  # Key label: this peak was manually added
-                        'is_sigh': is_sigh,
-                    }
-                    # Add all current metrics for this user-added peak
-                    for key, value in curr_metric.items():
-                        if key not in ['sweep_idx', 'peak_idx'] and not isinstance(value, dict):
+        # Check if we have recalculated metrics available
+        has_recalc_metrics = hasattr(st, 'current_peak_metrics_by_sweep') and st.current_peak_metrics_by_sweep
+
+        for sweep_idx in sorted(st.peaks_by_sweep.keys()):
+            # Get only the "real" breath peaks (already filtered)
+            breath_peaks = st.peaks_by_sweep.get(sweep_idx, [])
+            if len(breath_peaks) == 0:
+                continue
+
+            # Try to get recalculated metrics (computed after filtering)
+            if has_recalc_metrics:
+                recalc_metrics = st.current_peak_metrics_by_sweep.get(sweep_idx, [])
+            else:
+                # Fallback: use original metrics (same as all_peaks)
+                recalc_metrics = st.peak_metrics_by_sweep.get(sweep_idx, [])
+
+            # Explicitly recompute p_noise and p_breath for filtered breaths
+            # (these may be missing from recalc_metrics if session was saved before recalc feature)
+            p_noise_array = None
+            p_breath_array = None
+            try:
+                import core.metrics as metrics_mod
+
+                # Get processed signal for this sweep
+                y_proc = self.window._get_processed_for(st.analyze_chan, sweep_idx)
+
+                # Get breath events for filtered peaks
+                breath_events = st.breath_by_sweep.get(sweep_idx, {})
+
+                # Compute p_noise for filtered breaths
+                p_noise_array = metrics_mod.compute_p_noise(
+                    st.t, y_proc, st.sr_hz, breath_peaks,
+                    breath_events.get('onsets', np.array([])),
+                    breath_events.get('offsets', np.array([])),
+                    breath_events.get('expmins', np.array([])),
+                    breath_events.get('expoffs', np.array([]))
+                )
+
+                # Compute p_breath (complement of p_noise)
+                if p_noise_array is not None:
+                    p_breath_array = 1.0 - p_noise_array
+
+            except Exception as e:
+                print(f"[ML export] Warning: Could not compute p_noise for sweep {sweep_idx}: {e}")
+                # Will use None values (will be NaN in export)
+
+            sigh_indices = set(st.sigh_by_sweep.get(sweep_idx, []))
+
+            # Get GMM classification
+            all_peaks = st.all_peaks_by_sweep.get(sweep_idx)
+            gmm_class_array = all_peaks.get('gmm_class', None) if all_peaks else None
+
+            # Iterate through ONLY the breath peaks
+            for breath_idx, peak_idx in enumerate(breath_peaks):
+                # Find this peak in all_peaks to get GMM class
+                if all_peaks is not None and 'indices' in all_peaks:
+                    all_peak_indices = all_peaks['indices']
+                    pos_in_all = np.where(all_peak_indices == peak_idx)[0]
+                    if len(pos_in_all) > 0:
+                        i_in_all = pos_in_all[0]
+                        label = all_peaks['labels'][i_in_all]
+                        label_source = all_peaks['label_source'][i_in_all]
+
+                        # Get GMM class
+                        is_eupnea = 0
+                        is_sniffing = 0
+                        if gmm_class_array is not None and i_in_all < len(gmm_class_array):
+                            gmm_class = gmm_class_array[i_in_all]
+                            if gmm_class == 0:
+                                is_eupnea = 1
+                            elif gmm_class == 1:
+                                is_sniffing = 1
+                    else:
+                        # Shouldn't happen, but handle gracefully
+                        label = 1
+                        label_source = 'unknown'
+                        is_eupnea = 0
+                        is_sniffing = 0
+                else:
+                    label = 1
+                    label_source = 'unknown'
+                    is_eupnea = 0
+                    is_sniffing = 0
+
+                # Check if sigh
+                is_sigh = 1 if peak_idx in sigh_indices else 0
+
+                # Get recalculated metrics for this breath
+                # NOTE: recalc_metrics is indexed by breath_idx (position in filtered list)
+                # NOT by i_in_all (position in all_peaks)
+                metric_dict = recalc_metrics[breath_idx] if breath_idx < len(recalc_metrics) else {}
+
+                # Build record
+                record = {
+                    'sweep_idx': sweep_idx,
+                    'peak_idx': peak_idx,
+                    'is_breath': label,  # Should always be 1 for this dataset
+                    'label_source': label_source,
+                }
+
+                # Add classification labels
+                if export_options is None or export_options.get('is_sigh', True):
+                    record['is_sigh'] = is_sigh
+                if export_options is None or export_options.get('is_eupnea', True):
+                    record['is_eupnea'] = is_eupnea
+                if export_options is None or export_options.get('is_sniffing', True):
+                    record['is_sniffing'] = is_sniffing
+
+                # Merge labels (always 0 for filtered breaths - they survived filtering)
+                record['was_merged_away'] = 0  # If it's here, it wasn't merged away
+                record['merge_with_next'] = 0  # Merges already resolved
+
+                # Add p_noise and p_breath (explicitly computed for filtered breaths)
+                # These MUST be included for ML training - sample from arrays at peak position
+                if p_noise_array is not None and peak_idx < len(p_noise_array):
+                    record['p_noise'] = float(p_noise_array[peak_idx])
+                else:
+                    record['p_noise'] = None
+
+                if p_breath_array is not None and peak_idx < len(p_breath_array):
+                    record['p_breath'] = float(p_breath_array[peak_idx])
+                else:
+                    record['p_breath'] = None
+
+                # Add recalculated metrics
+                for key, value in metric_dict.items():
+                    if key not in ['sweep_idx', 'peak_idx'] and not isinstance(value, dict):
+                        if export_options is None or export_options.get(key, True):
                             record[key] = value
 
-                    peak_data.append(record)
+                breaths_only_data.append(record)
+
+        print(f"[ML training] Dataset 1 (ALL_PEAKS): {len(peak_data)} peaks")
+        print(f"[ML training] Dataset 2 (BREATHS_ONLY): {len(breaths_only_data)} breaths (recalculated features)")
 
         # Optionally extract waveform cutouts for neural net training
         waveform_cutouts = None
@@ -826,12 +1034,14 @@ class ExportManager:
 
                 # Pad to standard length if needed
                 if len(segment) < waveform_window_samples:
-                    # Pad with zeros (or edge values)
-                    pad_before = peak_idx - start_idx if peak_idx >= window_samples else window_samples - peak_idx
-                    pad_after = waveform_window_samples - len(segment) - pad_before
-                    if pad_before < 0:
-                        pad_before = 0
-                        pad_after = waveform_window_samples - len(segment)
+                    # Calculate how much we actually extracted vs how much we wanted
+                    actual_before = peak_idx - start_idx  # samples before peak
+                    actual_after = end_idx - peak_idx      # samples after peak
+
+                    # Calculate padding needed to reach desired window size
+                    pad_before = max(0, window_samples - actual_before)  # pad at start if peak near beginning
+                    pad_after = max(0, window_samples - actual_after)    # pad at end if peak near end
+
                     segment = np.pad(segment, (pad_before, pad_after), mode='edge')
 
                 # Truncate if too long (shouldn't happen, but safety check)
@@ -860,15 +1070,26 @@ class ExportManager:
         # Convert to numpy arrays for compact storage
         import pandas as pd
 
+        # Dataset 1: ALL_PEAKS (for Model 1 - breath vs noise classification)
         if peak_data:
             df_peaks = pd.DataFrame(peak_data)
             # Get column names and data
             peak_columns = df_peaks.columns.tolist()
-            peak_arrays = {col: df_peaks[col].values for col in peak_columns}
+            peak_arrays = {f"all_peaks_{col}": df_peaks[col].values for col in peak_columns}
         else:
             peak_columns = []
             peak_arrays = {}
 
+        # Dataset 2: BREATHS_ONLY (for Model 2 - breath type classification with recalculated features)
+        if breaths_only_data:
+            df_breaths = pd.DataFrame(breaths_only_data)
+            breaths_columns = df_breaths.columns.tolist()
+            breaths_arrays = {f"breaths_{col}": df_breaths[col].values for col in breaths_columns}
+        else:
+            breaths_columns = []
+            breaths_arrays = {}
+
+        # Merge decisions
         if merge_data:
             df_merges = pd.DataFrame(merge_data)
             merge_columns = df_merges.columns.tolist()
@@ -877,19 +1098,44 @@ class ExportManager:
             merge_columns = []
             merge_arrays = {}
 
+        # Get app version
+        try:
+            import version_info
+            app_version = version_info.VERSION_STRING
+        except:
+            app_version = 'unknown'
+
         # Save to .npz with metadata
         save_dict = {
-            # Metadata
+            # File metadata
             'source_file': source_name,
-            'n_peaks': len(peak_data),
+            'app_version': app_version,
+            'timestamp': metadata.get('timestamp', '') if metadata else '',
+            'n_all_peaks': len(peak_data),
+            'n_breaths_only': len(breaths_only_data),
             'n_merges': len(merge_data),
-            'peak_columns': np.array(peak_columns, dtype=object),
+            'all_peaks_columns': np.array(peak_columns, dtype=object),
+            'breaths_columns': np.array(breaths_columns, dtype=object),
             'merge_columns': np.array(merge_columns, dtype=object),
             'has_waveforms': include_waveforms,
+            'has_dual_datasets': True,  # Flag indicating dual-dataset structure
             'sampling_rate_hz': float(st.sr_hz) if st.sr_hz else 0.0,
-            # Peak data
+            # User metadata (for ML dataset filtering and tracking)
+            'system_username': metadata.get('system_username', 'unknown') if metadata else 'unknown',
+            'computer_name': metadata.get('computer_name', 'unknown') if metadata else 'unknown',
+            'user_name': metadata.get('user_name', '') if metadata else '',
+            'animal_state': metadata.get('animal_state', '') if metadata else '',
+            'anesthetic_type': metadata.get('anesthetic_type', '') if metadata else '',
+            'drug': metadata.get('drug', '') if metadata else '',
+            'drug_concentration': metadata.get('drug_concentration', '') if metadata else '',
+            'gas_condition': metadata.get('gas_condition', '') if metadata else '',
+            'notes': metadata.get('notes', '') if metadata else '',
+            'quality_score': int(metadata.get('quality_score', 5)) if metadata else 5,
+            # Dataset 1: ALL_PEAKS (for Model 1 - breath vs noise classification)
             **peak_arrays,
-            # Merge data
+            # Dataset 2: BREATHS_ONLY (for Model 2 - breath type with recalculated features)
+            **breaths_arrays,
+            # Merge decisions
             **merge_arrays,
         }
 
@@ -901,10 +1147,69 @@ class ExportManager:
 
         np.savez_compressed(npz_path, **save_dict)
 
-        print(f"[ML training] ✓ Exported {len(peak_data)} peaks, {len(merge_data)} merges")
+        # Count different breath types for summary (from ALL_PEAKS dataset)
+        n_total = len(peak_data)
+        n_breaths = sum(1 for r in peak_data if r['is_breath'] == 1)
+        n_rejected = n_total - n_breaths
+        n_sighs = sum(1 for r in peak_data if r['is_sigh'] == 1)
+        n_eupnea = sum(1 for r in peak_data if r['is_eupnea'] == 1)
+        n_sniffing = sum(1 for r in peak_data if r['is_sniffing'] == 1)
+        n_merged_away = sum(1 for r in peak_data if r.get('was_merged_away', 0) == 1)
+        n_merge_with_next = sum(1 for r in peak_data if r.get('merge_with_next', 0) == 1)
+
+        # Count from BREATHS_ONLY dataset (for validation)
+        n_breaths_only = len(breaths_only_data)
+        n_breaths_sighs = sum(1 for r in breaths_only_data if r['is_sigh'] == 1)
+        n_breaths_eupnea = sum(1 for r in breaths_only_data if r['is_eupnea'] == 1)
+        n_breaths_sniffing = sum(1 for r in breaths_only_data if r['is_sniffing'] == 1)
+
+        print(f"[ML training] ✓ Dataset 1 (ALL_PEAKS): {n_total} peaks ({n_breaths} breaths, {n_rejected} rejected)")
+        print(f"[ML training]   → {n_sighs} sighs, {n_eupnea} eupnea, {n_sniffing} sniffing")
+        print(f"[ML training]   → Merge labels: {n_merged_away} peaks merged away, {n_merge_with_next} peaks merged with next")
+        print(f"[ML training] ✓ Dataset 2 (BREATHS_ONLY): {n_breaths_only} breaths (recalculated features)")
+        print(f"[ML training]   → {n_breaths_sighs} sighs, {n_breaths_eupnea} eupnea, {n_breaths_sniffing} sniffing")
+        if metadata:
+            print(f"[ML training]   → Timestamp: {metadata.get('timestamp', 'unknown')}")
+            print(f"[ML training]   → System: {metadata.get('system_username', 'unknown')}@{metadata.get('computer_name', 'unknown')}")
+            user_label = metadata.get('user_name', '')
+            if user_label:
+                print(f"[ML training]   → User label: {user_label}")
+            animal_state = metadata.get('animal_state', '')
+            if animal_state:
+                print(f"[ML training]   → Animal state: {animal_state}")
+            anesthetic = metadata.get('anesthetic_type', '')
+            if anesthetic:
+                print(f"[ML training]   → Anesthetic: {anesthetic}")
+            drug = metadata.get('drug', '')
+            if drug:
+                dose = metadata.get('drug_concentration', '')
+                dose_str = f" ({dose})" if dose else ""
+                print(f"[ML training]   → Drug: {drug}{dose_str}")
+            gas = metadata.get('gas_condition', '')
+            if gas:
+                print(f"[ML training]   → Gas: {gas}")
+            notes = metadata.get('notes', '')
+            if notes:
+                print(f"[ML training]   → Notes: {notes[:50]}{'...' if len(notes) > 50 else ''}")
+            print(f"[ML training]   → Quality score: {metadata.get('quality_score', 5)}/10")
+        print(f"[ML training]   → App version: {app_version}")
         if include_waveforms:
             print(f"[ML training] ✓ Waveforms: {waveform_cutouts.shape} @ {st.sr_hz:.1f} Hz")
         print(f"[ML training] ✓ File size: {npz_path.stat().st_size / 1024:.1f} KB")
+
+        # Return counts for success message
+        return {
+            'n_total': n_total,
+            'n_breaths': n_breaths,
+            'n_rejected': n_rejected,
+            'n_sighs': n_sighs,
+            'n_eupnea': n_eupnea,
+            'n_sniffing': n_sniffing,
+            'n_breaths_only': n_breaths_only,
+            'n_merges': len(merge_data),
+            'n_merged_away': n_merged_away,
+            'n_merge_with_next': n_merge_with_next
+        }
 
     def _export_all_analyzed_data(self, preview_only=False, progress_dialog=None):
         """
@@ -990,13 +1295,13 @@ class ExportManager:
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
 
-            vals = dlg.values()
+            dialog_vals = dlg.values()  # Renamed to avoid collision
 
             # --- Update history with new values and save last used values ---
-            self._update_save_dialog_history(vals)
-            self._save_last_save_values(vals)
-            suggested = self._sanitize_token(vals["preview"]) or "analysis"
-            want_picker = bool(vals.get("choose_dir", False))
+            self._update_save_dialog_history(dialog_vals)
+            self._save_last_save_values(dialog_vals)
+            suggested = self._sanitize_token(dialog_vals["preview"]) or "analysis"
+            want_picker = bool(dialog_vals.get("choose_dir", False))
 
             target_exact = "Pleth_App_analysis"          # <- required folder name (lowercase 'a')
             target_lower = target_exact.lower()
@@ -1058,21 +1363,21 @@ class ExportManager:
             # Set base name + meta, then export
             self.window._save_dir = final_dir
             self.window._save_base = suggested
-            self.window._save_meta = vals
+            self.window._save_meta = dialog_vals
 
             # Get export strategy based on experiment type
-            experiment_type = vals.get("experiment_type", "30hz_stim")
+            experiment_type = dialog_vals.get("experiment_type", "30hz_stim")
             export_strategy = self._get_export_strategy(experiment_type)
             print(f"[export] Using strategy: {export_strategy.get_strategy_name()}")
 
             # Extract file export flags from dialog
-            save_npz = vals.get("save_npz", True)  # Always True
-            save_timeseries_csv = vals.get("save_timeseries_csv", True)
-            save_breaths_csv = vals.get("save_breaths_csv", True)
-            save_events_csv = vals.get("save_events_csv", True)
-            save_pdf = vals.get("save_pdf", True)
-            save_session = vals.get("save_session", True)  # Session state (.pleth.npz)
-            save_ml_training = vals.get("save_ml_training", False)  # ML training data (3 CSVs)
+            save_npz = dialog_vals.get("save_npz", True)  # Always True
+            save_timeseries_csv = dialog_vals.get("save_timeseries_csv", True)
+            save_breaths_csv = dialog_vals.get("save_breaths_csv", True)
+            save_events_csv = dialog_vals.get("save_events_csv", True)
+            save_pdf = dialog_vals.get("save_pdf", True)
+            save_session = dialog_vals.get("save_session", True)  # Session state (.pleth.npz)
+            save_ml_training = dialog_vals.get("save_ml_training", False)  # ML training data (3 CSVs)
 
             # Check for duplicate files before saving (only check files that will be saved)
             existing_files = []
@@ -2193,7 +2498,7 @@ class ExportManager:
                             f"{duration:.9g}"
                         ])
 
-                # Add sniffing bout intervals
+                # Add sniffing bout intervals (GMM-based)
                 sniff_regions = st.sniff_regions_by_sweep.get(s, [])
                 for start_time, end_time in sniff_regions:
                     # start_time and end_time are already in seconds
@@ -2211,6 +2516,29 @@ class ExportManager:
                     events_rows.append([
                         str(s + 1),
                         "sniffing",
+                        f"{start_time_rel:.9g}",
+                        f"{end_time_rel:.9g}",
+                        f"{duration:.9g}"
+                    ])
+
+                # Add eupnea regions (GMM-based) if available
+                eupnea_regions = getattr(st, 'eupnea_regions_by_sweep', {}).get(s, [])
+                for start_time, end_time in eupnea_regions:
+                    # start_time and end_time are already in seconds
+
+                    # Convert to relative time if global stim available
+                    if have_global_stim:
+                        start_time_rel = start_time - global_s0
+                        end_time_rel = end_time - global_s0
+                    else:
+                        start_time_rel = start_time
+                        end_time_rel = end_time
+
+                    duration = end_time - start_time
+
+                    events_rows.append([
+                        str(s + 1),
+                        "eupnea_gmm",  # Different label to distinguish from frequency-based eupnea
                         f"{start_time_rel:.9g}",
                         f"{end_time_rel:.9g}",
                         f"{duration:.9g}"
@@ -2450,29 +2778,68 @@ class ExportManager:
 
             # Export ML training data if requested
             ml_training_path = None
+            ml_counts = None
             if save_ml_training:
                 try:
-                    # Get centralized ML training folder (user can choose where)
-                    ml_folder = self._get_ml_training_folder()
-                    if ml_folder:
-                        # Create filename with timestamp to avoid collisions
-                        import datetime
-                        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                        ml_filename = f"{suggested}_{timestamp}_ml_training.npz"
-                        ml_training_path = ml_folder / ml_filename
+                    # Prompt for metadata (quality score, user name, experimental conditions)
+                    from dialogs.ml_metadata_dialog import MLMetadataDialog
 
-                        # Check if waveforms should be included
-                        include_waveforms = vals.get("ml_include_waveforms", False)
+                    # Get last user name from state for consistency
+                    # NOTE: Experimental conditions are NOT auto-filled to prevent mislabeling
+                    st = self.window.state
+                    last_user_name = getattr(st, 'ml_last_user_name', None)
 
-                        self._export_ml_training_data(ml_training_path, suggested, include_waveforms=include_waveforms)
-                        print(f"[ML training] ✓ ML training data exported to {ml_training_path}")
+                    metadata_dialog = MLMetadataDialog(
+                        self.window,
+                        last_user_name=last_user_name
+                    )
+
+                    if metadata_dialog.exec() != QDialog.DialogCode.Accepted:
+                        print(f"[ML training] ⚠ ML training export cancelled by user (metadata dialog)")
                     else:
-                        print(f"[ML training] ⚠ ML training export cancelled by user")
+                        # Get metadata from dialog
+                        metadata = metadata_dialog.get_metadata()
+
+                        # Save ONLY user name to state for next time
+                        # Experimental conditions are NOT saved to prevent accidental mislabeling
+                        st.ml_last_user_name = metadata['user_name']
+
+                        # Get centralized ML training folder (user can choose where)
+                        ml_folder = self._get_ml_training_folder()
+                        if ml_folder:
+                            # Create filename with timestamp to avoid collisions
+                            import datetime
+                            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                            ml_filename = f"{suggested}_{timestamp}_ml_training.npz"
+                            ml_training_path = ml_folder / ml_filename
+
+                            # Check if waveforms should be included
+                            include_waveforms = dialog_vals.get("ml_include_waveforms", False)
+
+                            ml_counts = self._export_ml_training_data(
+                                ml_training_path, suggested,
+                                include_waveforms=include_waveforms,
+                                metadata=metadata
+                            )
+                            print(f"[ML training] ✓ ML training data exported to {ml_training_path}")
+                        else:
+                            print(f"[ML training] ⚠ ML training export cancelled by user")
                 except Exception as e:
                     print(f"[ML training] ✗ ML training export failed: {e}")
                     import traceback
-                    traceback.print_exc()
+                    tb_str = traceback.format_exc()
+                    print(tb_str)
                     ml_training_path = None
+                    ml_counts = None
+
+                    # Show user-facing warning dialog with selectable text and full traceback
+                    error_dialog = QMessageBox(self.window)
+                    error_dialog.setIcon(QMessageBox.Icon.Warning)
+                    error_dialog.setWindowTitle("ML Training Export Failed")
+                    error_dialog.setText("ML training data could not be exported.")
+                    error_dialog.setDetailedText(tb_str)  # Full traceback in expandable section
+                    error_dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                    error_dialog.exec()
 
             # Build success message (only include files that were actually saved)
             file_list = [npz_path.name]  # NPZ always saved
@@ -2490,7 +2857,17 @@ class ExportManager:
                 file_list.append(event_cta_pdf_path.name)
             if save_session and session_path:
                 file_list.append(f"{session_path.name} (session)")
-            if save_ml_training and ml_training_path:
+            if save_ml_training and ml_training_path and ml_counts:
+                # Build detailed ML summary with counts
+                ml_summary = f"{ml_training_path.name} (ML training → {ml_training_path.parent.name}/)\n"
+                ml_summary += f"  {ml_counts['n_breaths']} breaths: "
+                ml_summary += f"{ml_counts['n_eupnea']} eupnea, {ml_counts['n_sniffing']} sniffing, "
+                ml_summary += f"{ml_counts['n_sighs']} sighs, {ml_counts['n_rejected']} rejected\n"
+                ml_summary += f"  {ml_counts['n_merges']} merges: "
+                ml_summary += f"{ml_counts['n_merge_with_next']} merged with next, {ml_counts['n_merged_away']} removed"
+                file_list.append(ml_summary)
+            elif save_ml_training and ml_training_path:
+                # Fallback if counts not available
                 file_list.append(f"{ml_training_path.name} (ML training → {ml_training_path.parent.name}/)")
             msg = "Saved:\n" + "\n".join(f"- {name}" for name in file_list)
             print("[save]", msg)

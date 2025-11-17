@@ -61,6 +61,12 @@ def detect_peaks(y: np.ndarray, sr_hz: float,
     if min_dist_samples is not None:
         kwargs["distance"] = int(min_dist_samples)
 
+    # IMPORTANT: Filter out peaks below baseline (height > 0)
+    # This matches the auto-detect dialog behavior and prevents detection of
+    # negative "peaks" in filtered signals with DC offset or mean subtraction.
+    # Breathing signals should only have positive deflections as peaks.
+    kwargs["height"] = 0
+
     pks, _ = find_peaks(y_use, **kwargs)
 
     # For ML training: return ALL peaks without filtering
@@ -1277,6 +1283,124 @@ def compute_peak_candidate_metrics(y: np.ndarray,
         next_onset_idx = onsets[i+1] if i+1 < len(onsets) else None
         te = (next_onset_idx - offset_idx) / sr_hz if (offset_idx is not None and next_onset_idx is not None) else None
 
+        # === NEIGHBOR COMPARISON FEATURES (for merge and sigh detection) ===
+
+        # Neighbor amplitudes
+        next_peak_amplitude = y[next_pk] if next_pk is not None else None
+        prev_peak_amplitude = y[prev_pk] if prev_pk is not None else None
+
+        # Amplitude ratios (who's bigger?)
+        amplitude_ratio_to_next = peak_amplitude / next_peak_amplitude if next_peak_amplitude and next_peak_amplitude > 0 else None
+        amplitude_ratio_to_prev = peak_amplitude / prev_peak_amplitude if prev_peak_amplitude and prev_peak_amplitude > 0 else None
+
+        # Signed amplitude differences (-1 to +1, symmetric)
+        amplitude_diff_to_next_signed = None
+        if next_peak_amplitude is not None and (peak_amplitude + next_peak_amplitude) > 0:
+            amplitude_diff_to_next_signed = (peak_amplitude - next_peak_amplitude) / (peak_amplitude + next_peak_amplitude)
+
+        amplitude_diff_to_prev_signed = None
+        if prev_peak_amplitude is not None and (peak_amplitude + prev_peak_amplitude) > 0:
+            amplitude_diff_to_prev_signed = (peak_amplitude - prev_peak_amplitude) / (peak_amplitude + prev_peak_amplitude)
+
+        # Total prominence (left + right, for neighbor comparisons)
+        total_prominence = None
+        if left_prominence is not None and right_prominence is not None:
+            total_prominence = (left_prominence + right_prominence) / 2  # Average of both sides
+
+        # Neighbor prominences (need to compute for neighbors)
+        next_peak_prominence = None
+        if next_pk is not None and i+1 < len(all_peak_indices)-1:
+            # Next peak's left prominence (from current to next)
+            next_left_trough = np.min(y[pk_idx:next_pk])
+            next_left_prom = y[next_pk] - next_left_trough
+            # Next peak's right prominence (from next to one after)
+            next_next_pk = all_peak_indices[i+2] if i+2 < len(all_peak_indices) else None
+            if next_next_pk is not None:
+                next_right_trough = np.min(y[next_pk:next_next_pk])
+                next_right_prom = y[next_pk] - next_right_trough
+                next_peak_prominence = (next_left_prom + next_right_prom) / 2
+            else:
+                next_peak_prominence = next_left_prom  # Only left side available
+
+        prev_peak_prominence = None
+        if prev_pk is not None and i > 1:
+            # Prev peak's right prominence (from prev to current)
+            prev_right_trough = np.min(y[prev_pk:pk_idx])
+            prev_right_prom = y[prev_pk] - prev_right_trough
+            # Prev peak's left prominence (from one before to prev)
+            prev_prev_pk = all_peak_indices[i-2] if i >= 2 else None
+            if prev_prev_pk is not None:
+                prev_left_trough = np.min(y[prev_prev_pk:prev_pk])
+                prev_left_prom = y[prev_pk] - prev_left_trough
+                prev_peak_prominence = (prev_left_prom + prev_right_prom) / 2
+            else:
+                prev_peak_prominence = prev_right_prom  # Only right side available
+
+        # Prominence ratios
+        prominence_ratio_to_next = total_prominence / next_peak_prominence if (total_prominence is not None and next_peak_prominence and next_peak_prominence > 0) else None
+        prominence_ratio_to_prev = total_prominence / prev_peak_prominence if (total_prominence is not None and prev_peak_prominence and prev_peak_prominence > 0) else None
+
+        # SIGNED prominence asymmetry (replace unsigned version)
+        prom_asymmetry_signed = None
+        if left_prominence is not None and right_prominence is not None and (left_prominence + right_prominence) > 0:
+            prom_asymmetry_signed = (left_prominence - right_prominence) / (left_prominence + right_prominence)
+
+        # SIGNED trough asymmetry
+        trough_asymmetry_signed = None
+        if trough_depth_prev is not None and trough_depth_next is not None and (trough_depth_prev + trough_depth_next) > 0:
+            trough_asymmetry_signed = (trough_depth_prev - trough_depth_next) / (trough_depth_prev + trough_depth_next)
+
+        # Neighbor onset height ratios (critical for merge detection!)
+        next_peak_onset_height_ratio = None
+        if i+1 < len(onsets):
+            next_onset_idx = onsets[i+1]
+            next_onset_value = y[next_onset_idx] if next_onset_idx is not None else None
+            if next_onset_value is not None and next_peak_amplitude and next_peak_amplitude > 0:
+                next_peak_onset_height_ratio = next_onset_value / next_peak_amplitude
+
+        prev_peak_onset_height_ratio = None
+        if i > 0 and i-1 < len(onsets):
+            prev_onset_idx = onsets[i-1]
+            prev_onset_value = y[prev_onset_idx] if prev_onset_idx is not None else None
+            if prev_onset_value is not None and prev_peak_amplitude and prev_peak_amplitude > 0:
+                prev_peak_onset_height_ratio = prev_onset_value / prev_peak_amplitude
+
+        # Neighbor Ti values
+        next_peak_ti = None
+        if i+1 < len(onsets) and next_pk is not None:
+            next_onset_idx = onsets[i+1]
+            if next_onset_idx is not None:
+                next_peak_ti = (next_pk - next_onset_idx) / sr_hz
+
+        prev_peak_ti = None
+        if i > 0 and prev_pk is not None:
+            prev_onset_idx = onsets[i-1]
+            if prev_onset_idx is not None:
+                prev_peak_ti = (prev_pk - prev_onset_idx) / sr_hz
+
+        # Ti ratios
+        ti_ratio_to_next = ti / next_peak_ti if (ti is not None and next_peak_ti and next_peak_ti > 0) else None
+        ti_ratio_to_prev = ti / prev_peak_ti if (ti is not None and prev_peak_ti and prev_peak_ti > 0) else None
+
+        # Neighbor Te values
+        next_peak_te = None
+        if i+1 < len(offsets) and i+2 < len(onsets):
+            next_offset_idx = offsets[i+1]
+            next_next_onset_idx = onsets[i+2]
+            if next_offset_idx is not None and next_next_onset_idx is not None:
+                next_peak_te = (next_next_onset_idx - next_offset_idx) / sr_hz
+
+        prev_peak_te = None
+        if i > 0 and i-1 < len(offsets):
+            prev_offset_idx = offsets[i-1]
+            prev_next_onset_idx = onsets[i] if i < len(onsets) else None
+            if prev_offset_idx is not None and prev_next_onset_idx is not None:
+                prev_peak_te = (prev_next_onset_idx - prev_offset_idx) / sr_hz
+
+        # Te ratios
+        te_ratio_to_next = te / next_peak_te if (te is not None and next_peak_te and next_peak_te > 0) else None
+        te_ratio_to_prev = te / prev_peak_te if (te is not None and prev_peak_te and prev_peak_te > 0) else None
+
         # Store all metrics
         metrics.append({
             # Identifiers
@@ -1302,7 +1426,12 @@ def compute_peak_candidate_metrics(y: np.ndarray,
             # Prominence asymmetry
             'left_prominence': float(left_prominence) if left_prominence is not None else None,
             'right_prominence': float(right_prominence) if right_prominence is not None else None,
-            'prom_asymmetry': float(prom_asymmetry) if prom_asymmetry is not None else None,
+            'prom_asymmetry': float(prom_asymmetry) if prom_asymmetry is not None else None,  # OLD: unsigned (0 to 1)
+            'prom_asymmetry_signed': float(prom_asymmetry_signed) if prom_asymmetry_signed is not None else None,  # NEW: signed (-1 to +1)
+            'total_prominence': float(total_prominence) if total_prominence is not None else None,
+
+            # Trough asymmetry (signed)
+            'trough_asymmetry_signed': float(trough_asymmetry_signed) if trough_asymmetry_signed is not None else None,
 
             # Onset position - STRONG INDICATOR OF SHOULDER PEAK
             'onset_above_zero': bool(onset_above_zero) if onset_above_zero is not None else None,
@@ -1325,6 +1454,46 @@ def compute_peak_candidate_metrics(y: np.ndarray,
             # Note: p_noise/p_breath are full-length arrays, sample at peak index
             'p_noise': float(p_noise[pk_idx]) if p_noise is not None and pk_idx < len(p_noise) else None,
             'p_breath': float(p_breath[pk_idx]) if p_breath is not None and pk_idx < len(p_breath) else None,
+
+            # === NEIGHBOR COMPARISON FEATURES ===
+
+            # Neighbor amplitudes
+            'next_peak_amplitude': float(next_peak_amplitude) if next_peak_amplitude is not None else None,
+            'prev_peak_amplitude': float(prev_peak_amplitude) if prev_peak_amplitude is not None else None,
+
+            # Amplitude comparisons
+            'amplitude_ratio_to_next': float(amplitude_ratio_to_next) if amplitude_ratio_to_next is not None else None,
+            'amplitude_ratio_to_prev': float(amplitude_ratio_to_prev) if amplitude_ratio_to_prev is not None else None,
+            'amplitude_diff_to_next_signed': float(amplitude_diff_to_next_signed) if amplitude_diff_to_next_signed is not None else None,
+            'amplitude_diff_to_prev_signed': float(amplitude_diff_to_prev_signed) if amplitude_diff_to_prev_signed is not None else None,
+
+            # Neighbor prominences
+            'next_peak_prominence': float(next_peak_prominence) if next_peak_prominence is not None else None,
+            'prev_peak_prominence': float(prev_peak_prominence) if prev_peak_prominence is not None else None,
+
+            # Prominence comparisons
+            'prominence_ratio_to_next': float(prominence_ratio_to_next) if prominence_ratio_to_next is not None else None,
+            'prominence_ratio_to_prev': float(prominence_ratio_to_prev) if prominence_ratio_to_prev is not None else None,
+
+            # Neighbor onset height ratios (critical for merge detection!)
+            'next_peak_onset_height_ratio': float(next_peak_onset_height_ratio) if next_peak_onset_height_ratio is not None else None,
+            'prev_peak_onset_height_ratio': float(prev_peak_onset_height_ratio) if prev_peak_onset_height_ratio is not None else None,
+
+            # Neighbor Ti values
+            'next_peak_ti': float(next_peak_ti) if next_peak_ti is not None else None,
+            'prev_peak_ti': float(prev_peak_ti) if prev_peak_ti is not None else None,
+
+            # Ti comparisons
+            'ti_ratio_to_next': float(ti_ratio_to_next) if ti_ratio_to_next is not None else None,
+            'ti_ratio_to_prev': float(ti_ratio_to_prev) if ti_ratio_to_prev is not None else None,
+
+            # Neighbor Te values
+            'next_peak_te': float(next_peak_te) if next_peak_te is not None else None,
+            'prev_peak_te': float(prev_peak_te) if prev_peak_te is not None else None,
+
+            # Te comparisons
+            'te_ratio_to_next': float(te_ratio_to_next) if te_ratio_to_next is not None else None,
+            'te_ratio_to_prev': float(te_ratio_to_prev) if te_ratio_to_prev is not None else None,
         })
 
     return metrics

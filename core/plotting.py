@@ -1,5 +1,6 @@
 # core/plotting.py
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy, QGraphicsOpacityEffect
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from PyQt6 import QtCore
@@ -15,6 +16,59 @@ ONSET_COLOR = "#2ecc71"     # green (inspiratory onset)
 OFFSET_COLOR= "#f39c12"     # orange (inspiratory offset/expiratory onset)
 EXPMIN_COLOR= "#1f78b4"     # blue (expiratory minimum)
 EXPOFF_COLOR = "#9b59b6"   # purple (expiratory offset)
+
+
+class TransparentToolbar(NavigationToolbar):
+    """Custom toolbar with opacity animation on hover."""
+
+    def __init__(self, canvas, parent):
+        super().__init__(canvas, parent)
+
+        # Set up opacity effect
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        self.opacity_effect.setOpacity(0.1)  # Default: 10% visible
+
+        # Animation for smooth transition
+        self.opacity_animation = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.opacity_animation.setDuration(200)  # 200ms transition
+        self.opacity_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+
+        # Hide the coordinate label
+        if hasattr(self, 'locLabel'):
+            self.locLabel.setVisible(False)
+
+        # Hide separators
+        for action in self.actions():
+            if action.isSeparator():
+                action.setVisible(False)
+
+        # Make the extension/overflow button (black bar) fully transparent
+        from PyQt6.QtWidgets import QToolButton
+        from PyQt6.QtCore import Qt
+        for child in self.findChildren(QToolButton):
+            # Extension button has an arrow and no default action
+            if child.arrowType() != Qt.ArrowType.NoArrow or not child.defaultAction():
+                # Make it completely transparent
+                button_opacity = QGraphicsOpacityEffect(child)
+                button_opacity.setOpacity(0.0)
+                child.setGraphicsEffect(button_opacity)
+
+    def enterEvent(self, event):
+        """Mouse enters toolbar - fade to full opacity."""
+        self.opacity_animation.stop()
+        self.opacity_animation.setStartValue(self.opacity_effect.opacity())
+        self.opacity_animation.setEndValue(1.0)  # 100% visible
+        self.opacity_animation.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        """Mouse leaves toolbar - fade to transparent."""
+        self.opacity_animation.stop()
+        self.opacity_animation.setStartValue(self.opacity_effect.opacity())
+        self.opacity_animation.setEndValue(0.1)  # 10% visible
+        self.opacity_animation.start()
+        super().leaveEvent(event)
 
 
 class PlotHost(QWidget):
@@ -37,7 +91,7 @@ class PlotHost(QWidget):
         self.canvas.mousePressEvent = self._qt_mouse_press_override
 
         # Toolbar (clean, dark buttons, no bar background)
-        self.toolbar = NavigationToolbar(self.canvas, self)
+        self.toolbar = TransparentToolbar(self.canvas, self)
         self.toolbar.setObjectName("PlotNavToolbar")
         self.toolbar.setIconSize(QtCore.QSize(15, 15))
         self.toolbar.setMovable(False)
@@ -114,9 +168,13 @@ class PlotHost(QWidget):
         # Layout
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
-        lay.addWidget(self.toolbar)
-        lay.addWidget(self.canvas)
+        lay.setSpacing(0)
+        lay.addWidget(self.canvas)  # Only canvas in layout
+
+        # Position toolbar as overlay at top of canvas
+        self.toolbar.setParent(self.canvas)  # Make it a child of canvas
+        self.toolbar.move(10, 10)  # 10px from top-left corner
+        self.toolbar.raise_()  # Ensure toolbar is on top
 
         # Preserve view flags & storage
         self._preserve_x = True
@@ -131,6 +189,34 @@ class PlotHost(QWidget):
         self._span_patches = []
 
         # Event connections already registered above (before toolbar creation)
+
+    def resizeEvent(self, event):
+        """Keep toolbar positioned correctly when window resizes."""
+        super().resizeEvent(event)
+        if hasattr(self, 'toolbar'):
+            # Keep toolbar at top-left
+            self.toolbar.move(10, 10)
+
+    def _clean_spines(self, ax, has_y2=False):
+        """
+        Clean up axis spines for a minimal, modern look.
+        Only show left and bottom spines (and right if Y2 axis exists).
+
+        Args:
+            ax: The matplotlib axis to clean
+            has_y2: If True, show the right spine for Y2 axis
+        """
+        # Hide top and right spines
+        ax.spines['top'].set_visible(False)
+        if not has_y2:
+            ax.spines['right'].set_visible(False)
+
+        # Keep left and bottom spines visible
+        ax.spines['left'].set_visible(True)
+        ax.spines['bottom'].set_visible(True)
+
+        # Only show ticks on left and bottom (not on Y2 spine from this axis)
+        ax.tick_params(top=False, right=False, left=True, bottom=True)
 
     # ------- public API -------
     def set_preserve(self, x: bool = True, y: bool = False):
@@ -412,6 +498,9 @@ class PlotHost(QWidget):
         self._attach_limit_listeners([self.ax_main], mode="single")
         self._store_from_axes(mode="single")
 
+        # Clean up spines for minimal look
+        self._clean_spines(self.ax_main, has_y2=False)
+
         # Keep layout tight always
         self.fig.tight_layout()
         self.canvas.draw_idle()
@@ -478,6 +567,8 @@ class PlotHost(QWidget):
             ax.plot(tds, yds, linewidth=1, color=PLETH_COLOR)
             ax.set_ylabel(label)
             ax.grid(True, alpha=0.2)
+            # Clean spines for minimal look
+            self._clean_spines(ax, has_y2=False)
 
         axes[-1].set_xlabel("Time (s)")
         if title:
@@ -1116,6 +1207,17 @@ class PlotHost(QWidget):
             ax_y2.patch.set_visible(False)  # Make background transparent/non-interactive
             ax_y2.patch.set_picker(None)  # Explicitly disable picking on patch
 
+            # Clean spines - now main axis needs right spine for Y2
+            self._clean_spines(ax, has_y2=True)
+            # Clean Y2 axis spines - only show right spine
+            ax_y2.spines['top'].set_visible(False)
+            ax_y2.spines['left'].set_visible(False)
+            ax_y2.spines['bottom'].set_visible(False)
+            ax_y2.spines['right'].set_visible(True)
+            # Only show ticks/labels on the right for Y2
+            ax_y2.tick_params(top=False, left=False, bottom=False, right=True,
+                             labeltop=False, labelleft=False, labelbottom=False, labelright=True)
+
         # optional downsample
         import numpy as np
         from math import ceil
@@ -1389,18 +1491,19 @@ class PlotHost(QWidget):
                 )[0]
                 self._region_overlays.append(line)
 
-    def update_region_overlays(self, t, eupnea_mask, apnea_mask, outlier_mask=None, failure_mask=None, sniff_regions=None, state=None):
+    def update_region_overlays(self, t, eupnea_mask, apnea_mask, outlier_mask=None, failure_mask=None, sniff_regions=None, eupnea_regions=None, state=None):
         """
         Add overlays for eupnea, sniffing, apnea, outliers, and calculation failures.
         Display mode (line vs shade) is controlled by state variables.
 
         Args:
             t: time array
-            eupnea_mask: binary array (0/1) indicating eupnic regions
+            eupnea_mask: binary array (0/1) indicating eupnic regions (frequency mode) OR None
             apnea_mask: binary array (0/1) indicating apneic regions
             outlier_mask: binary array (0/1) indicating outlier breath cycles (orange)
             failure_mask: binary array (0/1) indicating calculation failure cycles (red)
             sniff_regions: list of (start_t, end_t) tuples for sniffing regions (purple)
+            eupnea_regions: list of (start_t, end_t) tuples for eupnea regions (green, GMM mode)
         """
         self.clear_region_overlays()
 
@@ -1417,11 +1520,18 @@ class PlotHost(QWidget):
         apnea_shade = getattr(state, 'apnea_use_shade', False) if state else False
         outliers_shade = getattr(state, 'outliers_use_shade', True) if state else True
 
-        # Draw eupnea regions (green)
-        if eupnea_mask is not None and len(eupnea_mask) == len(t):
-            eupnea_regions = self._extract_regions(t, eupnea_mask)
+        # Draw eupnea regions (green) - support both mask (frequency mode) and regions (GMM mode)
+        regions_to_draw = None
+        if eupnea_regions is not None and len(eupnea_regions) > 0:
+            # GMM mode: use provided time regions directly
+            regions_to_draw = eupnea_regions
+        elif eupnea_mask is not None and len(eupnea_mask) == len(t):
+            # Frequency mode: convert mask to regions
+            regions_to_draw = self._extract_regions(t, eupnea_mask)
+
+        if regions_to_draw:
             self._draw_regions_with_mode(
-                eupnea_regions,
+                regions_to_draw,
                 use_shade=eupnea_shade,
                 color='#2e7d32',  # Dark green
                 y_position_fraction=0.99  # Top of plot

@@ -2,9 +2,9 @@
 EditingModes class for PhysioMetrics.
 
 Handles all interactive editing modes:
-- Add/Delete Peaks
+- Add/Delete Peaks (label toggling only - preserves master peak list)
 - Add/Delete Sighs
-- Move Points (peaks, onsets, offsets, expmins, expoffs)
+- Move Points (breath markers only: onsets, offsets, expmins, expoffs - NOT peaks)
 - Mark Sniffing Regions
 """
 
@@ -89,6 +89,66 @@ class EditingModes:
         self.window.addSighButton.toggled.connect(self.on_add_sigh_toggled)
         self.window.movePointButton.toggled.connect(self.on_move_point_toggled)
         self.window.markSniffButton.toggled.connect(self.on_mark_sniff_toggled)
+
+    # ========================================================================
+    # Helper Functions for Label-Based Editing
+    # ========================================================================
+
+    def _update_peaks_by_sweep_from_labels(self, sweep_idx):
+        """
+        Re-derive peaks_by_sweep from all_peaks_by_sweep labels.
+
+        This is the core function for label-based editing: instead of physically
+        modifying arrays, we toggle labels and then regenerate the filtered view.
+
+        Args:
+            sweep_idx: Sweep index to update
+        """
+        st = self.window.state
+        all_peaks = st.all_peaks_by_sweep.get(sweep_idx)
+
+        if all_peaks is None or 'indices' not in all_peaks or 'labels' not in all_peaks:
+            st.peaks_by_sweep[sweep_idx] = np.array([], dtype=int)
+            return
+
+        # Extract only peaks with label==1 (is_breath)
+        labeled_mask = all_peaks['labels'] == 1
+        st.peaks_by_sweep[sweep_idx] = all_peaks['indices'][labeled_mask]
+
+        print(f"[label-edit] Updated peaks_by_sweep[{sweep_idx}]: {np.sum(labeled_mask)} peaks with label=1")
+
+    def _toggle_peak_label(self, sweep_idx, peak_sample_idx, new_label):
+        """
+        Toggle a peak's label in all_peaks_by_sweep.
+
+        Args:
+            sweep_idx: Sweep index
+            peak_sample_idx: Sample index of the peak (position in signal)
+            new_label: New label value (0=noise, 1=breath)
+        """
+        st = self.window.state
+        all_peaks = st.all_peaks_by_sweep.get(sweep_idx)
+
+        if all_peaks is None or 'indices' not in all_peaks:
+            print(f"[label-edit] ERROR: No all_peaks_by_sweep for sweep {sweep_idx}")
+            return
+
+        # Find the peak in all_peaks_by_sweep
+        mask = all_peaks['indices'] == peak_sample_idx
+        if not mask.any():
+            print(f"[label-edit] ERROR: Peak at sample {peak_sample_idx} not found in all_peaks_by_sweep[{sweep_idx}]")
+            return
+
+        idx = np.where(mask)[0][0]
+        old_label = all_peaks['labels'][idx]
+        all_peaks['labels'][idx] = new_label
+        all_peaks['label_source'][idx] = 'user'  # Track that this was manually edited
+
+        print(f"[label-edit] Toggled peak at sample {peak_sample_idx} (sweep {sweep_idx}): label {old_label} → {new_label}")
+
+    # ========================================================================
+    # End of Label-Based Editing Helpers
+    # ========================================================================
 
     def handle_key_press_event(self, event) -> bool:
         """
@@ -334,6 +394,15 @@ class EditingModes:
                 self.window.markSniffButton.blockSignals(False)
                 self.window.markSniffButton.setText("Mark Sniff")
 
+            # turn OFF merge peaks mode
+            if getattr(self, "_merge_peaks_mode", False):
+                self._merge_peaks_mode = False
+                if hasattr(self.window, 'MergeBreathsButton'):
+                    self.window.MergeBreathsButton.blockSignals(True)
+                    self.window.MergeBreathsButton.setChecked(False)
+                    self.window.MergeBreathsButton.blockSignals(False)
+                    self.window.MergeBreathsButton.setText("Merge Breaths")
+
             self.window.addPeaksButton.setText("Add Peaks (ON) [Shift=Del, Ctrl=Sigh]")
             self.window.plot_host.set_click_callback(self._on_plot_click_add_peak)
             self.window.plot_host.setCursor(Qt.CursorShape.CrossCursor)
@@ -436,93 +505,87 @@ class EditingModes:
         else:
             t_plot = t
 
-        # ±080 ms search window around click
-        half_win_s = 0.08
-        half_win_n = max(1, int(round(half_win_s * st.sr_hz)))
-        i_center = int(np.clip(np.searchsorted(t_plot, float(xdata)), 0, len(t_plot) - 1))
-        i0 = max(0, i_center - half_win_n)
-        i1 = min(len(y) - 1, i_center + half_win_n)
-        if i1 <= i0:
+        # ========================================================================
+        # LABEL-BASED EDITING: Find nearest peak in all_peaks_by_sweep and toggle label
+        # ========================================================================
+
+        # Find the click position
+        i_click = int(np.clip(np.searchsorted(t_plot, float(xdata)), 0, len(t_plot) - 1))
+
+        # Get all detected peaks (including those labeled as noise)
+        all_peaks = st.all_peaks_by_sweep.get(s)
+        if all_peaks is None or 'indices' not in all_peaks or len(all_peaks['indices']) == 0:
+            print("[add-peak] No peaks detected in this sweep - run peak detection first")
+            self.window._log_status_message("✗ No peaks detected - run detection first", 2000)
             return
 
-        # Find local maximum (breathing signals always use upward peaks)
-        seg = y[i0:i1 + 1]
-        loc = int(np.argmax(seg))
-        i_peak = i0 + loc
+        # Find the nearest peak to the click position
+        distances = np.abs(all_peaks['indices'] - i_click)
+        closest_idx = np.argmin(distances)
+        closest_peak_idx = all_peaks['indices'][closest_idx]
+        closest_distance = distances[closest_idx]
 
-        # ---- NEW: enforce minimum separation from existing peaks ----
-        # Use UI "MinPeakDistValue" if valid; fallback to 0.05 s
-        try:
-            sep_s = float(self.window.MinPeakDistValue.text().strip())
-            if not (sep_s > 0):
-                raise ValueError
-        except Exception:
-            sep_s = 0.05
-        sep_n = max(1, int(round(sep_s * st.sr_hz)))
+        # Check if click is close enough to a peak (within ±80ms)
+        half_win_s = 0.08
+        half_win_n = max(1, int(round(half_win_s * st.sr_hz)))
 
-        pks = np.asarray(st.peaks_by_sweep.get(s, np.array([], dtype=int)), dtype=int)
-        if pks.size and np.any(np.abs(pks - i_peak) <= sep_n):
-            print(f"[add-peak] Rejected: candidate within {sep_s:.3f}s of an existing peak.")
-            self.window._log_status_message(f"✗ Peak too close (< {sep_s:.2f}s)", 2000)
+        if closest_distance > half_win_n:
+            print(f"[add-peak] Click too far from nearest peak ({closest_distance} samples > {half_win_n} samples)")
+            self.window._log_status_message(f"✗ No peak within {half_win_s:.2f}s of click", 2000)
             # Restore out-of-date warning after temporary message expires
             if getattr(self.window, 'eupnea_sniffing_out_of_date', False):
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(2100, lambda: self.window._log_status_message("⚠️ Eupnea/sniffing detection out of date"))
             return
 
-        # Insert, sort, and store
-        pks_new = np.sort(np.append(pks, i_peak))
-        new_idx = np.where(pks_new == i_peak)[0][0]  # Find index of newly added peak
-        st.peaks_by_sweep[s] = pks_new
+        # Check current label
+        current_label = all_peaks['labels'][closest_idx]
 
-        # Surgically compute breath events for just this new peak
-        prev_peak = pks_new[new_idx - 1] if new_idx > 0 else None
-        next_peak = pks_new[new_idx + 1] if new_idx < len(pks_new) - 1 else None
+        if current_label == 1:
+            # Peak is already labeled as a breath
+            print(f"[add-peak] Peak at {closest_peak_idx} is already labeled as breath")
+            self.window._log_status_message("✗ Peak already labeled as breath", 2000)
+            if getattr(self.window, 'eupnea_sniffing_out_of_date', False):
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(2100, lambda: self.window._log_status_message("⚠️ Eupnea/sniffing detection out of date"))
+            return
 
-        new_events = self._compute_single_breath_events(
-            y, i_peak, prev_peak, next_peak, st.sr_hz
-        )
+        # Toggle label from 0 (noise) to 1 (breath)
+        print(f"[add-peak] Toggling peak at sample {closest_peak_idx} from noise to breath")
+        self._toggle_peak_label(s, closest_peak_idx, new_label=1)
 
-        # Insert the new breath events at the correct position
-        breaths = st.breath_by_sweep.get(s, {})
-        if not breaths:
-            # Initialize empty breath dict if it doesn't exist
-            breaths = {'onsets': np.array([], dtype=int),
-                      'offsets': np.array([], dtype=int),
-                      'expmins': np.array([], dtype=int),
-                      'expoffs': np.array([], dtype=int)}
+        # Re-derive peaks_by_sweep from labels
+        self._update_peaks_by_sweep_from_labels(s)
 
-        for key in ['onsets', 'offsets', 'expmins', 'expoffs']:
-            arr = np.asarray(breaths.get(key, []), dtype=int)
-            if new_events.get(key) is not None:
-                # Insert at the correct position
-                breaths[key] = np.insert(arr, new_idx, new_events[key])
-            else:
-                # Insert placeholder if computation failed
-                breaths[key] = np.insert(arr, new_idx, 0)
-
+        # Recompute breath events from the filtered peak list
+        from core import peaks as peakdet
+        pks_new = st.peaks_by_sweep[s]
+        breaths = peakdet.compute_breath_events(y, pks_new, st.sr_hz)
         st.breath_by_sweep[s] = breaths
-        print(f"[add-peak] Surgically added breath events at index {new_idx}")
+        print(f"[add-peak] Recomputed breath events for {len(pks_new)} peaks")
 
-        # Recompute peak metrics for current edited peaks (for Y2 plotting)
+        # Recompute current peak metrics (for Y2 plotting)
+        # NOTE: peak_metrics_by_sweep (original) is preserved for ML training
         if hasattr(st, 'current_peak_metrics_by_sweep'):
             try:
-                from core import peaks as peakdet
                 import core.metrics as metrics_mod
                 p_noise_all = metrics_mod.compute_p_noise(y, pks_new, st.sr_hz)
                 p_breath_all = 1.0 - p_noise_all if p_noise_all is not None else None
-                peak_metrics = peakdet.compute_peak_candidate_metrics(
-                    y=y,
-                    all_peak_indices=pks_new,
-                    breath_events=breaths,
-                    sr_hz=st.sr_hz,
-                    p_noise=p_noise_all,
-                    p_breath=p_breath_all
-                )
-                st.current_peak_metrics_by_sweep[s] = peak_metrics
-                print(f"[add-peak] Recomputed {len(peak_metrics)} current peak metrics")
             except Exception as e:
-                print(f"[add-peak] Could not recompute peak metrics: {e}")
+                print(f"[add-peak] Could not compute p_noise: {e}")
+                p_noise_all = None
+                p_breath_all = None
+
+            peak_metrics = peakdet.compute_peak_candidate_metrics(
+                y=y,
+                all_peak_indices=pks_new,
+                breath_events=breaths,
+                sr_hz=st.sr_hz,
+                p_noise=p_noise_all,
+                p_breath=p_breath_all
+            )
+            st.current_peak_metrics_by_sweep[s] = peak_metrics
+            print(f"[add-peak] Recomputed {len(peak_metrics)} current peak metrics (original metrics preserved for ML)")
 
         # Log telemetry: manual edit
         from core import telemetry
@@ -595,6 +658,15 @@ class EditingModes:
                 self.window.markSniffButton.setChecked(False)
                 self.window.markSniffButton.blockSignals(False)
                 self.window.markSniffButton.setText("Mark Sniff")
+
+            # turn OFF merge peaks mode
+            if getattr(self, "_merge_peaks_mode", False):
+                self._merge_peaks_mode = False
+                if hasattr(self.window, 'MergeBreathsButton'):
+                    self.window.MergeBreathsButton.blockSignals(True)
+                    self.window.MergeBreathsButton.setChecked(False)
+                    self.window.MergeBreathsButton.blockSignals(False)
+                    self.window.MergeBreathsButton.setText("Merge Breaths")
 
             self.window.deletePeaksButton.setText("Delete Peaks (ON) [Shift=Add, Ctrl=Sigh]")
             self.window.plot_host.set_click_callback(self._on_plot_click_delete_peak)
@@ -674,9 +746,49 @@ class EditingModes:
                 QTimer.singleShot(2100, lambda: self.window._log_status_message("⚠️ Eupnea/sniffing detection out of date"))
             return
 
-        # Delete only the closest peak
-        pks_new = np.delete(pks, closest_idx)
-        print(f"[delete-peak] Deleted peak at index {closest_peak} (distance: {distances[closest_idx]} samples)")
+        # ========================================================================
+        # LABEL-BASED EDITING: Toggle peak label to 0 instead of physical deletion
+        # ========================================================================
+
+        # Get the peak sample index (position in signal)
+        peak_sample_idx = pks[closest_idx]
+        print(f"[delete-peak] Deleting peak at sample index {peak_sample_idx} (distance: {distances[closest_idx]} samples)")
+
+        # Toggle label to 0 (mark as noise)
+        self._toggle_peak_label(s, peak_sample_idx, new_label=0)
+
+        # Re-derive peaks_by_sweep from labels
+        self._update_peaks_by_sweep_from_labels(s)
+
+        # Recompute breath events from the filtered peak list
+        from core import peaks as peakdet
+        pks_new = st.peaks_by_sweep[s]
+        breaths = peakdet.compute_breath_events(y, pks_new, st.sr_hz)
+        st.breath_by_sweep[s] = breaths
+        print(f"[delete-peak] Recomputed breath events for {len(pks_new)} peaks")
+
+        # Recompute current peak metrics (for Y2 plotting)
+        # NOTE: peak_metrics_by_sweep (original) is preserved for ML training
+        if hasattr(st, 'current_peak_metrics_by_sweep'):
+            try:
+                import core.metrics as metrics_mod
+                p_noise_all = metrics_mod.compute_p_noise(y, pks_new, st.sr_hz)
+                p_breath_all = 1.0 - p_noise_all if p_noise_all is not None else None
+            except Exception as e:
+                print(f"[delete-peak] Could not compute p_noise: {e}")
+                p_noise_all = None
+                p_breath_all = None
+
+            peak_metrics = peakdet.compute_peak_candidate_metrics(
+                y=y,
+                all_peak_indices=pks_new,
+                breath_events=breaths,
+                sr_hz=st.sr_hz,
+                p_noise=p_noise_all,
+                p_breath=p_breath_all
+            )
+            st.current_peak_metrics_by_sweep[s] = peak_metrics
+            print(f"[delete-peak] Recomputed {len(peak_metrics)} current peak metrics (original metrics preserved for ML)")
 
         # Log telemetry: manual edit
         from core import telemetry
@@ -685,41 +797,6 @@ class EditingModes:
                           sweep_index=s)
 
         self.window._log_status_message("✓ Peak deleted", 1500)
-        st.peaks_by_sweep[s] = pks_new
-
-        # Surgically delete corresponding breath events (no recomputation needed)
-        breaths = st.breath_by_sweep.get(s, {})
-        if breaths:
-            # Delete entries at closest_idx from all breath event arrays
-            for key in ['onsets', 'offsets', 'expmins', 'expoffs']:
-                if key in breaths:
-                    arr = np.asarray(breaths[key], dtype=int)
-                    if closest_idx < len(arr):
-                        breaths[key] = np.delete(arr, closest_idx)
-            st.breath_by_sweep[s] = breaths
-            print(f"[delete-peak] Surgically removed breath events at index {closest_idx}")
-
-        # Recompute peak metrics for current edited peaks (for Y2 plotting)
-        if hasattr(st, 'current_peak_metrics_by_sweep'):
-            try:
-                from core import peaks as peakdet
-                import core.metrics as metrics_mod
-                t, y = self.window._current_trace()
-                if y is not None:
-                    p_noise_all = metrics_mod.compute_p_noise(y, pks_new, st.sr_hz)
-                    p_breath_all = 1.0 - p_noise_all if p_noise_all is not None else None
-                    peak_metrics = peakdet.compute_peak_candidate_metrics(
-                        y=y,
-                        all_peak_indices=pks_new,
-                        breath_events=breaths,
-                        sr_hz=st.sr_hz,
-                        p_noise=p_noise_all,
-                        p_breath=p_breath_all
-                    )
-                    st.current_peak_metrics_by_sweep[s] = peak_metrics
-                    print(f"[delete-peak] Recomputed {len(peak_metrics)} current peak metrics")
-            except Exception as e:
-                print(f"[delete-peak] Could not recompute peak metrics: {e}")
 
         # If a Y2 metric is selected, recompute
         if getattr(st, "y2_metric_key", None):
@@ -782,6 +859,15 @@ class EditingModes:
                 self.window.markSniffButton.setChecked(False)
                 self.window.markSniffButton.blockSignals(False)
                 self.window.markSniffButton.setText("Mark Sniff")
+
+            # turn OFF merge peaks mode
+            if getattr(self, "_merge_peaks_mode", False):
+                self._merge_peaks_mode = False
+                if hasattr(self.window, 'MergeBreathsButton'):
+                    self.window.MergeBreathsButton.blockSignals(True)
+                    self.window.MergeBreathsButton.setChecked(False)
+                    self.window.MergeBreathsButton.blockSignals(False)
+                    self.window.MergeBreathsButton.setText("Merge Breaths")
 
             self.window.addSighButton.setText("Add Sigh (ON)")
             self.window.plot_host.set_click_callback(self._on_plot_click_add_sigh)
@@ -882,6 +968,15 @@ class EditingModes:
                 self.window.markSniffButton.setChecked(False)
                 self.window.markSniffButton.blockSignals(False)
                 self.window.markSniffButton.setText("Mark Sniff")
+
+            # turn OFF merge peaks mode
+            if getattr(self, "_merge_peaks_mode", False):
+                self._merge_peaks_mode = False
+                if hasattr(self.window, 'MergeBreathsButton'):
+                    self.window.MergeBreathsButton.blockSignals(True)
+                    self.window.MergeBreathsButton.setChecked(False)
+                    self.window.MergeBreathsButton.blockSignals(False)
+                    self.window.MergeBreathsButton.setText("Merge Breaths")
 
             self.window.movePointButton.setText("Move Point (ON) [Shift=Snap]")
             self.window.plot_host.set_click_callback(self._on_plot_click_move_point)
@@ -1013,11 +1108,19 @@ class EditingModes:
         # Select closest
         point_type, idx, dist = min(candidates, key=lambda x: x[2])
 
+        # Disallow moving peaks (only breath event markers can be moved)
+        # Peaks should stay at detected positions; use add/delete to correct peak detection
+        if point_type == 'peak':
+            print(f"[move-point] ✗ Cannot move peaks - use Add/Delete Peak buttons instead")
+            self.window._log_status_message("✗ Cannot move peaks - use Add/Delete instead", 2000)
+            return
+
         # Store selection (keep original_index for finding it later)
         self._selected_point = {'type': point_type, 'index': idx, 'sweep': s, 'original_index': idx}
 
         # No visual feedback marker needed - the existing point markers are sufficient
         print(f"[move-point] Selected {point_type} at index {idx} - use arrow keys to move (Shift=snap)")
+        self.window._log_status_message(f"Selected {point_type} - use arrow keys to move", 2000)
 
     def _find_nearest_zero_crossing(self, y, dy, current_idx, search_radius=200):
         """
@@ -1344,6 +1447,15 @@ class EditingModes:
                 self.window.movePointButton.setChecked(False)
                 self.window.movePointButton.blockSignals(False)
                 self.window.movePointButton.setText("Move Point")
+
+            # turn OFF merge peaks mode
+            if getattr(self, "_merge_peaks_mode", False):
+                self._merge_peaks_mode = False
+                if hasattr(self.window, 'MergeBreathsButton'):
+                    self.window.MergeBreathsButton.blockSignals(True)
+                    self.window.MergeBreathsButton.setChecked(False)
+                    self.window.MergeBreathsButton.blockSignals(False)
+                    self.window.MergeBreathsButton.setText("Merge Breaths")
 
             self.window.markSniffButton.setText("Mark Sniff (ON) [Shift=Delete]")
             self.window.plot_host.set_click_callback(self._on_plot_click_mark_sniff)
@@ -2566,34 +2678,26 @@ class EditingModes:
         st.user_merge_decisions[s].append(merge_record)
         print(f"[merge-peaks] Recorded merge decision for ML training: kept={keep_peak}, removed={remove_peak}")
 
-        # Remove the smaller peak
-        pks_new = np.delete(pks, remove_idx)
-        st.peaks_by_sweep[s] = pks_new
+        # ========================================================================
+        # LABEL-BASED EDITING: Toggle removed peak label to 0, keep other at 1
+        # ========================================================================
 
-        # Remove corresponding breath events
-        breaths = st.breath_by_sweep.get(s, {})
-        if breaths:
-            for key in ['onsets', 'offsets', 'expmins', 'expoffs']:
-                if key in breaths:
-                    arr = np.asarray(breaths[key], dtype=int)
-                    if remove_idx < len(arr):
-                        breaths[key] = np.delete(arr, remove_idx)
-            st.breath_by_sweep[s] = breaths
+        # Toggle the removed peak's label to 0 (mark as noise)
+        self._toggle_peak_label(s, remove_peak, new_label=0)
+        # Keep peak stays at label=1 (already is)
 
-        # Recompute breath events for the affected peak (the one we kept)
-        # This will recalculate onset/offset/expmin based on the new peak configuration
+        # Re-derive peaks_by_sweep from labels
+        self._update_peaks_by_sweep_from_labels(s)
+
+        # Recompute breath events from the filtered peak list
         from core import peaks as peakdet
-        all_breaths = peakdet.compute_breath_events(y, pks_new, st.sr_hz)
+        pks_new = st.peaks_by_sweep[s]
+        breaths = peakdet.compute_breath_events(y, pks_new, st.sr_hz)
+        st.breath_by_sweep[s] = breaths
+        print(f"[merge-peaks] Recomputed breath events for {len(pks_new)} peaks")
 
-        # Update only the kept peak's breath events
-        if all_breaths:
-            for key in ['onsets', 'offsets', 'expmins', 'expoffs']:
-                if key in all_breaths and key in breaths:
-                    breaths[key] = all_breaths[key]
-            st.breath_by_sweep[s] = breaths
-
-        # Recompute peak metrics for current edited peaks (for Y2 plotting)
-        # NOTE: We store in 'current_peak_metrics_by_sweep' to preserve original metrics for ML training
+        # Recompute current peak metrics (for Y2 plotting)
+        # NOTE: peak_metrics_by_sweep (original) is preserved for ML training
         if hasattr(st, 'current_peak_metrics_by_sweep'):
             try:
                 import core.metrics as metrics_mod
@@ -2607,13 +2711,13 @@ class EditingModes:
             peak_metrics = peakdet.compute_peak_candidate_metrics(
                 y=y,
                 all_peak_indices=pks_new,
-                breath_events=all_breaths,
+                breath_events=breaths,
                 sr_hz=st.sr_hz,
                 p_noise=p_noise_all,
                 p_breath=p_breath_all
             )
             st.current_peak_metrics_by_sweep[s] = peak_metrics
-            print(f"[merge-peaks] Recomputed {len(peak_metrics)} current peak metrics for sweep {s} (original metrics preserved for ML)")
+            print(f"[merge-peaks] Recomputed {len(peak_metrics)} current peak metrics (original metrics preserved for ML)")
 
         # Log telemetry
         from core import telemetry

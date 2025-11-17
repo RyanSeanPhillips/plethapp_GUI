@@ -151,6 +151,30 @@ def save_state_to_npz(state: AppState, npz_path: Path, include_raw_data: bool = 
         peaks = state.peaks_by_sweep[sweep_idx]
         data[f'peaks_sweep_{sweep_idx}'] = peaks
 
+    # ===== ALL PEAKS (master list with labels) =====
+    # Save all_peaks_by_sweep for ML export
+    if hasattr(state, 'all_peaks_by_sweep') and state.all_peaks_by_sweep:
+        all_peaks_sweep_indices = sorted(state.all_peaks_by_sweep.keys())
+        data['all_peaks_sweep_indices'] = np.array(all_peaks_sweep_indices, dtype=int)
+
+        for sweep_idx in all_peaks_sweep_indices:
+            all_peaks_dict = state.all_peaks_by_sweep[sweep_idx]
+            # Save each array separately
+            data[f'all_peaks_indices_sweep_{sweep_idx}'] = all_peaks_dict['indices']
+            data[f'all_peaks_labels_sweep_{sweep_idx}'] = all_peaks_dict['labels']
+            data[f'all_peaks_label_source_sweep_{sweep_idx}'] = all_peaks_dict['label_source']
+
+    # ===== PEAK METRICS (for ML export) =====
+    # Save peak_metrics_by_sweep as JSON (list of dicts)
+    if hasattr(state, 'peak_metrics_by_sweep') and state.peak_metrics_by_sweep:
+        peak_metrics_sweep_indices = sorted(state.peak_metrics_by_sweep.keys())
+        data['peak_metrics_sweep_indices'] = np.array(peak_metrics_sweep_indices, dtype=int)
+
+        for sweep_idx in peak_metrics_sweep_indices:
+            metrics_list = state.peak_metrics_by_sweep[sweep_idx]
+            # Convert list of dicts to JSON
+            data[f'peak_metrics_sweep_{sweep_idx}_json'] = json.dumps(metrics_list)
+
     # ===== BREATH FEATURES (per-sweep) =====
     # Each sweep's breath dict contains onsets, offsets, expmins, expoffs
     breath_sweep_indices = sorted(state.breath_by_sweep.keys())
@@ -427,6 +451,30 @@ def load_state_from_npz(npz_path: Path, reload_raw_data: bool = True) -> Tuple[A
         for sweep_idx in sweep_indices:
             peaks = data[f'peaks_sweep_{sweep_idx}']
             state.peaks_by_sweep[int(sweep_idx)] = peaks
+
+    # ===== ALL PEAKS (master list with labels) =====
+    if 'all_peaks_sweep_indices' in data:
+        all_peaks_indices = data['all_peaks_sweep_indices']
+        for sweep_idx in all_peaks_indices:
+            # Load the three arrays
+            indices = data[f'all_peaks_indices_sweep_{sweep_idx}']
+            labels = data[f'all_peaks_labels_sweep_{sweep_idx}']
+            label_source = data[f'all_peaks_label_source_sweep_{sweep_idx}']
+
+            # Reconstruct the dict
+            state.all_peaks_by_sweep[int(sweep_idx)] = {
+                'indices': indices,
+                'labels': labels,
+                'label_source': label_source
+            }
+
+    # ===== PEAK METRICS (for ML export) =====
+    if 'peak_metrics_sweep_indices' in data:
+        metrics_indices = data['peak_metrics_sweep_indices']
+        for sweep_idx in metrics_indices:
+            metrics_json = str(data[f'peak_metrics_sweep_{sweep_idx}_json'])
+            metrics_list = json.loads(metrics_json)
+            state.peak_metrics_by_sweep[int(sweep_idx)] = metrics_list
 
     # ===== BREATH FEATURES (per-sweep) =====
     if 'breath_sweep_indices' in data:

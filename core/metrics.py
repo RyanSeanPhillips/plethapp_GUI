@@ -174,6 +174,30 @@ METRIC_SPECS: List[Tuple[str, str]] = [
     # Phase 2.3 Group C: Probability from auto-threshold
     ("P(noise) - auto-threshold model",       "p_noise"),
     ("P(breath) - auto-threshold model",      "p_breath"),
+    # Phase 2.4: Neighbor comparison features (for merge detection)
+    ("Prominence asymmetry (signed)",         "prom_asymmetry_signed"),
+    ("Total prominence",                      "total_prominence"),
+    ("Trough asymmetry (signed)",             "trough_asymmetry_signed"),
+    ("Next peak amplitude",                   "next_peak_amplitude"),
+    ("Prev peak amplitude",                   "prev_peak_amplitude"),
+    ("Amplitude ratio to next",               "amplitude_ratio_to_next"),
+    ("Amplitude ratio to prev",               "amplitude_ratio_to_prev"),
+    ("Amplitude diff to next (signed)",       "amplitude_diff_to_next_signed"),
+    ("Amplitude diff to prev (signed)",       "amplitude_diff_to_prev_signed"),
+    ("Next peak prominence",                  "next_peak_prominence"),
+    ("Prev peak prominence",                  "prev_peak_prominence"),
+    ("Prominence ratio to next",              "prominence_ratio_to_next"),
+    ("Prominence ratio to prev",              "prominence_ratio_to_prev"),
+    ("Next peak onset height ratio",          "next_peak_onset_height_ratio"),
+    ("Prev peak onset height ratio",          "prev_peak_onset_height_ratio"),
+    ("Next peak Ti",                          "next_peak_ti"),
+    ("Prev peak Ti",                          "prev_peak_ti"),
+    ("Ti ratio to next",                      "ti_ratio_to_next"),
+    ("Ti ratio to prev",                      "ti_ratio_to_prev"),
+    ("Next peak Te",                          "next_peak_te"),
+    ("Prev peak Te",                          "prev_peak_te"),
+    ("Te ratio to next",                      "te_ratio_to_next"),
+    ("Te ratio to prev",                      "te_ratio_to_prev"),
 ]
 
 
@@ -2625,40 +2649,50 @@ ENABLE_DEBUG_OUTPUT = False
 # Peak Candidate Metrics (for ML merge detection, noise classification)
 # ============================================================================
 
-def compute_gap_to_next_norm(t, y, sr, pks, on, off, exm, exo):
-    """Gap to next peak (normalized by recording median). Stepwise constant over onset→next-onset spans."""
-    N = len(y)
-    out = np.full(N, np.nan, dtype=float)
+def _create_peak_metric_lookup_function(metric_key):
+    """
+    Helper to create compute functions that look up peak metrics.
+    All neighbor comparison features use this pattern.
+    """
+    def compute_func(t, y, sr, pks, on, off, exm, exo):
+        N = len(y)
+        out = np.full(N, np.nan, dtype=float)
 
-    if _current_peak_metrics is None or pks is None or len(pks) == 0:
-        return out
-    if on is None or len(on) < 2:
-        return out
+        if _current_peak_metrics is None or pks is None or len(pks) == 0:
+            return out
+        if on is None or len(on) < 2:
+            return out
 
-    on_arr = np.asarray(on, dtype=int)
-    pks_arr = np.asarray(pks, dtype=int)
-    spans = _spans_from_bounds(on_arr, N)
+        on_arr = np.asarray(on, dtype=int)
+        pks_arr = np.asarray(pks, dtype=int)
+        spans = _spans_from_bounds(on_arr, N)
 
-    vals = []
-    for i in range(len(on_arr) - 1):
-        i0, i1 = int(on_arr[i]), int(on_arr[i + 1])
-        # Find first peak in this breath cycle
-        mask = (pks_arr >= i0) & (pks_arr < i1)
-        if not np.any(mask):
-            vals.append(np.nan)
-            continue
-        pk_idx = int(pks_arr[mask][0])
+        vals = []
+        for i in range(len(on_arr) - 1):
+            i0, i1 = int(on_arr[i]), int(on_arr[i + 1])
+            # Find first peak in this breath cycle
+            mask = (pks_arr >= i0) & (pks_arr < i1)
+            if not np.any(mask):
+                vals.append(np.nan)
+                continue
+            pk_idx = int(pks_arr[mask][0])
 
-        # Look up metric value
-        metric = next((m for m in _current_peak_metrics if m['peak_idx'] == pk_idx), None)
-        if metric and metric.get('gap_to_next_norm') is not None:
-            vals.append(metric['gap_to_next_norm'])
-        else:
-            vals.append(np.nan)
+            # Look up metric value
+            metric = next((m for m in _current_peak_metrics if m['peak_idx'] == pk_idx), None)
+            if metric and metric.get(metric_key) is not None:
+                vals.append(metric[metric_key])
+            else:
+                vals.append(np.nan)
 
-    # Extend last span with last value
-    vals.append(vals[-1] if vals else np.nan)
-    return _step_fill(N, spans, vals)
+        # Extend last span with last value
+        vals.append(vals[-1] if vals else np.nan)
+        return _step_fill(N, spans, vals)
+
+    return compute_func
+
+
+# Use helper to create all neighbor comparison compute functions
+compute_gap_to_next_norm = _create_peak_metric_lookup_function('gap_to_next_norm')
 
 
 def compute_trough_ratio_next(t, y, sr, pks, on, off, exm, exo):
@@ -2851,6 +2885,30 @@ METRICS: Dict[str, Callable] = {
     "onset_height_ratio":    compute_onset_height_ratio,
     "prom_asymmetry":        compute_prom_asymmetry,
     "amplitude_normalized":  compute_amplitude_normalized,
+    # Phase 2.4: Neighbor comparison features (for merge detection)
+    "prom_asymmetry_signed":         _create_peak_metric_lookup_function('prom_asymmetry_signed'),
+    "total_prominence":              _create_peak_metric_lookup_function('total_prominence'),
+    "trough_asymmetry_signed":       _create_peak_metric_lookup_function('trough_asymmetry_signed'),
+    "next_peak_amplitude":           _create_peak_metric_lookup_function('next_peak_amplitude'),
+    "prev_peak_amplitude":           _create_peak_metric_lookup_function('prev_peak_amplitude'),
+    "amplitude_ratio_to_next":       _create_peak_metric_lookup_function('amplitude_ratio_to_next'),
+    "amplitude_ratio_to_prev":       _create_peak_metric_lookup_function('amplitude_ratio_to_prev'),
+    "amplitude_diff_to_next_signed": _create_peak_metric_lookup_function('amplitude_diff_to_next_signed'),
+    "amplitude_diff_to_prev_signed": _create_peak_metric_lookup_function('amplitude_diff_to_prev_signed'),
+    "next_peak_prominence":          _create_peak_metric_lookup_function('next_peak_prominence'),
+    "prev_peak_prominence":          _create_peak_metric_lookup_function('prev_peak_prominence'),
+    "prominence_ratio_to_next":      _create_peak_metric_lookup_function('prominence_ratio_to_next'),
+    "prominence_ratio_to_prev":      _create_peak_metric_lookup_function('prominence_ratio_to_prev'),
+    "next_peak_onset_height_ratio":  _create_peak_metric_lookup_function('next_peak_onset_height_ratio'),
+    "prev_peak_onset_height_ratio":  _create_peak_metric_lookup_function('prev_peak_onset_height_ratio'),
+    "next_peak_ti":                  _create_peak_metric_lookup_function('next_peak_ti'),
+    "prev_peak_ti":                  _create_peak_metric_lookup_function('prev_peak_ti'),
+    "ti_ratio_to_next":              _create_peak_metric_lookup_function('ti_ratio_to_next'),
+    "ti_ratio_to_prev":              _create_peak_metric_lookup_function('ti_ratio_to_prev'),
+    "next_peak_te":                  _create_peak_metric_lookup_function('next_peak_te'),
+    "prev_peak_te":                  _create_peak_metric_lookup_function('prev_peak_te'),
+    "te_ratio_to_next":              _create_peak_metric_lookup_function('te_ratio_to_next'),
+    "te_ratio_to_prev":              _create_peak_metric_lookup_function('te_ratio_to_prev'),
 }
 
 # Optional: Enable robust metrics mode

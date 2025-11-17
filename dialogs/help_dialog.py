@@ -49,6 +49,12 @@ class HelpDialog(QDialog):
         """Create single-page quick reference guide."""
         browser = QTextBrowser()
         browser.setOpenExternalLinks(False)
+        browser.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.TextSelectableByKeyboard |
+            Qt.TextInteractionFlag.LinksAccessibleByMouse |
+            Qt.TextInteractionFlag.LinksAccessibleByKeyboard
+        )
         browser.setHtml("""
         <html>
         <body style="font-family: Arial, sans-serif; line-height: 1.5; padding: 10px;">
@@ -156,6 +162,12 @@ class HelpDialog(QDialog):
         """Create tab documenting exported data file formats."""
         browser = QTextBrowser()
         browser.setOpenExternalLinks(False)
+        browser.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.TextSelectableByKeyboard |
+            Qt.TextInteractionFlag.LinksAccessibleByMouse |
+            Qt.TextInteractionFlag.LinksAccessibleByKeyboard
+        )
         browser.setHtml("""
         <html>
         <body style="font-family: Arial, sans-serif; line-height: 1.5; padding: 10px;">
@@ -506,6 +518,10 @@ class HelpDialog(QDialog):
         info_label.setWordWrap(True)
         info_label.setOpenExternalLinks(True)
         info_label.setTextFormat(Qt.TextFormat.RichText)
+        info_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.LinksAccessibleByMouse
+        )
         middle_column.addWidget(info_label)
 
         middle_column.addStretch()
@@ -579,6 +595,12 @@ class HelpDialog(QDialog):
 
         browser = QTextBrowser()
         browser.setOpenExternalLinks(False)
+        browser.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.TextSelectableByKeyboard |
+            Qt.TextInteractionFlag.LinksAccessibleByMouse |
+            Qt.TextInteractionFlag.LinksAccessibleByKeyboard
+        )
         browser.setHtml("""
             <h3 style="color: #2a7fff;">What Data is Collected?</h3>
 
