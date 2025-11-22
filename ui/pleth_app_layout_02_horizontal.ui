@@ -2163,7 +2163,7 @@ QPushButton:pressed {
                        </size>
                       </property>
                       <property name="toolTip">
-                       <string>Manually add peaks by clicking on the trace</string>
+                       <string>Left-click: toggle breath/noise | Right-click: toggle sigh</string>
                       </property>
                       <property name="styleSheet">
                        <string notr="true">QPushButton {
@@ -2185,7 +2185,7 @@ QPushButton:pressed {
 </string>
                       </property>
                       <property name="text">
-                       <string>ADD Peaks</string>
+                       <string>Toggle Breath</string>
                       </property>
                      </widget>
                     </item>

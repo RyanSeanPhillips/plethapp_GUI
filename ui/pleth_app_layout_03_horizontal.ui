@@ -207,11 +207,703 @@ QTabBar::tab:bottom:selected {
 </string>
       </property>
       <property name="currentIndex">
-       <number>0</number>
+       <number>1</number>
       </property>
       <property name="tabBarAutoHide">
        <bool>true</bool>
       </property>
+      <widget class="QWidget" name="ProjectBuilderTab">
+       <attribute name="title">
+        <string>Project Builder</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="projectBuilderMainLayout">
+        <item>
+         <layout class="QHBoxLayout" name="projectTopBar">
+          <item>
+           <widget class="QPushButton" name="newProjectButton">
+            <property name="minimumSize">
+             <size>
+              <width>100</width>
+              <height>30</height>
+             </size>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">QPushButton {
+    background-color: #4CAF50;
+    color: white;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+QPushButton:hover {
+    background-color: #45a049;
+}
+QPushButton:pressed {
+    background-color: #3e8e41;
+}</string>
+            </property>
+            <property name="text">
+             <string>New Project</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="loadProjectCombo">
+            <property name="minimumSize">
+             <size>
+              <width>150</width>
+              <height>30</height>
+             </size>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">QComboBox {
+    background-color: #3c3c3c;
+    color: white;
+    border: 1px solid #555555;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+QComboBox:hover {
+    background-color: #505050;
+}
+QComboBox::drop-down {
+    border: none;
+}
+QComboBox QAbstractItemView {
+    background-color: #3c3c3c;
+    color: white;
+    selection-background-color: #0078d4;
+}</string>
+            </property>
+            <item>
+             <property name="text">
+              <string>Load Project...</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="saveProjectButton">
+            <property name="minimumSize">
+             <size>
+              <width>100</width>
+              <height>30</height>
+             </size>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">QPushButton {
+    background-color: #0d6efd;
+    color: white;
+    border: 1px solid #0b5ed7;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+QPushButton:hover {
+    background-color: #0b5ed7;
+}
+QPushButton:pressed {
+    background-color: #0a58ca;
+}</string>
+            </property>
+            <property name="text">
+             <string>Save Project</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="horizontalSpacer_projectTop">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QLabel" name="projectNameLabel">
+            <property name="font">
+             <font>
+              <pointsize>10</pointsize>
+              <bold>true</bold>
+             </font>
+            </property>
+            <property name="text">
+             <string>Project:</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="projectNameEdit">
+            <property name="minimumSize">
+             <size>
+              <width>200</width>
+              <height>30</height>
+             </size>
+            </property>
+            <property name="placeholderText">
+             <string>Untitled Project</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="Line" name="line_projectTop">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="projectTwoColumnLayout">
+          <item>
+           <layout class="QVBoxLayout" name="leftColumnLayout">
+            <item>
+             <widget class="QLabel" name="fileDiscoveryLabel">
+              <property name="font">
+               <font>
+                <pointsize>11</pointsize>
+                <bold>true</bold>
+               </font>
+              </property>
+              <property name="text">
+               <string>File Discovery</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <layout class="QHBoxLayout" name="browseLayout">
+              <item>
+               <widget class="QPushButton" name="browseDirectoryButton">
+                <property name="minimumSize">
+                 <size>
+                  <width>150</width>
+                  <height>30</height>
+                 </size>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QPushButton {
+    background-color: #0d6efd;
+    color: white;
+    border: 1px solid #0b5ed7;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+QPushButton:hover {
+    background-color: #0b5ed7;
+}
+QPushButton:pressed {
+    background-color: #0a58ca;
+}</string>
+                </property>
+                <property name="text">
+                 <string>Browse Directory...</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QCheckBox" name="recursiveCheckBox">
+                <property name="text">
+                 <string>Recursive</string>
+                </property>
+                <property name="checked">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <spacer name="horizontalSpacer_browse">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>40</width>
+                  <height>20</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+             </layout>
+            </item>
+            <item>
+             <widget class="QLineEdit" name="directoryPathEdit">
+              <property name="readOnly">
+               <bool>true</bool>
+              </property>
+              <property name="placeholderText">
+               <string>No directory selected</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="scanFilesButton">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>30</height>
+               </size>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">QPushButton {
+    background-color: #4CAF50;
+    color: white;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+QPushButton:hover {
+    background-color: #45a049;
+}
+QPushButton:pressed {
+    background-color: #3e8e41;
+}</string>
+              </property>
+              <property name="text">
+               <string>Scan for New Files</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="summaryLabel">
+              <property name="font">
+               <font>
+                <pointsize>9</pointsize>
+               </font>
+              </property>
+              <property name="text">
+               <string>Summary: No files scanned</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QProgressBar" name="projectProgressBar">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>20</height>
+               </size>
+              </property>
+              <property name="maximum">
+               <number>100</number>
+              </property>
+              <property name="value">
+               <number>0</number>
+              </property>
+              <property name="textVisible">
+               <bool>true</bool>
+              </property>
+              <property name="visible">
+               <bool>false</bool>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">QProgressBar {
+    background-color: #2b2b2b;
+    border: 1px solid #3e3e42;
+    border-radius: 3px;
+    text-align: center;
+    color: #cccccc;
+}
+QProgressBar::chunk {
+    background-color: #007acc;
+    border-radius: 2px;
+}</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QTableWidget" name="discoveredFilesTable">
+              <property name="styleSheet">
+               <string notr="true">QTableWidget {
+    background-color: #2b2b2b;
+    border: 2px solid #555555;
+    border-radius: 6px;
+    color: #ffffff;
+    gridline-color: #555555;
+}
+QTableWidget::item {
+    padding: 4px;
+}
+QTableWidget::item:selected {
+    background-color: #0078d4;
+    color: #ffffff;
+}
+QHeaderView::section {
+    background-color: #3c3c3c;
+    color: #ffffff;
+    padding: 4px;
+    border: 1px solid #555555;
+    font-weight: bold;
+}</string>
+              </property>
+              <property name="selectionMode">
+               <enum>QAbstractItemView::ExtendedSelection</enum>
+              </property>
+              <property name="selectionBehavior">
+               <enum>QAbstractItemView::SelectRows</enum>
+              </property>
+              <property name="sortingEnabled">
+               <bool>true</bool>
+              </property>
+              <column>
+               <property name="text">
+                <string>File Name</string>
+               </property>
+              </column>
+              <column>
+               <property name="text">
+                <string>Protocol</string>
+               </property>
+              </column>
+              <column>
+               <property name="text">
+                <string>Channels</string>
+               </property>
+              </column>
+              <column>
+               <property name="text">
+                <string>Keywords</string>
+               </property>
+              </column>
+              <column>
+               <property name="text">
+                <string>Labels</string>
+               </property>
+              </column>
+              <column>
+               <property name="text">
+                <string>Size (MB)</string>
+               </property>
+              </column>
+             </widget>
+            </item>
+            <item>
+             <layout class="QHBoxLayout" name="leftBottomLayout">
+              <item>
+               <widget class="QComboBox" name="groupByCombo">
+                <property name="minimumSize">
+                 <size>
+                  <width>150</width>
+                  <height>25</height>
+                 </size>
+                </property>
+                <item>
+                 <property name="text">
+                  <string>Group by: None</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>Group by: Protocol</string>
+                 </property>
+                </item>
+               </widget>
+              </item>
+              <item>
+               <spacer name="horizontalSpacer_leftBottom">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>40</width>
+                  <height>20</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+              <item>
+               <widget class="QPushButton" name="addToProjectButton">
+                <property name="minimumSize">
+                 <size>
+                  <width>120</width>
+                  <height>30</height>
+                 </size>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QPushButton {
+    background-color: #4CAF50;
+    color: white;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-weight: bold;
+}
+QPushButton:hover {
+    background-color: #45a049;
+}
+QPushButton:pressed {
+    background-color: #3e8e41;
+}</string>
+                </property>
+                <property name="text">
+                 <string>Add to Project →</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QPushButton" name="clearFilesButton">
+                <property name="minimumSize">
+                 <size>
+                  <width>80</width>
+                  <height>30</height>
+                 </size>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QPushButton {
+    background-color: #6c757d;
+    color: white;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+QPushButton:hover {
+    background-color: #5a6268;
+}
+QPushButton:pressed {
+    background-color: #545b62;
+}</string>
+                </property>
+                <property name="text">
+                 <string>Clear</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="Line" name="line_vertical">
+            <property name="orientation">
+             <enum>Qt::Vertical</enum>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <layout class="QVBoxLayout" name="rightColumnLayout">
+            <item>
+             <widget class="QLabel" name="projectOrganizationLabel">
+              <property name="font">
+               <font>
+                <pointsize>11</pointsize>
+                <bold>true</bold>
+               </font>
+              </property>
+              <property name="text">
+               <string>Project Organization</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="experimentsInProjectLabel">
+              <property name="font">
+               <font>
+                <pointsize>9</pointsize>
+                <bold>true</bold>
+               </font>
+              </property>
+              <property name="text">
+               <string>Experiments in Project:</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QTreeWidget" name="experimentsTreeWidget">
+              <property name="styleSheet">
+               <string notr="true">QTreeWidget {
+    background-color: #2b2b2b;
+    border: 2px solid #555555;
+    border-radius: 6px;
+    color: #ffffff;
+}
+QTreeWidget::item {
+    padding: 4px;
+}
+QTreeWidget::item:selected {
+    background-color: #0078d4;
+    color: #ffffff;
+}
+QTreeWidget::item:hover {
+    background-color: #404040;
+}
+QHeaderView::section {
+    background-color: #3c3c3c;
+    color: #ffffff;
+    padding: 4px;
+    border: 1px solid #555555;
+    font-weight: bold;
+}</string>
+              </property>
+              <column>
+               <property name="text">
+                <string>Experiment / File</string>
+               </property>
+              </column>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="addExperimentButton">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>30</height>
+               </size>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">QPushButton {
+    background-color: #4CAF50;
+    color: white;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+QPushButton:hover {
+    background-color: #45a049;
+}
+QPushButton:pressed {
+    background-color: #3e8e41;
+}</string>
+              </property>
+              <property name="text">
+               <string>⊕ Add New Experiment</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QGroupBox" name="experimentDetailsGroup">
+              <property name="title">
+               <string>Experiment Details</string>
+              </property>
+              <layout class="QFormLayout" name="formLayout">
+               <item row="0" column="0">
+                <widget class="QLabel" name="expNameLabel">
+                 <property name="text">
+                  <string>Name:</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="0" column="1">
+                <widget class="QLineEdit" name="expNameEdit">
+                 <property name="placeholderText">
+                  <string>Experiment name</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="1" column="0">
+                <widget class="QLabel" name="expConditionLabel">
+                 <property name="text">
+                  <string>Condition:</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="1" column="1">
+                <widget class="QLineEdit" name="expConditionEdit">
+                 <property name="placeholderText">
+                  <string>e.g., Control, CNO, Saline</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="2" column="0">
+                <widget class="QLabel" name="expNotesLabel">
+                 <property name="text">
+                  <string>Notes:</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="2" column="1">
+                <widget class="QTextEdit" name="expNotesEdit">
+                 <property name="maximumSize">
+                  <size>
+                   <width>16777215</width>
+                   <height>60</height>
+                  </size>
+                 </property>
+                 <property name="placeholderText">
+                  <string>Additional notes...</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <item>
+             <layout class="QHBoxLayout" name="rightBottomLayout">
+              <item>
+               <widget class="QPushButton" name="removeExperimentButton">
+                <property name="minimumSize">
+                 <size>
+                  <width>0</width>
+                  <height>30</height>
+                 </size>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QPushButton {
+    background-color: #dc3545;
+    color: white;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+QPushButton:hover {
+    background-color: #c82333;
+}
+QPushButton:pressed {
+    background-color: #bd2130;
+}</string>
+                </property>
+                <property name="text">
+                 <string>Remove Selected</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <spacer name="horizontalSpacer_rightBottom">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>40</width>
+                  <height>20</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+              <item>
+               <widget class="QPushButton" name="exportExperimentButton">
+                <property name="minimumSize">
+                 <size>
+                  <width>0</width>
+                  <height>30</height>
+                 </size>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QPushButton {
+    background-color: #0d6efd;
+    color: white;
+    border: 1px solid #0b5ed7;
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+QPushButton:hover {
+    background-color: #0b5ed7;
+}
+QPushButton:pressed {
+    background-color: #0a58ca;
+}</string>
+                </property>
+                <property name="text">
+                 <string>Export Experiment</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
       <widget class="QWidget" name="Analysis">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
@@ -240,6 +932,31 @@ QTabBar::tab:bottom:selected {
                 <width>670</width>
                 <height>0</height>
                </size>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDoubleSpinBox" name="PeakPromValueSpinBox">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="minimumSize">
+               <size>
+                <width>100</width>
+                <height>0</height>
+               </size>
+              </property>
+              <property name="decimals">
+               <number>4</number>
+              </property>
+              <property name="maximum">
+               <double>999999.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
               </property>
              </widget>
             </item>
@@ -1335,7 +2052,7 @@ QPushButton:hover {
                 <string>More Options</string>
                </property>
               </widget>
-              <widget class="QComboBox" name="comboBox">
+              <widget class="QComboBox" name="peak_detec_combo">
                <property name="geometry">
                 <rect>
                  <x>10</x>
@@ -1349,8 +2066,18 @@ QPushButton:hover {
                  <pointsize>8</pointsize>
                 </font>
                </property>
+               <item>
+                <property name="text">
+                 <string>Threshold</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>ML Model</string>
+                </property>
+               </item>
               </widget>
-              <widget class="QComboBox" name="comboBox_2">
+              <widget class="QComboBox" name="eup_sniff_combo">
                <property name="geometry">
                 <rect>
                  <x>80</x>
@@ -1364,8 +2091,18 @@ QPushButton:hover {
                  <pointsize>8</pointsize>
                 </font>
                </property>
+               <item>
+                <property name="text">
+                 <string>GMM</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>ML Model</string>
+                </property>
+               </item>
               </widget>
-              <widget class="QComboBox" name="comboBox_3">
+              <widget class="QComboBox" name="digh_combo">
                <property name="geometry">
                 <rect>
                  <x>150</x>
@@ -1379,6 +2116,16 @@ QPushButton:hover {
                  <pointsize>8</pointsize>
                 </font>
                </property>
+               <item>
+                <property name="text">
+                 <string>Manual</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>ML Model</string>
+                </property>
+               </item>
               </widget>
               <widget class="QLabel" name="PeakProminenceLabel_2">
                <property name="geometry">
@@ -3174,7 +3921,7 @@ QListWidget#selectedFilesList:focus {
               <property name="font">
                <font>
                 <family>Segoe UI</family>
-                <pointsize>-1</pointsize>
+                <pointsize>9</pointsize>
                 <bold>true</bold>
                </font>
               </property>
@@ -3211,7 +3958,7 @@ QPushButton#moveAllRight:pressed {
               <property name="font">
                <font>
                 <family>Segoe UI</family>
-                <pointsize>-1</pointsize>
+                <pointsize>9</pointsize>
                 <bold>true</bold>
                </font>
               </property>
@@ -3248,7 +3995,7 @@ QPushButton#moveSingleRight:pressed {
               <property name="font">
                <font>
                 <family>Segoe UI</family>
-                <pointsize>-1</pointsize>
+                <pointsize>9</pointsize>
                 <bold>true</bold>
                </font>
               </property>
@@ -3285,7 +4032,7 @@ QPushButton#moveSingleLeft:pressed {
               <property name="font">
                <font>
                 <family>Segoe UI</family>
-                <pointsize>-1</pointsize>
+                <pointsize>9</pointsize>
                 <bold>true</bold>
                </font>
               </property>

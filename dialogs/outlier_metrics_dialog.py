@@ -6,7 +6,7 @@ outlier detection during breathing analysis.
 """
 
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox,
     QPushButton, QScrollArea, QWidget
 )
 from PyQt6.QtCore import Qt
@@ -14,13 +14,16 @@ from PyQt6.QtCore import Qt
 
 class OutlierMetricsDialog(QDialog):
     def __init__(self, parent=None, available_metrics=None, selected_metrics=None):
-        from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
+        from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox,
                                     QPushButton, QScrollArea, QWidget)
         from PyQt6.QtCore import Qt
 
         super().__init__(parent)
         self.setWindowTitle("Select Outlier Detection Metrics")
-        self.resize(500, 600)
+        self.resize(1000, 450)  # Wider for 3-column layout
+
+        # Apply dark theme
+        self._apply_dark_theme()
 
         # Store available metrics
         self.available_metrics = available_metrics or []
@@ -40,6 +43,63 @@ class OutlierMetricsDialog(QDialog):
             "d2": "D2 - expiratory fraction (Te/Ttot)"
         }
 
+        self._setup_ui()
+
+    def _apply_dark_theme(self):
+        """Apply dark theme styling to match main application."""
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+            }
+            QLabel {
+                color: #d4d4d4;
+            }
+            QCheckBox {
+                color: #d4d4d4;
+                spacing: 5px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #3e3e42;
+                border-radius: 3px;
+                background-color: #2d2d2d;
+            }
+            QCheckBox::indicator:hover {
+                border: 1px solid #505050;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #0e639c;
+                border: 1px solid #1177bb;
+            }
+            QPushButton {
+                background-color: #2d2d2d;
+                color: #d4d4d4;
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                padding: 5px 15px;
+                min-height: 20px;
+            }
+            QPushButton:hover {
+                background-color: #3e3e42;
+                border: 1px solid #505050;
+            }
+            QPushButton:pressed {
+                background-color: #505050;
+            }
+            QScrollArea {
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                background-color: #1e1e1e;
+            }
+            QScrollArea > QWidget > QWidget {
+                background-color: #1e1e1e;
+            }
+        """)
+
+    def _setup_ui(self):
+        """Build the dialog UI."""
         # Main layout
         main_layout = QVBoxLayout(self)
 
@@ -59,11 +119,16 @@ class OutlierMetricsDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
 
-        # Create checkboxes
+        # Use grid layout for multi-column display (2 columns)
+        scroll_layout = QGridLayout(scroll_content)
+        scroll_layout.setSpacing(10)
+        scroll_layout.setContentsMargins(10, 10, 10, 10)
+
+        # Create checkboxes in 3-column grid
         self.checkboxes = {}
-        for metric in self.available_metrics:
+        num_columns = 3
+        for idx, metric in enumerate(self.available_metrics):
             checkbox = QCheckBox(metric)
             checkbox.setChecked(metric in self.selected_metrics)
 
@@ -71,11 +136,13 @@ class OutlierMetricsDialog(QDialog):
             if metric in self.metric_descriptions:
                 checkbox.setText(f"{metric} - {self.metric_descriptions[metric]}")
 
-            checkbox.setStyleSheet("margin: 5px 0px;")
             self.checkboxes[metric] = checkbox
-            scroll_layout.addWidget(checkbox)
 
-        scroll_layout.addStretch()
+            # Calculate row and column
+            row = idx // num_columns
+            col = idx % num_columns
+            scroll_layout.addWidget(checkbox, row, col)
+
         scroll.setWidget(scroll_content)
         main_layout.addWidget(scroll)
 

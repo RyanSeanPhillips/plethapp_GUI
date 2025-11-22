@@ -174,6 +174,8 @@ METRIC_SPECS: List[Tuple[str, str]] = [
     # Phase 2.3 Group C: Probability from auto-threshold
     ("P(noise) - auto-threshold model",       "p_noise"),
     ("P(breath) - auto-threshold model",      "p_breath"),
+    ("P(edge) - classification uncertainty",  "p_edge"),
+    ("P(edge) - all peaks",                   "p_edge_all_peaks"),
     # Phase 2.4: Neighbor comparison features (for merge detection)
     ("Prominence asymmetry (signed)",         "prom_asymmetry_signed"),
     ("Total prominence",                      "total_prominence"),
@@ -2575,6 +2577,44 @@ def _evaluate_threshold_model(h: float) -> tuple[float, float]:
     return (float(p_noise), float(p_breath))
 
 
+def compute_p_noise_p_breath_for_peaks(y: np.ndarray, peaks: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute p_noise and p_breath arrays for a list of peaks.
+
+    This is used when manually editing peaks to compute probabilities for
+    the updated peak list.
+
+    Args:
+        y: Processed signal (1D array)
+        peaks: Peak indices
+
+    Returns:
+        (p_noise_array, p_breath_array): Signal-length arrays with probabilities
+        at peak positions (stepwise-constant over peak spans)
+    """
+    N = len(y)
+    p_noise_array = np.full(N, np.nan, dtype=float)
+    p_breath_array = np.full(N, np.nan, dtype=float)
+
+    if peaks is None or len(peaks) == 0:
+        return (p_noise_array, p_breath_array)
+
+    if _threshold_model_params is None:
+        # Model not available - return NaN
+        return (p_noise_array, p_breath_array)
+
+    pk = np.asarray(peaks, dtype=int)
+    spans = _spans_from_bounds(pk, N)
+
+    for i, (p_idx, (i0, i1)) in enumerate(zip(pk, spans)):
+        peak_height = float(y[p_idx])
+        p_noise, p_breath = _evaluate_threshold_model(peak_height)
+        p_noise_array[i0:i1] = p_noise
+        p_breath_array[i0:i1] = p_breath
+
+    return (p_noise_array, p_breath_array)
+
+
 def compute_p_noise(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np.ndarray:
     """
     Probability that peak is noise based on auto-threshold model.
@@ -2637,6 +2677,45 @@ def compute_p_breath(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None)
         peak_height = float(y[p_idx])
         _, p_breath = _evaluate_threshold_model(peak_height)
         out[i0:i1] = p_breath
+
+    return out
+
+
+def compute_p_edge_all_peaks(t, y, sr_hz, peaks, onsets, offsets, expmins, expoffs=None) -> np.ndarray:
+    """
+    Edge case probability (classification uncertainty) for ALL detected peaks.
+
+    P(edge) = 4 * P(noise) * P(breath)
+
+    - p_edge peaks at 1.0 when p_noise = p_breath = 0.5 (maximum uncertainty)
+    - p_edge near 0.0 when classification is confident (either noise or breath)
+
+    This metric helps identify peaks that are difficult to classify and may need
+    manual review or additional features for proper classification.
+
+    Returns stepwise-constant array over peak-bounded spans.
+    Shows values for ALL detected peaks (including those classified as noise).
+    """
+    N = len(y)
+    out = np.full(N, np.nan, dtype=float)
+
+    if peaks is None or len(peaks) == 0:
+        return out
+    if _current_peak_metrics is None:
+        # Peak metrics not available - return NaN
+        return out
+
+    pk = np.asarray(peaks, dtype=int)
+    spans = _spans_from_bounds(pk, N)
+
+    for i, (p_idx, (i0, i1)) in enumerate(zip(pk, spans)):
+        # Look up p_edge value for this peak from peak metrics
+        metric = next((m for m in _current_peak_metrics if m['peak_idx'] == p_idx), None)
+        if metric and metric.get('p_edge') is not None:
+            p_edge_val = metric['p_edge']
+            out[i0:i1] = p_edge_val
+        else:
+            out[i0:i1] = np.nan
 
     return out
 
@@ -2879,6 +2958,8 @@ METRICS: Dict[str, Callable] = {
     # Phase 2.3 Group C: Probability from auto-threshold
     "p_noise":             compute_p_noise,
     "p_breath":            compute_p_breath,
+    "p_edge":              _create_peak_metric_lookup_function('p_edge'),
+    "p_edge_all_peaks":    compute_p_edge_all_peaks,
     # Peak candidate metrics (for ML merge detection, noise classification)
     "gap_to_next_norm":      compute_gap_to_next_norm,
     "trough_ratio_next":     compute_trough_ratio_next,

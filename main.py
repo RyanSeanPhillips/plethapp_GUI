@@ -1,5 +1,5 @@
 from PyQt6 import uic
-from PyQt6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QListWidgetItem, QAbstractItemView
+from PyQt6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QListWidgetItem, QAbstractItemView, QTableWidgetItem, QTreeWidgetItem
 from PyQt6.QtCore import QSettings, QTimer, Qt
 from PyQt6.QtGui import QIcon
 from consolidation import ConsolidationManager
@@ -44,7 +44,8 @@ from export import ExportManager
 # Import editing modes
 from editing import EditingModes
 # Import dialogs
-from dialogs import GMMClusteringDialog, SpectralAnalysisDialog, OutlierMetricsDialog, SaveMetaDialog, PeakNavigatorDialog
+from dialogs import SpectralAnalysisDialog, SaveMetaDialog, PeakNavigatorDialog
+from dialogs.advanced_peak_editor_dialog import AdvancedPeakEditorDialog
 
 # Import version
 from version_info import VERSION_STRING
@@ -59,7 +60,10 @@ class MainWindow(QMainWindow):
 
         # Initialize managers
         self.consolidation_manager = ConsolidationManager(self)
-        ui_file = Path(__file__).parent / "ui" / "pleth_app_layout_02_horizontal.ui"
+        from core.project_manager import ProjectManager
+        self.project_manager = ProjectManager()
+
+        ui_file = Path(__file__).parent / "ui" / "pleth_app_layout_03_horizontal.ui"
         uic.loadUi(ui_file, self)
 
         # icon_path = Path(__file__).parent / "assets" / "plethapp_thumbnail_light_02.ico"
@@ -158,6 +162,34 @@ class MainWindow(QMainWindow):
         self.StimChanSelect.currentIndexChanged.connect(self.on_stim_channel_changed)
         self.EventsChanSelect.currentIndexChanged.connect(self.on_events_channel_changed)
 
+        # --- Wire classifier selection ---
+        # Replace "ML Model" with specific algorithms for all three dropdowns
+        self.peak_detec_combo.clear()
+        self.peak_detec_combo.addItems(["Threshold", "XGBoost", "Random Forest", "MLP"])
+
+        self.eup_sniff_combo.clear()
+        self.eup_sniff_combo.addItems(["GMM", "XGBoost", "Random Forest", "MLP"])
+
+        self.digh_combo.clear()
+        self.digh_combo.addItems(["Manual", "XGBoost", "Random Forest", "MLP"])
+
+        # Auto-load ML models from last used directory (if available)
+        # This must happen BEFORE setting defaults and connecting signals
+        self._auto_load_ml_models_on_startup()
+
+        # Update dropdown states based on loaded models (will disable ML options if models not loaded)
+        self._update_classifier_dropdowns()
+
+        # NOW connect signals AFTER models are loaded and dropdowns are configured
+        self.peak_detec_combo.currentTextChanged.connect(self.on_classifier_changed)
+        self.eup_sniff_combo.currentTextChanged.connect(self.on_eupnea_sniff_classifier_changed)
+        self.digh_combo.currentTextChanged.connect(self.on_sigh_classifier_changed)
+
+        # Set defaults to XGBoost (matches state.py default) - this will now trigger signals
+        # If models not loaded, _update_classifier_dropdowns() already fell back to Threshold/GMM/Manual
+        self.peak_detec_combo.setCurrentText("XGBoost")
+        self.eup_sniff_combo.setCurrentText("XGBoost")
+        self.digh_combo.setCurrentText("XGBoost")
 
         # --- Wire filter controls ---
         self._redraw_timer = QTimer(self)
@@ -220,8 +252,8 @@ class MainWindow(QMainWindow):
 
         # --- Peak-detect UI wiring ---
         # Prominence field and Apply button already exist in UI file
-        # Connect the "More Options" button to open histogram dialog
-        self.ThreshOptions.clicked.connect(self._open_prominence_histogram)
+        # Connect the "More Options" button to open multi-tabbed analysis options dialog
+        self.ThreshOptions.clicked.connect(self._open_analysis_options)
 
         # Apply button just applies peaks with current parameters
         self.ApplyPeakFindPushButton.setText("Apply")
@@ -396,8 +428,9 @@ class MainWindow(QMainWindow):
         #   $env:PLETHAPP_TESTING="1"; python run_debug.py
         # Linux/Mac:
         #   PLETHAPP_TESTING=1 python run_debug.py
-        print(f"[DEBUG] PLETHAPP_TESTING environment variable = '{os.environ.get('PLETHAPP_TESTING')}'")
-        print(f"[DEBUG] PLETHAPP_PULSE_TEST environment variable = '{os.environ.get('PLETHAPP_PULSE_TEST')}'")
+        # Silently check environment variables (only print if set)
+        # print(f"[DEBUG] PLETHAPP_TESTING environment variable = '{os.environ.get('PLETHAPP_TESTING')}'")
+        # print(f"[DEBUG] PLETHAPP_PULSE_TEST environment variable = '{os.environ.get('PLETHAPP_PULSE_TEST')}'")
         if os.environ.get('PLETHAPP_TESTING') == '1':
             print("[TESTING MODE] Auto-loading test file...")
             # Check if pulse test mode
@@ -414,6 +447,99 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(100, lambda: self._auto_load_test_file(test_file))
             else:
                 print(f"[TESTING MODE] Warning: Test file not found: {test_file}")
+
+        # === Project Builder Connections ===
+        self.browseDirectoryButton.clicked.connect(self.on_project_browse_directory)
+        self.scanFilesButton.clicked.connect(self.on_project_scan_files)
+        self.addToProjectButton.clicked.connect(self.on_project_add_files)
+        self.clearFilesButton.clicked.connect(self.on_project_clear_files)
+        self.addExperimentButton.clicked.connect(self.on_project_add_experiment)
+        self.removeExperimentButton.clicked.connect(self.on_project_remove_experiment)
+        self.exportExperimentButton.clicked.connect(self.on_project_export_experiment)
+        self.newProjectButton.clicked.connect(self.on_project_new)
+        self.saveProjectButton.clicked.connect(self.on_project_save)
+        self.loadProjectCombo.currentIndexChanged.connect(self.on_project_load)
+
+        # Project Builder state
+        self._project_directory = None
+        self._discovered_files_data = []  # Store file metadata from scan
+
+        # Hide Browse Directory button (New Project handles this now)
+        self.browseDirectoryButton.hide()
+
+        # Make project name read-only and add edit button
+        self.projectNameEdit.setReadOnly(True)
+        self.projectNameEdit.setStyleSheet("""
+            QLineEdit {
+                background-color: #2b2b2b;
+                color: #d4d4d4;
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+        """)
+
+        # Add edit button next to project name
+        from PyQt6.QtWidgets import QPushButton
+        self.editProjectNameButton = QPushButton("✏")
+        self.editProjectNameButton.setMaximumWidth(30)
+        self.editProjectNameButton.setMaximumHeight(30)
+        self.editProjectNameButton.setToolTip("Edit project name")
+        self.editProjectNameButton.setStyleSheet("""
+            QPushButton {
+                background-color: #3e3e42;
+                color: #d4d4d4;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 2px;
+            }
+            QPushButton:hover {
+                background-color: #505050;
+            }
+        """)
+        self.editProjectNameButton.clicked.connect(self.on_edit_project_name)
+
+        # Find the correct layout containing projectNameEdit (may be nested)
+        def find_widget_in_layout(layout, widget):
+            """Recursively find widget in layout and return (layout, index)."""
+            if not layout:
+                return None, -1
+
+            for i in range(layout.count()):
+                item = layout.itemAt(i)
+                if item:
+                    # Check if this item is the widget
+                    if item.widget() == widget:
+                        return layout, i
+                    # Check if this item is a nested layout
+                    if item.layout():
+                        result_layout, result_index = find_widget_in_layout(item.layout(), widget)
+                        if result_layout:
+                            return result_layout, result_index
+            return None, -1
+
+        # Search for the layout containing projectNameEdit
+        parent_widget = self.projectNameEdit.parent()
+        parent_layout = parent_widget.layout()
+
+        target_layout, widget_index = find_widget_in_layout(parent_layout, self.projectNameEdit)
+
+        if target_layout and widget_index >= 0:
+            # Insert edit button right after the name edit
+            target_layout.insertWidget(widget_index + 1, self.editProjectNameButton)
+            print(f"[project-builder] ✓ Inserted edit button next to project name")
+        else:
+            # Fallback: try adding to parent layout
+            if parent_layout:
+                parent_layout.addWidget(self.editProjectNameButton)
+                print(f"[project-builder] ⚠ Added edit button to parent layout (fallback)")
+            else:
+                print(f"[project-builder] ✗ Could not find layout for edit button")
+
+        # Populate recent projects dropdown
+        self._populate_load_project_combo()
 
         # optional: keep a handle to the chosen dir
         self._curation_dir = None
@@ -853,6 +979,12 @@ class MainWindow(QMainWindow):
         self.single_panel_mode = False
         self.plot_host.clear_saved_view("grid")  # fresh autoscale for grid
         self.plot_all_channels()
+
+        # Refresh Analysis Options dialog tabs if open (file data now available)
+        if hasattr(self, '_analysis_options_dialog') and self._analysis_options_dialog.isVisible():
+            # Note: Don't refresh Peak Detection tab here since no channel selected yet (in grid mode)
+            # Peak Detection tab will update when user selects a channel
+            pass
 
         # Show completion message with elapsed time
         t_elapsed = time.time() - t_start
@@ -1585,6 +1717,54 @@ class MainWindow(QMainWindow):
                 if hasattr(st, 'bout_annotations'):
                     st.bout_annotations.clear()
 
+                # Immediately clear and refresh the Analysis Options dialog if open
+                if hasattr(self, '_analysis_options_dialog') and self._analysis_options_dialog is not None:
+                    try:
+                        if self._analysis_options_dialog.isVisible():
+                            current_tab = self._analysis_options_dialog.tabWidget.currentIndex()
+                            print(f"[Channel Change] Clearing Analysis Options dialog (current tab: {current_tab})")
+
+                            # Clear the cached dialogs so they'll recreate
+                            if hasattr(self._analysis_options_dialog, 'prominence_dialog'):
+                                self._analysis_options_dialog.prominence_dialog = None
+                            if hasattr(self._analysis_options_dialog, 'gmm_dialog'):
+                                self._analysis_options_dialog.gmm_dialog = None
+
+                            # Immediately clear the current tab's content
+                            if current_tab == 0:  # Peak Detection
+                                container = self._analysis_options_dialog.peak_detection_container
+                            elif current_tab == 1:  # Eup/Sniff Classification (GMM)
+                                container = self._analysis_options_dialog.breath_classification_container
+                            else:
+                                container = None
+
+                            if container:
+                                layout = container.layout()
+                                if layout:
+                                    # Clear all widgets from the container
+                                    while layout.count():
+                                        child = layout.takeAt(0)
+                                        if child.widget():
+                                            child.widget().deleteLater()
+                                    from PyQt6.QtWidgets import QApplication
+                                    QApplication.processEvents()
+                                    print(f"[Channel Change] Cleared tab {current_tab} content")
+
+                                # Show "Loading..." placeholder
+                                from PyQt6.QtWidgets import QLabel
+                                from PyQt6.QtCore import Qt
+                                label = QLabel("Loading new channel data...")
+                                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                                label.setStyleSheet("padding: 20px; font-size: 14pt; color: #888;")
+                                layout.addWidget(label)
+
+                            # Mark for refresh after peak detection completes
+                            self._channel_change_needs_dialog_refresh = True
+                            self._dialog_tab_to_refresh = current_tab
+                    except RuntimeError:
+                        # Dialog was deleted
+                        self._analysis_options_dialog = None
+
                 # Clear Y2 plot data
                 st.y2_metric_key = None
                 st.y2_values_by_sweep.clear()
@@ -1658,6 +1838,493 @@ class MainWindow(QMainWindow):
         if new_event != st.event_channel:
             st.event_channel = new_event
             self.redraw_main_plot()
+
+    def _update_classifier_dropdowns(self):
+        """Update dropdown options based on loaded models."""
+        models = self.state.loaded_ml_models or {}
+
+        # Check which models are available (use prefix matching for accuracy suffix)
+        has_model1_xgboost = any(k.startswith('model1_xgboost') for k in models.keys())
+        has_model1_rf = any(k.startswith('model1_rf') for k in models.keys())
+        has_model1_mlp = any(k.startswith('model1_mlp') for k in models.keys())
+
+        has_model3_xgboost = any(k.startswith('model3_xgboost') for k in models.keys())
+        has_model3_rf = any(k.startswith('model3_rf') for k in models.keys())
+        has_model3_mlp = any(k.startswith('model3_mlp') for k in models.keys())
+
+        has_model2_xgboost = any(k.startswith('model2_xgboost') for k in models.keys())
+        has_model2_rf = any(k.startswith('model2_rf') for k in models.keys())
+        has_model2_mlp = any(k.startswith('model2_mlp') for k in models.keys())
+
+        # Update Model 1 (Breath Detection) dropdown
+        # Index 0=Threshold (always enabled), 1=XGBoost, 2=RF, 3=MLP
+        model = self.peak_detec_combo.model()
+        model.item(0).setEnabled(True)  # Threshold always available
+        model.item(1).setEnabled(has_model1_xgboost)
+        model.item(2).setEnabled(has_model1_rf)
+        model.item(3).setEnabled(has_model1_mlp)
+
+        # Update Model 3 (Eupnea/Sniff) dropdown
+        # Index 0=GMM (always enabled), 1=XGBoost, 2=RF, 3=MLP
+        model = self.eup_sniff_combo.model()
+        model.item(0).setEnabled(True)  # GMM always available
+        model.item(1).setEnabled(has_model3_xgboost)
+        model.item(2).setEnabled(has_model3_rf)
+        model.item(3).setEnabled(has_model3_mlp)
+
+        # Update Model 2 (Sigh) dropdown
+        # Index 0=Manual (always enabled), 1=XGBoost, 2=RF, 3=MLP
+        model = self.digh_combo.model()
+        model.item(0).setEnabled(True)  # Manual always available
+        model.item(1).setEnabled(has_model2_xgboost)
+        model.item(2).setEnabled(has_model2_rf)
+        model.item(3).setEnabled(has_model2_mlp)
+
+        # If current selection is disabled, fall back to default
+        self._fallback_disabled_classifiers()
+
+    def _fallback_disabled_classifiers(self):
+        """Check if current classifier selections are disabled and fall back to defaults."""
+        # Model 1 (Breath Detection)
+        current_text = self.peak_detec_combo.currentText()
+        current_index = self.peak_detec_combo.currentIndex()
+        if current_index >= 0:
+            model = self.peak_detec_combo.model()
+            if not model.item(current_index).isEnabled():
+                print(f"[Dropdown Update] Model 1 classifier '{current_text}' not available, falling back to Threshold")
+                self.peak_detec_combo.setCurrentText("Threshold")
+                self.state.active_classifier = "threshold"
+
+        # Model 3 (Eupnea/Sniff)
+        current_text = self.eup_sniff_combo.currentText()
+        current_index = self.eup_sniff_combo.currentIndex()
+        if current_index >= 0:
+            model = self.eup_sniff_combo.model()
+            if not model.item(current_index).isEnabled():
+                print(f"[Dropdown Update] Model 3 classifier '{current_text}' not available, falling back to GMM")
+                self.eup_sniff_combo.setCurrentText("GMM")
+                self.state.active_eupnea_sniff_classifier = "gmm"
+
+        # Model 2 (Sigh)
+        current_text = self.digh_combo.currentText()
+        current_index = self.digh_combo.currentIndex()
+        if current_index >= 0:
+            model = self.digh_combo.model()
+            if not model.item(current_index).isEnabled():
+                print(f"[Dropdown Update] Model 2 classifier '{current_text}' not available, falling back to Manual")
+                self.digh_combo.setCurrentText("Manual")
+                self.state.active_sigh_classifier = "manual"
+
+    def _auto_rerun_peak_detection_if_needed(self):
+        """
+        Automatically re-run peak detection if:
+        1. Models were just loaded
+        2. Peaks have already been detected once (state.all_peaks_by_sweep is not empty)
+
+        This updates predictions with newly loaded models without requiring manual re-detection.
+        """
+        # Only re-run if peaks have been detected
+        if not self.state.all_peaks_by_sweep:
+            print("[Auto Re-run] Skipping - no peaks detected yet")
+            return
+
+        # Only re-run if we have models loaded
+        if not self.state.loaded_ml_models:
+            print("[Auto Re-run] Skipping - no models loaded")
+            return
+
+        print("[Auto Re-run] Triggering peak detection to update predictions with newly loaded models")
+        self.statusBar().showMessage("Updating predictions with loaded models...", 2000)
+
+        # Trigger peak detection (this will use newly loaded models)
+        self._apply_peak_detection()
+
+    def _auto_load_ml_models_on_startup(self):
+        """Silently load ML models from last used directory on startup."""
+        from pathlib import Path
+        import core.ml_prediction as ml_prediction
+
+        # Get last used models directory from settings
+        last_models_dir = self.settings.value("ml_models_path", None)
+
+        # Only auto-load if we have a saved path
+        if not last_models_dir:
+            print("[Auto-load] No saved models directory")
+            return
+
+        models_path = Path(last_models_dir)
+
+        # Check if directory still exists
+        if not models_path.exists() or not models_path.is_dir():
+            print(f"[Auto-load] Saved models directory no longer exists: {models_path}")
+            return
+
+        try:
+            # Look for model files
+            model_files = list(models_path.glob("model*.pkl"))
+
+            if not model_files:
+                print(f"[Auto-load] No model files found in: {models_path}")
+                return
+
+            # Load all models
+            loaded_models = {}
+            for model_file in model_files:
+                try:
+                    model, metadata = ml_prediction.load_model(model_file)
+                    model_key = model_file.stem
+                    loaded_models[model_key] = {
+                        'model': model,
+                        'metadata': metadata,
+                        'path': str(model_file)
+                    }
+                except Exception as e:
+                    print(f"[Auto-load] Warning: Failed to load {model_file.name}: {e}")
+
+            if loaded_models:
+                # Store in state
+                self.state.loaded_ml_models = loaded_models
+
+                # Update dropdown states
+                self._update_classifier_dropdowns()
+
+                print(f"[Auto-load] Successfully loaded {len(loaded_models)} models from {models_path}")
+                self.statusBar().showMessage(f"✓ Auto-loaded {len(loaded_models)} ML models", 3000)
+            else:
+                print(f"[Auto-load] Failed to load any models from {models_path}")
+
+        except Exception as e:
+            print(f"[Auto-load] Error loading models: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def on_classifier_changed(self, text: str):
+        """Handle classifier selection change from main window dropdown."""
+        # Map display text to internal classifier name
+        classifier_map = {
+            "Threshold": "threshold",
+            "XGBoost": "xgboost",
+            "Random Forest": "rf",
+            "MLP": "mlp"
+        }
+
+        new_classifier = classifier_map.get(text, "threshold")
+
+        # Update state (only print if actually changing)
+        if self.state.active_classifier != new_classifier:
+            self.state.active_classifier = new_classifier
+            print(f"[Classifier] Switched to: {new_classifier}")
+
+            # Check if ML models are loaded for this classifier
+            if new_classifier != 'threshold':
+                if not self.state.loaded_ml_models:
+                    print(f"[Classifier] ERROR: No ML models loaded at all!")
+                    self.statusBar().showMessage(f"⚠ No ML models loaded. Load models from ML Training tab first.", 5000)
+                    # Revert to threshold
+                    self.peak_detec_combo.blockSignals(True)
+                    self.peak_detec_combo.setCurrentText("Threshold")
+                    self.peak_detec_combo.blockSignals(False)
+                    self.state.active_classifier = "threshold"
+                    print(f"[Classifier] Reverted to threshold (no models)")
+                    return
+                else:
+                    # Find the model key (it may have accuracy suffix like "model1_xgboost_100%")
+                    model_key_prefix = f'model1_{new_classifier}'
+                    matching_keys = [k for k in self.state.loaded_ml_models.keys() if k.startswith(model_key_prefix)]
+
+                    if not matching_keys:
+                        print(f"[Classifier] ERROR: No model matching {model_key_prefix} found in loaded models!")
+                        self.statusBar().showMessage(f"⚠ {text} models not loaded. Load models from ML Training tab first.", 5000)
+                        # Revert to threshold
+                        self.peak_detec_combo.blockSignals(True)
+                        self.peak_detec_combo.setCurrentText("Threshold")
+                        self.peak_detec_combo.blockSignals(False)
+                        self.state.active_classifier = "threshold"
+                        print(f"[Classifier] Reverted to threshold (model not found)")
+                        return
+                    else:
+                        print(f"[Classifier] Model {matching_keys[0]} found! Proceeding...")
+
+            # Re-run peak detection to apply new classifier
+            # This will recompute peaks_by_sweep using the new classifier's labels
+            if self.state.analyze_chan and self.state.peaks_by_sweep:
+                self.statusBar().showMessage(f"Switching to {text} classifier...", 2000)
+                # Don't need to re-run full detection, just update which peaks are displayed
+                self._update_displayed_peaks_from_classifier()
+                # Guard: Only redraw if plot_manager exists (avoid error during initialization)
+                if hasattr(self, 'plot_manager'):
+                    self.redraw_main_plot()
+
+    def _update_displayed_peaks_from_classifier(self):
+        """Update peaks_by_sweep and breath_by_sweep based on active classifier.
+
+        This copies the selected classifier's read-only predictions to the user-editable
+        'labels' array, then updates the display.
+        """
+        st = self.state
+
+        # For each sweep, copy active classifier's predictions to 'labels' (user-editable)
+        for s in st.all_peaks_by_sweep.keys():
+            all_peaks_data = st.all_peaks_by_sweep[s]
+
+            # Get read-only predictions from active classifier
+            active_labels_key_ro = f'labels_{st.active_classifier}_ro'
+            if active_labels_key_ro in all_peaks_data and all_peaks_data[active_labels_key_ro] is not None:
+                # Copy to user-editable array (this overwrites any manual edits!)
+                all_peaks_data['labels'] = all_peaks_data[active_labels_key_ro].copy()
+                # Reset label_source to 'auto' since these are fresh auto-predictions
+                all_peaks_data['label_source'] = np.array(['auto'] * len(all_peaks_data['labels']))
+                print(f"[Classifier Update] Sweep {s}: Copied {active_labels_key_ro} to 'labels', found {np.sum(all_peaks_data['labels'] == 1)} breaths")
+            else:
+                # Fallback to threshold if active classifier not available
+                if 'labels_threshold_ro' in all_peaks_data and all_peaks_data['labels_threshold_ro'] is not None:
+                    all_peaks_data['labels'] = all_peaks_data['labels_threshold_ro'].copy()
+                    all_peaks_data['label_source'] = np.array(['auto'] * len(all_peaks_data['labels']))
+                    print(f"[Classifier Update] Sweep {s}: Falling back to threshold, found {np.sum(all_peaks_data['labels'] == 1)} breaths")
+                else:
+                    print(f"[Classifier Update] Sweep {s}: WARNING - No predictions available!")
+                    continue
+
+            # Extract labeled peaks from user-editable 'labels' array
+            labeled_mask = all_peaks_data['labels'] == 1
+            labeled_indices = all_peaks_data['indices'][labeled_mask]
+            st.peaks_by_sweep[s] = labeled_indices
+            print(f"[Classifier Update] Sweep {s}: Updated peaks_by_sweep with {len(labeled_indices)} peaks")
+
+            # Recompute breath events for labeled peaks
+            y_proc = self._get_processed_for(st.analyze_chan, s)
+            import core.peaks as peakdet
+            if peakdet._USE_NUMBA_VERSION:
+                breaths = peakdet.compute_breath_events_numba(y_proc, labeled_indices, sr_hz=st.sr_hz, exclude_sec=0.030)
+            else:
+                breaths = peakdet.compute_breath_events(y_proc, labeled_indices, sr_hz=st.sr_hz, exclude_sec=0.030)
+
+            st.breath_by_sweep[s] = breaths
+
+    def on_eupnea_sniff_classifier_changed(self, text: str):
+        """Handle eupnea/sniff classifier selection change."""
+        classifier_map = {
+            "GMM": "gmm",
+            "XGBoost": "xgboost",
+            "Random Forest": "rf",
+            "MLP": "mlp"
+        }
+        # Reverse mapping for reverting
+        classifier_reverse = {v: k for k, v in classifier_map.items()}
+
+        new_classifier = classifier_map.get(text, "gmm")
+
+        old_classifier = self.state.active_eupnea_sniff_classifier
+        self.state.active_eupnea_sniff_classifier = new_classifier
+
+        # Only print if actually switching
+        if old_classifier != new_classifier:
+            print(f"[Eupnea/Sniff Classifier] Switched to: {new_classifier}")
+
+        # Check if predictions are available
+        if new_classifier == 'gmm':
+            # Check if GMM has been run (gmm_class_ro should exist)
+            first_sweep_peaks = self.state.all_peaks_by_sweep.get(0, {})
+            if 'gmm_class_ro' not in first_sweep_peaks or first_sweep_peaks['gmm_class_ro'] is None:
+                print(f"[Eupnea/Sniff Classifier] GMM clustering has not been run yet - running now with default settings...")
+                self.statusBar().showMessage(f"Running GMM clustering with default settings...", 2000)
+
+                # Run GMM clustering with default settings
+                import core.gmm_clustering as gmm_clustering
+                try:
+                    gmm_clustering.build_eupnea_sniffing_regions(self.state, verbose=False)
+                    print(f"[Eupnea/Sniff Classifier] GMM clustering complete")
+                except Exception as e:
+                    print(f"[Eupnea/Sniff Classifier] ERROR: Failed to run GMM clustering: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self.statusBar().showMessage(f"⚠ Failed to run GMM clustering. Try running manually from Breath Char. tab.", 5000)
+                    # Revert to previous classifier
+                    self.eup_sniff_combo.blockSignals(True)
+                    self.eup_sniff_combo.setCurrentText(classifier_reverse.get(old_classifier, "GMM"))
+                    self.eup_sniff_combo.blockSignals(False)
+                    self.state.active_eupnea_sniff_classifier = old_classifier
+                    return
+        else:
+            # Check if ML models are loaded
+            model_key_prefix = f'model3_{new_classifier}'
+            matching_keys = [k for k in self.state.loaded_ml_models.keys() if k.startswith(model_key_prefix)]
+
+            if not matching_keys:
+                print(f"[Eupnea/Sniff Classifier] ERROR: Model {model_key_prefix} not found!")
+                self.statusBar().showMessage(f"⚠ {text} model not loaded. Load Model 3 from ML Training tab.", 5000)
+                # Revert to GMM
+                self.eup_sniff_combo.blockSignals(True)
+                self.eup_sniff_combo.setCurrentText("GMM")
+                self.eup_sniff_combo.blockSignals(False)
+                self.state.active_eupnea_sniff_classifier = "gmm"
+                return
+
+        # Update gmm_class from selected classifier
+        self._update_eupnea_sniff_from_classifier()
+
+        # Rebuild sniff regions for display
+        try:
+            import core.gmm_clustering as gmm_clustering
+            gmm_clustering.build_eupnea_sniffing_regions(self.state, verbose=False)
+        except Exception as e:
+            print(f"[Eupnea/Sniff Classifier] Warning: Could not rebuild regions: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Redraw plot
+        # Guard: Only redraw if plot_manager exists (avoid error during initialization)
+        if hasattr(self, 'plot_manager'):
+            self.redraw_main_plot()
+
+    def _update_eupnea_sniff_from_classifier(self):
+        """Copy selected classifier's predictions to gmm_class array."""
+        st = self.state
+
+        for s in st.all_peaks_by_sweep.keys():
+            all_peaks = st.all_peaks_by_sweep[s]
+
+            # Get read-only predictions from active classifier
+            if st.active_eupnea_sniff_classifier == 'gmm':
+                source_key = 'gmm_class_ro'
+            else:
+                source_key = f'eupnea_sniff_{st.active_eupnea_sniff_classifier}_ro'
+
+            # Debug: Check what keys are available
+            if s == 0:
+                available_keys = [k for k in all_peaks.keys() if 'eupnea' in k or 'gmm' in k]
+                print(f"[Eupnea/Sniff Update] Sweep {s}: Available keys: {available_keys}")
+                print(f"[Eupnea/Sniff Update] Sweep {s}: Looking for: {source_key}")
+
+            if source_key in all_peaks and all_peaks[source_key] is not None:
+                # Copy to user-editable array
+                old_gmm_class = all_peaks['gmm_class'].copy() if 'gmm_class' in all_peaks else None
+                all_peaks['gmm_class'] = all_peaks[source_key].copy()
+                all_peaks['eupnea_sniff_source'] = np.array([st.active_eupnea_sniff_classifier] * len(all_peaks['indices']))
+
+                # Debug: Show what changed
+                if s == 0:
+                    n_eupnea = np.sum(all_peaks['gmm_class'] == 0)
+                    n_sniff = np.sum(all_peaks['gmm_class'] == 1)
+                    n_unclass = np.sum(all_peaks['gmm_class'] == -1)
+                    print(f"[Eupnea/Sniff Update] Sweep {s}: Copied {source_key} to gmm_class")
+                    print(f"[Eupnea/Sniff Update] Sweep {s}: Eupnea: {n_eupnea}, Sniffing: {n_sniff}, Unclassified: {n_unclass}")
+                    if old_gmm_class is not None:
+                        n_changed = np.sum(old_gmm_class != all_peaks['gmm_class'])
+                        print(f"[Eupnea/Sniff Update] Sweep {s}: Changed {n_changed} classifications")
+            else:
+                print(f"[Eupnea/Sniff Update] Sweep {s}: WARNING - No predictions available for {st.active_eupnea_sniff_classifier}!")
+                if s == 0:
+                    if source_key in all_peaks:
+                        print(f"[Eupnea/Sniff Update] Sweep {s}: Key exists but is None")
+                    else:
+                        print(f"[Eupnea/Sniff Update] Sweep {s}: Key does not exist in all_peaks")
+
+    def on_sigh_classifier_changed(self, text: str):
+        """Handle sigh classifier selection change."""
+        classifier_map = {
+            "Manual": "manual",
+            "XGBoost": "xgboost",
+            "Random Forest": "rf",
+            "MLP": "mlp"
+        }
+        # Reverse mapping for reverting
+        classifier_reverse = {v: k for k, v in classifier_map.items()}
+
+        new_classifier = classifier_map.get(text, "manual")
+
+        old_classifier = self.state.active_sigh_classifier
+        self.state.active_sigh_classifier = new_classifier
+
+        # Only print if actually switching
+        if old_classifier != new_classifier:
+            print(f"[Sigh Classifier] Switched to: {new_classifier}")
+
+        # Check if ML models are loaded (for ML classifiers)
+        if new_classifier != 'manual':
+            model_key_prefix = f'model2_{new_classifier}'
+            matching_keys = [k for k in self.state.loaded_ml_models.keys() if k.startswith(model_key_prefix)]
+
+            if not matching_keys:
+                print(f"[Sigh Classifier] ERROR: Model {model_key_prefix} not found!")
+                self.statusBar().showMessage(f"⚠ {text} model not loaded. Load Model 2 from ML Training tab.", 5000)
+                # Revert to Manual
+                self.digh_combo.blockSignals(True)
+                self.digh_combo.setCurrentText("Manual")
+                self.digh_combo.blockSignals(False)
+                self.state.active_sigh_classifier = "manual"
+                return
+
+        # Update sigh_class from selected classifier
+        self._update_sigh_from_classifier()
+
+        # Redraw plot
+        # Guard: Only redraw if plot_manager exists (avoid error during initialization)
+        if hasattr(self, 'plot_manager'):
+            self.redraw_main_plot()
+
+    def _update_sigh_from_classifier(self):
+        """Copy selected classifier's predictions to sigh_class array and update sigh_by_sweep."""
+        st = self.state
+
+        for s in st.all_peaks_by_sweep.keys():
+            all_peaks = st.all_peaks_by_sweep[s]
+
+            # Get read-only predictions from active classifier
+            if st.active_sigh_classifier == 'manual':
+                # For manual mode, restore from sigh_manual_ro (preserves original manual annotations)
+                if 'sigh_manual_ro' in all_peaks and all_peaks['sigh_manual_ro'] is not None:
+                    all_peaks['sigh_class'] = all_peaks['sigh_manual_ro'].copy()
+                    all_peaks['sigh_source'] = np.array(['manual'] * len(all_peaks['indices']))
+                    if s == 0:
+                        n_sighs = np.sum(all_peaks['sigh_class'] == 1)
+                        print(f"[Sigh Update] Sweep {s}: Restored manual annotations from sigh_manual_ro ({n_sighs} sighs)")
+                else:
+                    # Fallback: initialize from sigh_by_sweep if sigh_manual_ro doesn't exist
+                    if 'sigh_class' not in all_peaks or all_peaks['sigh_class'] is None:
+                        all_peaks['sigh_class'] = np.zeros(len(all_peaks['indices']), dtype=np.int8)
+                        if 'labels' in all_peaks:
+                            all_peaks['sigh_class'][all_peaks['labels'] == 0] = -1
+                        if s in st.sigh_by_sweep:
+                            for sigh_idx in st.sigh_by_sweep[s]:
+                                peak_mask = all_peaks['indices'] == sigh_idx
+                                if peak_mask.any():
+                                    all_peaks['sigh_class'][peak_mask] = 1
+                    if s == 0:
+                        print(f"[Sigh Update] Sweep {s}: Using sigh_by_sweep (sigh_manual_ro not available)")
+                continue
+            else:
+                source_key = f'sigh_{st.active_sigh_classifier}_ro'
+
+            # Debug: Check what keys are available
+            if s == 0 and st.active_sigh_classifier != 'manual':
+                available_keys = [k for k in all_peaks.keys() if 'sigh' in k]
+                print(f"[Sigh Update] Sweep {s}: Available keys: {available_keys}")
+                print(f"[Sigh Update] Sweep {s}: Looking for: {source_key}")
+
+            if st.active_sigh_classifier != 'manual' and source_key in all_peaks and all_peaks[source_key] is not None:
+                # Copy to user-editable array
+                old_sigh_class = all_peaks['sigh_class'].copy() if 'sigh_class' in all_peaks else None
+                all_peaks['sigh_class'] = all_peaks[source_key].copy()
+                all_peaks['sigh_source'] = np.array([st.active_sigh_classifier] * len(all_peaks['indices']))
+
+                # Debug: Show what changed
+                if s == 0:
+                    n_normal = np.sum(all_peaks['sigh_class'] == 0)
+                    n_sigh = np.sum(all_peaks['sigh_class'] == 1)
+                    n_unclass = np.sum(all_peaks['sigh_class'] == -1)
+                    print(f"[Sigh Update] Sweep {s}: Copied {source_key} to sigh_class")
+                    print(f"[Sigh Update] Sweep {s}: Normal: {n_normal}, Sigh: {n_sigh}, Unclassified: {n_unclass}")
+                    if old_sigh_class is not None:
+                        n_changed = np.sum(old_sigh_class != all_peaks['sigh_class'])
+                        print(f"[Sigh Update] Sweep {s}: Changed {n_changed} classifications")
+            elif st.active_sigh_classifier != 'manual':
+                print(f"[Sigh Update] Sweep {s}: WARNING - No predictions available for {st.active_sigh_classifier}!")
+
+            # Update sigh_by_sweep from sigh_class for display (backward compatibility)
+            if 'sigh_class' in all_peaks:
+                sigh_mask = all_peaks['sigh_class'] == 1
+                st.sigh_by_sweep[s] = all_peaks['indices'][sigh_mask]
 
     def on_mark_events_clicked(self):
         """Open Event Detection Settings dialog."""
@@ -1951,64 +2618,42 @@ class MainWindow(QMainWindow):
             print(f"[notch-filter] Error applying filter: {e}")
             return y
 
-    def _open_prominence_histogram(self):
+    def _open_analysis_options(self, tab=None):
         """
-        Open the prominence threshold visualization dialog.
-        Shows histogram, quality score, and allows interactive adjustment.
+        Open the multi-tabbed Analysis Options dialog.
+        Consolidates Peak Detection, GMM Clustering, Outlier Detection, and ML Settings.
+        Non-blocking so user can interact with main window while dialog is open.
+
+        Args:
+            tab (str, optional): Tab to open ('peak_detection', 'gmm', 'outliers', 'ml')
         """
-        from dialogs.prominence_threshold_dialog import ProminenceThresholdDialog
+        from dialogs.analysis_options_dialog import AnalysisOptionsDialog
 
         st = self.state
-        if not st.analyze_chan or st.analyze_chan not in st.sweeps:
-            self._show_warning("No Data", "Load and select a channel first.")
-            return
 
-        # Concatenate all sweeps for analysis
-        all_sweeps_data = []
-        n_sweeps = st.sweeps[st.analyze_chan].shape[1]
+        # Check if dialog already exists (reuse to preserve settings like last training data path)
+        if hasattr(self, '_analysis_options_dialog') and self._analysis_options_dialog is not None:
+            # Reuse existing dialog and bring to front
+            self._analysis_options_dialog.show()
+            self._analysis_options_dialog.raise_()
+            self._analysis_options_dialog.activateWindow()
+        else:
+            # Create and show the dialog (non-blocking)
+            # Note: Individual tabs handle their own data requirements (e.g., ML Settings works without data)
+            self._analysis_options_dialog = AnalysisOptionsDialog(st, parent=self)
+            self._analysis_options_dialog.show()
 
-        for sweep_idx in range(n_sweeps):
-            if sweep_idx in st.omitted_sweeps:
-                continue
-            y_sweep = self._get_processed_for(st.analyze_chan, sweep_idx)
-            all_sweeps_data.append(y_sweep)
+        # Switch to requested tab if specified
+        if tab:
+            self._analysis_options_dialog.set_active_tab(tab)
 
-        if not all_sweeps_data:
-            self._show_warning("No Data", "All sweeps are omitted.")
-            return
-
-        y_data = np.concatenate(all_sweeps_data)
-
-        # Get current prominence from field
-        try:
-            current_prom = self.PeakPromValueSpinBox.value() if self.PeakPromValueSpinBox.value() > 0 else None
-        except ValueError:
-            current_prom = None
-
-        # Open dialog
-        dialog = ProminenceThresholdDialog(
-            parent=self,
-            y_data=y_data,
-            sr_hz=st.sr_hz,
-            current_prom=current_prom,
-            current_min_dist=self.peak_min_dist
-        )
+    def _open_prominence_histogram(self):
+        """
+        Open the multi-tab Analysis Options dialog to the Auto-Threshold tab.
+        (Replaces the old single ProminenceThresholdDialog)
+        """
+        self._open_analysis_options(tab='peak_detection')
         telemetry.log_screen_view('Peak Detection Options Dialog', screen_class='config_dialog')
-
-        if dialog.exec() == dialog.DialogCode.Accepted:
-            # Update parameters with user-adjusted values from dialog
-            vals = dialog.get_values()
-            self.peak_prominence = vals['prominence']
-            self.peak_min_dist = vals['min_dist']
-            self.peak_height_threshold = vals['height_threshold']
-
-            self.PeakPromValueSpinBox.setValue(vals['prominence'])
-            self.ApplyPeakFindPushButton.setEnabled(True)
-
-            # Update threshold line on plot
-            self.plot_host.update_threshold_line(vals['height_threshold'])
-
-            print(f"[Histogram] Updated prominence: {vals['prominence']:.4f}, Height threshold: {vals['height_threshold']:.4f}")
 
     def _calculate_local_minimum_threshold_silent(self, peak_heights):
         """
@@ -2239,6 +2884,19 @@ class MainWindow(QMainWindow):
             # Status message already printed above with valley/Otsu choice
             self._log_status_message(f"Auto-detected threshold: {chosen_threshold:.4f}", 3000)
 
+            # Refresh Peak Detection tab if it's the one that needs updating after channel change
+            if (hasattr(self, '_channel_change_needs_dialog_refresh') and
+                self._channel_change_needs_dialog_refresh and
+                getattr(self, '_dialog_tab_to_refresh', -1) == 0):  # Tab 0 = Peak Detection
+                if hasattr(self, '_analysis_options_dialog') and self._analysis_options_dialog is not None:
+                    try:
+                        if self._analysis_options_dialog.isVisible():
+                            print("[Auto-Detect] Refreshing Peak Detection tab after auto-detect complete")
+                            self._analysis_options_dialog._refresh_peak_detection_tab()
+                            self._channel_change_needs_dialog_refresh = False  # Mark as done
+                    except RuntimeError:
+                        self._analysis_options_dialog = None
+
         except Exception as e:
             print(f"[Auto-Detect] Error: {e}")
             import traceback
@@ -2320,6 +2978,93 @@ class MainWindow(QMainWindow):
             # Clear model params on error
             metrics.set_threshold_model_params(None)
 
+    def _precompute_remaining_classifiers_async(self):
+        """
+        Pre-compute remaining ML classifiers in the background after UI is responsive.
+        This enables instant classifier switching without slowing down initial display.
+        """
+        from PyQt6.QtCore import QTimer
+        import core.ml_prediction as ml_prediction
+        import time
+
+        st = self.state
+
+        # Determine which algorithms still need to be computed
+        already_computed = set()
+        need_to_compute = set()
+
+        # Check what was already run
+        if st.active_classifier in ['xgboost', 'rf', 'mlp']:
+            already_computed.add(st.active_classifier)
+        if st.active_eupnea_sniff_classifier in ['xgboost', 'rf', 'mlp']:
+            already_computed.add(st.active_eupnea_sniff_classifier)
+        if st.active_sigh_classifier in ['xgboost', 'rf', 'mlp']:
+            already_computed.add(st.active_sigh_classifier)
+
+        # Determine what still needs to be computed
+        all_algorithms = {'xgboost', 'rf', 'mlp'}
+        need_to_compute = all_algorithms - already_computed
+
+        if not need_to_compute:
+            print("[Background] No additional classifiers to pre-compute")
+            return
+
+        print(f"[Background] Will pre-compute {sorted(need_to_compute)} classifiers in background...")
+
+        def compute_remaining():
+            """Background worker function."""
+            t_start = time.time()
+            total_computed = 0
+
+            try:
+                for s in st.all_peaks_by_sweep.keys():
+                    all_peaks = st.all_peaks_by_sweep[s]
+
+                    # Get peak metrics for this sweep
+                    if s not in st.peak_metrics_by_sweep:
+                        continue
+                    peak_metrics = st.peak_metrics_by_sweep[s]
+
+                    # Run predictions for remaining algorithms
+                    for algorithm in sorted(need_to_compute):
+                        try:
+                            predictions = ml_prediction.predict_with_cascade(
+                                peak_metrics=peak_metrics,
+                                models=st.loaded_ml_models,
+                                algorithm=algorithm
+                            )
+
+                            # Store predictions as read-only (for classifier switching)
+                            all_peaks[f'labels_{algorithm}_ro'] = predictions['final_labels']
+
+                            # Store eupnea/sniff predictions (Model 3 output)
+                            if 'eupnea_sniff_class' in predictions:
+                                all_peaks[f'eupnea_sniff_{algorithm}_ro'] = predictions['eupnea_sniff_class']
+
+                            # Store sigh predictions (Model 2 output)
+                            if 'sigh_class' in predictions:
+                                all_peaks[f'sigh_{algorithm}_ro'] = predictions['sigh_class']
+
+                            total_computed += 1
+
+                        except KeyError:
+                            if s == 0:
+                                print(f"[Background] Model {algorithm} not found, skipping")
+                        except Exception as e:
+                            print(f"[Background] Warning: {algorithm} prediction failed: {e}")
+
+                t_elapsed = time.time() - t_start
+                print(f"[Background] ✓ Pre-computed {len(need_to_compute)} classifiers in {t_elapsed:.1f}s")
+                print(f"[Background] Classifier switching is now instant!")
+
+            except Exception as e:
+                print(f"[Background] Error during pre-computation: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Schedule background computation with 100ms delay (let UI settle first)
+        QTimer.singleShot(100, compute_remaining)
+
     def _apply_peak_detection(self):
         """
         Run peak detection on the ANALYZE channel for ALL sweeps,
@@ -2390,6 +3135,20 @@ class MainWindow(QMainWindow):
                 thresh=thresh,
                 direction=direction
             )
+            # Store threshold predictions as read-only (for classifier switching)
+            all_peaks_data['labels_threshold_ro'] = all_peaks_data['labels'].copy()
+
+            # Step 3.1: Initialize ML prediction arrays as None (will be filled after metrics)
+            if st.loaded_ml_models:
+                # We need peak_metrics first, so we'll come back to this after metrics computation
+                # For now, initialize ML label arrays as None
+                all_peaks_data['labels_xgboost_ro'] = None
+                all_peaks_data['labels_rf_ro'] = None
+                all_peaks_data['labels_mlp_ro'] = None
+
+            # NOTE: 'labels' remains as the user-editable array (backward compatible)
+            # It will be initialized from the active classifier after ML predictions run
+
             st.all_peaks_by_sweep[s] = all_peaks_data
 
             # Step 3.5: Compute comprehensive metrics for ML (merge detection, noise classification)
@@ -2428,6 +3187,85 @@ class MainWindow(QMainWindow):
             st.peak_metrics_by_sweep[s] = peak_metrics  # Original metrics (never modified, for ML)
             st.current_peak_metrics_by_sweep[s] = peak_metrics  # Current metrics (updated after edits, for Y2 plotting)
 
+            # Step 3.7: Run ML predictions if models are loaded (now that we have peak_metrics)
+            if st.loaded_ml_models and peak_metrics:
+                import core.ml_prediction as ml_prediction
+
+                # Determine which algorithms to run based on active classifiers
+                # This avoids running all 9 models (3 algorithms × 3 model types) every time
+                algorithms_to_run = set()
+
+                # Add algorithm for breath detection (Model 1)
+                if st.active_classifier in ['xgboost', 'rf', 'mlp']:
+                    algorithms_to_run.add(st.active_classifier)
+
+                # Add algorithm for eupnea/sniff (Model 3)
+                if st.active_eupnea_sniff_classifier in ['xgboost', 'rf', 'mlp']:
+                    algorithms_to_run.add(st.active_eupnea_sniff_classifier)
+
+                # Add algorithm for sigh (Model 2)
+                if st.active_sigh_classifier in ['xgboost', 'rf', 'mlp']:
+                    algorithms_to_run.add(st.active_sigh_classifier)
+
+                # If user wants to pre-compute all for instant switching, run all
+                # TODO: Add checkbox in UI to toggle this behavior
+                run_all_algorithms = False  # Set to True to restore old behavior
+
+                if run_all_algorithms:
+                    algorithms_to_run = {'xgboost', 'rf', 'mlp'}
+
+                if s == 0:
+                    print(f"[ML Prediction] Running algorithms: {sorted(algorithms_to_run)}")
+
+                # Run predictions for selected algorithms only
+                for algorithm in algorithms_to_run:
+                    try:
+                        predictions = ml_prediction.predict_with_cascade(
+                            peak_metrics=peak_metrics,
+                            models=st.loaded_ml_models,
+                            algorithm=algorithm
+                        )
+                        # Store predictions as read-only (for classifier switching)
+                        all_peaks_data[f'labels_{algorithm}_ro'] = predictions['final_labels']
+
+                        # Store eupnea/sniff predictions (Model 3 output)
+                        if 'eupnea_sniff_class' in predictions:
+                            all_peaks_data[f'eupnea_sniff_{algorithm}_ro'] = predictions['eupnea_sniff_class']
+
+                            if s == 0:
+                                n_eupnea = np.sum(predictions['eupnea_sniff_class'] == 0)
+                                n_sniff = np.sum(predictions['eupnea_sniff_class'] == 1)
+                                n_unclass = np.sum(predictions['eupnea_sniff_class'] == -1)
+                                print(f"[ML-{algorithm}] Eupnea: {n_eupnea}, Sniffing: {n_sniff}, Unclassified: {n_unclass}")
+                        else:
+                            all_peaks_data[f'eupnea_sniff_{algorithm}_ro'] = None
+
+                        # Store sigh predictions (Model 2 output)
+                        if 'sigh_class' in predictions:
+                            all_peaks_data[f'sigh_{algorithm}_ro'] = predictions['sigh_class']
+
+                            if s == 0:
+                                n_normal = np.sum(predictions['sigh_class'] == 0)
+                                n_sigh = np.sum(predictions['sigh_class'] == 1)
+                                n_unclass_sigh = np.sum(predictions['sigh_class'] == -1)
+                                print(f"[ML-{algorithm}] Normal: {n_normal}, Sigh: {n_sigh}, Unclassified: {n_unclass_sigh}")
+                        else:
+                            all_peaks_data[f'sigh_{algorithm}_ro'] = None
+
+                        # Debug: Print prediction summary on first sweep
+                        if s == 0:
+                            n_breaths = np.sum(predictions['final_labels'] == 1)
+                            n_noise = np.sum(predictions['final_labels'] == 0)
+                            print(f"[ML-{algorithm}] Sweep {s}: {n_breaths} breaths, {n_noise} noise (total {len(predictions['final_labels'])} peaks)")
+                    except KeyError:
+                        # Models for this algorithm not loaded
+                        if s == 0:
+                            print(f"[ML-{algorithm}] Models not found, skipping")
+                        all_peaks_data[f'labels_{algorithm}_ro'] = None
+                    except Exception as e:
+                        print(f"[ML-{algorithm}] Warning: Prediction failed: {e}")
+                        all_peaks_data[f'labels_{algorithm}_ro'] = None
+
             # Debug: Show sample metrics for first sweep
             if s == 0 and len(peak_metrics) > 0:
                 print(f"[peak-metrics] Computed {len(peak_metrics)} peak metrics for sweep {s}")
@@ -2443,7 +3281,76 @@ class MainWindow(QMainWindow):
                     print(f"  gap_to_next_norm={mc['gap_to_next_norm']:.2f}, trough_ratio_next={mc['trough_ratio_next']:.2f}")
                     print(f"  onset_above_zero={mc['onset_above_zero']}, prom_asymmetry={mc.get('prom_asymmetry', 'N/A')}")
 
-            # Step 4: Extract only labeled breaths for display (backward compatibility)
+            # Step 4: Initialize user-editable 'labels' array from active classifier
+            # This is the array that gets displayed AND edited (backward compatible!)
+            active_labels_key_ro = f'labels_{st.active_classifier}_ro'
+            if active_labels_key_ro in all_peaks_data and all_peaks_data[active_labels_key_ro] is not None:
+                # Copy from selected classifier's read-only predictions
+                all_peaks_data['labels'] = all_peaks_data[active_labels_key_ro].copy()
+                if s == 0:
+                    print(f"[peak-detection] Initialized 'labels' from {active_labels_key_ro}")
+            else:
+                # Fallback to threshold if active classifier not available
+                # (labels already contains threshold predictions from step 3)
+                if s == 0:
+                    print(f"[peak-detection] Using threshold labels (active classifier {st.active_classifier} not available)")
+
+            # Step 4b: Initialize user-editable 'gmm_class' array from active eupnea/sniff classifier
+            if st.active_eupnea_sniff_classifier == 'gmm':
+                # GMM will be computed on-demand later, initialize as None for now
+                all_peaks_data['gmm_class'] = None
+                if s == 0:
+                    print(f"[peak-detection] Initialized 'gmm_class' as None (GMM will run on-demand)")
+            else:
+                # Copy from selected ML classifier's read-only predictions
+                active_eup_sniff_key_ro = f'eupnea_sniff_{st.active_eupnea_sniff_classifier}_ro'
+                if active_eup_sniff_key_ro in all_peaks_data and all_peaks_data[active_eup_sniff_key_ro] is not None:
+                    all_peaks_data['gmm_class'] = all_peaks_data[active_eup_sniff_key_ro].copy()
+                    if s == 0:
+                        print(f"[peak-detection] Initialized 'gmm_class' from {active_eup_sniff_key_ro}")
+                else:
+                    # Fallback to None
+                    all_peaks_data['gmm_class'] = None
+                    if s == 0:
+                        print(f"[peak-detection] 'gmm_class' initialized as None (classifier {st.active_eupnea_sniff_classifier} not available)")
+
+            # Step 4c: Initialize user-editable 'sigh_class' array from active sigh classifier
+            # First, create sigh_manual_ro from existing sigh_by_sweep (preserves manual annotations)
+            n_peaks = len(all_peaks_data['indices'])
+            sigh_manual = np.zeros(n_peaks, dtype=np.int8)
+            if 'labels' in all_peaks_data:
+                sigh_manual[all_peaks_data['labels'] == 0] = -1
+            if s in st.sigh_by_sweep:
+                for sigh_idx in st.sigh_by_sweep[s]:
+                    peak_mask = all_peaks_data['indices'] == sigh_idx
+                    if np.any(peak_mask):
+                        sigh_manual[peak_mask] = 1
+            all_peaks_data['sigh_manual_ro'] = sigh_manual.copy()
+
+            if st.active_sigh_classifier == 'manual':
+                # Manual mode - use the manual annotations
+                all_peaks_data['sigh_class'] = sigh_manual.copy()
+                if s == 0:
+                    n_sighs = np.sum(all_peaks_data['sigh_class'] == 1)
+                    print(f"[peak-detection] Initialized 'sigh_class' from manual annotations ({n_sighs} sighs)")
+            else:
+                # Copy from selected ML classifier's read-only predictions
+                active_sigh_key_ro = f'sigh_{st.active_sigh_classifier}_ro'
+                if active_sigh_key_ro in all_peaks_data and all_peaks_data[active_sigh_key_ro] is not None:
+                    all_peaks_data['sigh_class'] = all_peaks_data[active_sigh_key_ro].copy()
+                    if s == 0:
+                        n_sighs = np.sum(all_peaks_data['sigh_class'] == 1)
+                        print(f"[peak-detection] Initialized 'sigh_class' from {active_sigh_key_ro} ({n_sighs} sighs)")
+                else:
+                    # Fallback to zeros
+                    n_peaks = len(all_peaks_data['indices'])
+                    all_peaks_data['sigh_class'] = np.zeros(n_peaks, dtype=np.int8)
+                    if 'labels' in all_peaks_data:
+                        all_peaks_data['sigh_class'][all_peaks_data['labels'] == 0] = -1
+                    if s == 0:
+                        print(f"[peak-detection] 'sigh_class' initialized as zeros (classifier {st.active_sigh_classifier} not available)")
+
+            # Extract labeled peaks for display
             labeled_mask = all_peaks_data['labels'] == 1
             labeled_indices = all_peaks_data['indices'][labeled_mask]
             st.peaks_by_sweep[s] = labeled_indices
@@ -2514,25 +3421,41 @@ class MainWindow(QMainWindow):
             self._compute_y2_all_sweeps()
             self.plot_host.clear_y2()
 
-        # First redraw: Show detected peaks/breaths immediately
-        print("[peak-detection] Redrawing plot with detected peaks...")
-        self.redraw_main_plot()
-
-        # Force Qt to process events so the plot updates before GMM starts
-        from PyQt6.QtWidgets import QApplication
-        QApplication.processEvents()
-
-        # Automatically run GMM clustering to identify and mark sniffing breaths
-        print("[peak-detection] Running automatic GMM clustering...")
+        # ALWAYS run GMM clustering in background (so users can toggle between classifiers)
+        print("[peak-detection] Running automatic GMM clustering (for classifier toggling)...")
         self._run_automatic_gmm_clustering()
-
-        # Clear out-of-date flag (GMM just ran)
         self.eupnea_sniffing_out_of_date = False
 
-        # LIGHTWEIGHT UPDATE: Just refresh eupnea/sniffing overlays without full redraw
-        # This skips expensive outlier detection (which already ran in first redraw)
-        print("[peak-detection] Adding GMM-detected eupnea/sniffing overlays...")
-        self._refresh_eupnea_overlays_only()
+        # Build eupnea/sniff regions based on active classifier (BEFORE first redraw)
+        if st.active_eupnea_sniff_classifier == 'gmm':
+            # GMM already ran above, regions already built
+            print("[peak-detection] Using GMM classifier for display")
+        else:
+            # Use ML classifier predictions (already initialized in gmm_class array)
+            print(f"[peak-detection] Building eupnea/sniff regions from {st.active_eupnea_sniff_classifier} predictions...")
+            import core.gmm_clustering as gmm_clustering
+            try:
+                gmm_clustering.build_eupnea_sniffing_regions(st, verbose=False)
+                print(f"[peak-detection] Eupnea/sniff regions built from ML predictions")
+            except Exception as e:
+                print(f"[peak-detection] Warning: Could not build eupnea/sniff regions: {e}")
+
+        # Sync sigh_by_sweep from sigh_class for display (BEFORE first redraw)
+        print("[peak-detection] Syncing sigh markers from sigh_class array...")
+        total_sighs = 0
+        for s in st.all_peaks_by_sweep.keys():
+            all_peaks = st.all_peaks_by_sweep[s]
+            if 'sigh_class' in all_peaks and all_peaks['sigh_class'] is not None:
+                sigh_mask = all_peaks['sigh_class'] == 1
+                st.sigh_by_sweep[s] = all_peaks['indices'][sigh_mask]  # numpy array, not set!
+                n_sighs = np.sum(sigh_mask)
+                total_sighs += n_sighs
+                if s == 0:
+                    print(f"[peak-detection] Sweep {s}: {n_sighs} sighs synced to display")
+
+        # SINGLE REDRAW: Show peaks, eupnea/sniff regions, and sigh markers all at once
+        print(f"[peak-detection] Redrawing plot (peaks + eupnea/sniff + {total_sighs} sighs)...")
+        self.redraw_main_plot()
 
         # Show completion message with elapsed time
         t_elapsed = time.time() - t_start
@@ -2563,9 +3486,32 @@ class MainWindow(QMainWindow):
 
         self._log_status_message(f"✓ Peak detection complete ({t_elapsed:.1f}s)", 3000)
 
+        # Refresh GMM tab if it was marked for refresh after channel change
+        # (Peak Detection tab was already refreshed after auto-detect)
+        if hasattr(self, '_channel_change_needs_dialog_refresh') and self._channel_change_needs_dialog_refresh:
+            self._channel_change_needs_dialog_refresh = False
+            if hasattr(self, '_analysis_options_dialog') and self._analysis_options_dialog is not None:
+                try:
+                    if self._analysis_options_dialog.isVisible():
+                        tab_index = getattr(self, '_dialog_tab_to_refresh', 0)
+                        if tab_index == 1:  # Eup/Sniff Classification (GMM)
+                            print("[Peak Detection] Refreshing GMM tab after peak detection complete")
+                            self._analysis_options_dialog._refresh_breath_classification_tab()
+                        # Tab 0 (Peak Detection) was already refreshed after auto-detect, skip it here
+                except RuntimeError:
+                    self._analysis_options_dialog = None
+
+        # BACKGROUND PRE-COMPUTATION: Compute remaining classifiers asynchronously
+        # This happens AFTER the UI is responsive, so user doesn't notice
+        self._precompute_remaining_classifiers_async()
+
         # Disable Apply button after successful peak detection
         # Will be re-enabled if channel, filter, or file changes
         self.ApplyPeakFindPushButton.setEnabled(False)
+
+        # Refresh Analysis Options dialog GMM tab if open (peaks are now detected)
+        if hasattr(self, '_analysis_options_dialog') and self._analysis_options_dialog.isVisible():
+            self._analysis_options_dialog._refresh_breath_classification_tab()
 
     def _compute_and_store_normalization_stats(self):
         """
@@ -3493,68 +4439,32 @@ class MainWindow(QMainWindow):
             print("[spectral-dialog] Dialog was not accepted (user cancelled or closed)")
 
     def on_outlier_thresh_clicked(self):
-        """Open dialog to select which metrics to use for outlier detection."""
-        # Get all available metrics from core.metrics
-        from core.metrics import METRICS
-
-        # Filter to only numeric metrics (exclude region detection functions)
-        numeric_metrics = {k: v for k, v in METRICS.items()
-                          if k not in ["eupnic", "apnea", "regularity"]}
-
-        # Create and show dialog
-        dlg = OutlierMetricsDialog(parent=self,
-                                    available_metrics=list(numeric_metrics.keys()),
-                                    selected_metrics=self.outlier_metrics)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            # Update selected metrics
-            self.outlier_metrics = dlg.get_selected_metrics()
-            print(f"[outlier-metrics] Updated outlier detection metrics: {self.outlier_metrics}")
-
-            # Redraw to apply new outlier detection
-            self.redraw_main_plot()
+        """
+        Open the multi-tab Analysis Options dialog to the Outlier Detection tab.
+        (Replaces the old single OutlierMetricsDialog)
+        """
+        self._open_analysis_options(tab='outliers')
+        telemetry.log_screen_view('Outlier Detection Options Dialog', screen_class='config_dialog')
 
     def on_gmm_clustering_clicked(self):
-        """Open GMM clustering dialog to automatically classify breaths."""
-        # Check if we have breath data
-        st = self.state
-        if not st.peaks_by_sweep or len(st.peaks_by_sweep) == 0:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "No Breath Data",
-                "Please detect peaks first using 'Apply Peak Find' button.\n\n"
-                "GMM clustering requires breath metrics to classify breathing patterns."
-            )
-            return
-
-        # Create and show GMM dialog
-        dlg = GMMClusteringDialog(parent=self, main_window=self)
+        """
+        Open the multi-tab Analysis Options dialog to the Eup/Sniff Classification tab.
+        (Replaces the old single GMMClusteringDialog)
+        """
+        self._open_analysis_options(tab='gmm')
         telemetry.log_screen_view('GMM Clustering Dialog', screen_class='analysis_dialog')
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            # User applied clustering results
-            print("[gmm-clustering] Results applied to main plot")
-            telemetry.log_feature_used('gmm_clustering')
-            self.redraw_main_plot()
 
     def on_peak_navigator_clicked(self):
-        """Open Peak Navigator dialog for efficient peak curation."""
-        # Check if we have peak data
-        st = self.state
-        if not st.peaks_by_sweep or len(st.peaks_by_sweep) == 0:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "No Peak Data",
-                "Please detect peaks first using 'Apply Peak Find' button.\n\n"
-                "Peak Navigator requires detected peaks to navigate through candidates."
-            )
-            return
+        """Open Advanced Peak Editor dialog for edge case review and curation."""
+        # Always open dialog - it will handle the "no peaks" case internally
+        dlg = AdvancedPeakEditorDialog(main_window=self, parent=self)
+        telemetry.log_screen_view('Advanced Peak Editor Dialog', screen_class='curation_dialog')
+        dlg.exec()  # Modal dialog
+        telemetry.log_feature_used('advanced_peak_editor')
 
-        # Create and show Peak Navigator dialog
-        dlg = PeakNavigatorDialog(parent=self, main_window=self)
-        telemetry.log_screen_view('Peak Navigator Dialog', screen_class='curation_dialog')
-        dlg.exec()  # Non-modal - user can keep it open while curating
-        telemetry.log_feature_used('peak_navigator')
+        # Refresh plot after dialog closes (in case user made edits)
+        if hasattr(self.state, 'all_peaks_by_sweep') and self.state.all_peaks_by_sweep:
+            self.redraw_main_plot()
 
     def _refresh_omit_button_label(self):
         """Update Omit button text based on whether current sweep is omitted."""
@@ -3951,6 +4861,734 @@ class MainWindow(QMainWindow):
     def _add_sighs_chart(self, ws, header_row):
         """Delegate to ConsolidationManager."""
         return self.consolidation_manager._add_sighs_chart(ws, header_row)
+
+    # ========== PROJECT BUILDER METHODS ==========
+
+    def on_project_browse_directory(self):
+        """Browse for directory containing recordings."""
+        from PyQt6.QtWidgets import QFileDialog
+
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select Directory with Recordings",
+            "",
+            QFileDialog.Option.ShowDirsOnly
+        )
+
+        if directory:
+            self._project_directory = directory
+            self.directoryPathEdit.setText(directory)
+            self._log_status_message(f"Selected directory: {directory}", 2000)
+            print(f"[project-builder] Selected directory: {directory}")
+
+    def on_project_scan_files(self):
+        """Scan directory with progressive loading - files appear immediately, metadata loads in background."""
+        if not self._project_directory:
+            self._show_warning("No Directory", "Please select a directory first using 'Browse Directory'.")
+            return
+
+        from core import project_builder
+        from PyQt6.QtWidgets import QProgressDialog
+        from PyQt6.QtCore import QThread, pyqtSignal
+
+        # Prevent multiple concurrent scans
+        if hasattr(self, '_metadata_thread') and self._metadata_thread and self._metadata_thread.isRunning():
+            self._show_warning("Scan In Progress", "A scan is already running. Please wait for it to complete.")
+            return
+
+        progress = None
+        try:
+            # Disable scan button during operation
+            self.scanFilesButton.setEnabled(False)
+
+            recursive = self.recursiveCheckBox.isChecked()
+
+            # PHASE 1: Quick file discovery
+            progress = QProgressDialog("Finding files...", "Cancel", 0, 0, self)
+            progress.setWindowTitle("Scanning Directory")
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setValue(0)
+            progress.show()
+            QApplication.processEvents()
+
+            files = project_builder.discover_files(self._project_directory, recursive=recursive)
+            abf_files = files['abf_files']
+            excel_files = files['excel_files']
+
+            if progress.wasCanceled():
+                progress.close()
+                self.scanFilesButton.setEnabled(True)
+                self._log_status_message("Scan cancelled", 2000)
+                return
+
+            progress.close()
+
+            # PHASE 2: Show files immediately with placeholders
+            self._discovered_files_data = []
+            table = self.discoveredFilesTable
+            table.setRowCount(0)
+
+            # Extract path keywords for each file
+            from core.fast_abf_reader import extract_path_keywords
+
+            for i, abf_path in enumerate(abf_files):
+                file_size_mb = abf_path.stat().st_size / (1024 * 1024)
+
+                # Extract keywords from path
+                path_info = extract_path_keywords(abf_path, Path(self._project_directory))
+
+                # Format keywords for display
+                keywords_display = []
+                if path_info['power_levels']:
+                    keywords_display.extend(path_info['power_levels'])
+                if path_info['animal_ids']:
+                    keywords_display.extend([f"ID:{id}" for id in path_info['animal_ids']])
+                if path_info['keywords']:
+                    keywords_display.extend(path_info['keywords'])
+
+                file_info = {
+                    'file_path': abf_path,
+                    'file_name': abf_path.name,
+                    'protocol': '...',
+                    'file_size_mb': file_size_mb,
+                    'path_keywords': path_info,
+                    'keywords_display': ', '.join(keywords_display) if keywords_display else '',
+                }
+                self._discovered_files_data.append(file_info)
+
+                table.insertRow(i)
+                table.setItem(i, 0, QTableWidgetItem(file_info['file_name']))
+                table.setItem(i, 1, QTableWidgetItem('Loading...'))  # Protocol
+                table.setItem(i, 2, QTableWidgetItem(''))  # Channels (will be filled by metadata loading)
+                table.setItem(i, 3, QTableWidgetItem(file_info['keywords_display']))  # Path keywords
+                table.setItem(i, 4, QTableWidgetItem(''))  # Labels (for manual tagging later)
+                table.setItem(i, 5, QTableWidgetItem(f"{file_size_mb:.2f}"))
+
+            table.resizeColumnsToContents()
+
+            summary_text = f"Summary: {len(abf_files)} ABF files | {len(excel_files)} Excel files | Loading protocols..."
+            self.summaryLabel.setText(summary_text)
+            self._log_status_message(f"Found {len(abf_files)} files, loading metadata in background...", 3000)
+
+            # PHASE 3: Load metadata in background thread
+            self._start_background_metadata_loading(abf_files)
+
+        except Exception as e:
+            if progress:
+                progress.close()
+            self.scanFilesButton.setEnabled(True)  # Re-enable on error
+            self._show_error("Scan Error", f"Failed to scan directory:\n{e}")
+            print(f"[project-builder] Error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _start_background_metadata_loading(self, abf_files):
+        """Start background thread to load metadata using parallel processing."""
+        from PyQt6.QtCore import QThread, pyqtSignal
+
+        class MetadataThread(QThread):
+            # Batch updates: send list of results instead of individual items
+            batch_progress = pyqtSignal(list, int)  # [(index, metadata), ...], total
+            finished = pyqtSignal(set)  # protocols
+
+            def __init__(self, files):
+                super().__init__()
+                self.files = files
+                self.should_stop = False
+
+            def run(self):
+                from core.fast_abf_reader import read_abf_metadata_parallel
+                protocols = set()
+                batch = []
+                batch_size = 25  # Update UI every 25 files to reduce signal traffic
+
+                def callback(index, total, metadata):
+                    if self.should_stop:
+                        return
+
+                    if metadata:
+                        protocols.add(metadata['protocol'])
+
+                    # Collect results in batches
+                    batch.append((index, metadata))
+
+                    # Emit batch when it reaches batch_size or at the end
+                    if len(batch) >= batch_size or index == total - 1:
+                        self.batch_progress.emit(batch[:], total)  # Send copy of batch
+                        batch.clear()
+
+                try:
+                    # Use parallel processing with 4 workers
+                    read_abf_metadata_parallel(self.files, progress_callback=callback, max_workers=4)
+                    self.finished.emit(protocols)
+                except Exception as e:
+                    print(f"[project-builder] Error during parallel loading: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self.finished.emit(protocols)  # Still emit finish signal
+
+        # Show progress bar
+        self.projectProgressBar.setVisible(True)
+        self.projectProgressBar.setValue(0)
+        self.projectProgressBar.setFormat(f"Loading metadata: 0/{len(abf_files)} (0%)")
+
+        self._metadata_thread = MetadataThread(abf_files)
+        self._metadata_thread.batch_progress.connect(self._update_file_metadata_batch)
+        self._metadata_thread.finished.connect(self._metadata_finished)
+        self._metadata_thread.start()
+        print(f"[project-builder] Started background loading for {len(abf_files)} files with batched updates")
+
+    def _update_file_metadata_batch(self, batch, total):
+        """Update table cells with a batch of loaded metadata (called from main thread via signal)."""
+        table = self.discoveredFilesTable
+
+        # Process all items in the batch
+        for index, metadata in batch:
+            if metadata:
+                # Update internal data structure
+                if index < len(self._discovered_files_data):
+                    self._discovered_files_data[index]['protocol'] = metadata['protocol']
+                    self._discovered_files_data[index]['channel_count'] = metadata.get('channel_count', 0)
+
+                # Update table cells
+                if index < table.rowCount():
+                    table.setItem(index, 1, QTableWidgetItem(metadata['protocol']))
+                    table.setItem(index, 2, QTableWidgetItem(str(metadata.get('channel_count', ''))))
+
+        # Update progress bar and status (use last item in batch for progress)
+        if batch:
+            last_index = batch[-1][0]
+            progress_pct = int((last_index + 1) / total * 100)
+            self.projectProgressBar.setValue(progress_pct)
+            self.projectProgressBar.setFormat(f"Loading metadata: {last_index + 1}/{total} ({progress_pct}%)")
+            self._log_status_message(f"Loading metadata... {last_index + 1}/{total}", 0)
+
+    def _metadata_finished(self, protocols):
+        """Called when background loading completes."""
+        table = self.discoveredFilesTable
+        table.resizeColumnsToContents()
+
+        # Hide progress bar
+        self.projectProgressBar.setVisible(False)
+        self.projectProgressBar.setValue(0)
+
+        summary_text = f"Summary: {len(self._discovered_files_data)} ABF files | {len(protocols)} protocols"
+        self.summaryLabel.setText(summary_text)
+        self._log_status_message(f"✓ Loaded {len(self._discovered_files_data)} files", 3000)
+        print(f"[project-builder] Complete! {len(protocols)} protocols: {sorted(protocols)}")
+
+        # Re-enable scan button
+        self.scanFilesButton.setEnabled(True)
+
+    def _populate_discovered_files_table(self, abf_files):
+        """Populate the discovered files table with ABF metadata."""
+        table = self.discoveredFilesTable
+
+        # Clear existing rows
+        table.setRowCount(0)
+
+        # Populate rows
+        for i, file_info in enumerate(abf_files):
+            table.insertRow(i)
+
+            # File Name
+            table.setItem(i, 0, QTableWidgetItem(file_info['file_name']))
+
+            # Protocol
+            table.setItem(i, 1, QTableWidgetItem(file_info['protocol']))
+
+            # Duration (convert to minutes)
+            duration_min = file_info['duration_sec'] / 60.0
+            table.setItem(i, 2, QTableWidgetItem(f"{duration_min:.1f} min"))
+
+            # Channels (count)
+            channel_count = len(file_info['channels'])
+            table.setItem(i, 3, QTableWidgetItem(str(channel_count)))
+
+            # Size (MB)
+            table.setItem(i, 4, QTableWidgetItem(f"{file_info['file_size_mb']:.2f}"))
+
+        # Resize columns to content
+        table.resizeColumnsToContents()
+
+        print(f"[project-builder] Populated table with {len(abf_files)} files")
+
+    def on_project_add_files(self):
+        """Add selected files from discovered table to an experiment."""
+        # Get selected rows
+        selected_rows = self.discoveredFilesTable.selectionModel().selectedRows()
+
+        if not selected_rows:
+            self._show_warning("No Selection", "Please select files to add to the project.")
+            return
+
+        # Get selected file data
+        selected_files = []
+        for row in selected_rows:
+            idx = row.row()
+            if idx < len(self._discovered_files_data):
+                selected_files.append(self._discovered_files_data[idx])
+
+        if not selected_files:
+            return
+
+        # For now, prompt user for experiment name
+        from PyQt6.QtWidgets import QInputDialog
+
+        exp_name, ok = QInputDialog.getText(
+            self,
+            "Add to Experiment",
+            "Enter experiment name:",
+            text="New Experiment"
+        )
+
+        if ok and exp_name:
+            self._add_files_to_experiment(exp_name, selected_files)
+            self._log_status_message(f"✓ Added {len(selected_files)} files to '{exp_name}'", 2000)
+
+    def _add_files_to_experiment(self, exp_name, file_list):
+        """Add files to an experiment in the tree widget."""
+        tree = self.experimentsTreeWidget
+
+        # Check if experiment already exists
+        exp_item = None
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item.text(0).startswith(exp_name):
+                exp_item = item
+                break
+
+        # Create new experiment if doesn't exist
+        if exp_item is None:
+            exp_item = QTreeWidgetItem([f"{exp_name} (0)"])
+            tree.addTopLevelItem(exp_item)
+            exp_item.setExpanded(True)
+
+        # Add files to experiment
+        for file_info in file_list:
+            file_item = QTreeWidgetItem([file_info['file_name']])
+            # Store full path in item data
+            file_item.setData(0, Qt.ItemDataRole.UserRole, str(file_info['file_path']))
+            exp_item.addChild(file_item)
+
+        # Update count in experiment name
+        file_count = exp_item.childCount()
+        exp_item.setText(0, f"{exp_name} ({file_count})")
+
+        print(f"[project-builder] Added {len(file_list)} files to experiment '{exp_name}'")
+
+    def on_project_clear_files(self):
+        """Clear the discovered files table."""
+        self.discoveredFilesTable.setRowCount(0)
+        self._discovered_files_data = []
+        self.summaryLabel.setText("Summary: No files scanned")
+        # Hide progress bar
+        self.projectProgressBar.setVisible(False)
+        self.projectProgressBar.setValue(0)
+        self._log_status_message("Cleared discovered files", 1500)
+
+    def on_project_add_experiment(self):
+        """Add a new empty experiment to the project."""
+        from PyQt6.QtWidgets import QInputDialog
+
+        exp_name, ok = QInputDialog.getText(
+            self,
+            "New Experiment",
+            "Enter experiment name:",
+            text="New Experiment"
+        )
+
+        if ok and exp_name:
+            tree = self.experimentsTreeWidget
+            exp_item = QTreeWidgetItem([f"{exp_name} (0)"])
+            tree.addTopLevelItem(exp_item)
+            exp_item.setExpanded(True)
+            self._log_status_message(f"✓ Created experiment '{exp_name}'", 1500)
+
+    def on_project_remove_experiment(self):
+        """Remove selected experiment or files from the project."""
+        tree = self.experimentsTreeWidget
+        selected_items = tree.selectedItems()
+
+        if not selected_items:
+            self._show_warning("No Selection", "Please select an experiment or file to remove.")
+            return
+
+        for item in selected_items:
+            parent = item.parent()
+            if parent is None:
+                # Top-level item (experiment)
+                tree.takeTopLevelItem(tree.indexOfTopLevelItem(item))
+            else:
+                # Child item (file)
+                parent.removeChild(item)
+                # Update count
+                exp_name = parent.text(0).split(" (")[0]
+                file_count = parent.childCount()
+                parent.setText(0, f"{exp_name} ({file_count})")
+
+        self._log_status_message("✓ Removed selected items", 1500)
+
+    def on_project_export_experiment(self):
+        """Export selected experiment (batch processing)."""
+        self._show_info("Not Implemented", "Batch export functionality will be implemented next.")
+
+    def on_edit_project_name(self):
+        """Edit the current project name."""
+        from PyQt6.QtWidgets import QInputDialog
+
+        current_name = self.projectNameEdit.text().strip()
+        if not current_name:
+            current_name = "Untitled Project"
+
+        new_name, ok = QInputDialog.getText(
+            self, "Edit Project Name", "Enter project name:",
+            text=current_name
+        )
+
+        if ok and new_name.strip():
+            self.projectNameEdit.setText(new_name.strip())
+            self._log_status_message(f"Project renamed to: {new_name.strip()}", 2000)
+
+    def on_project_new(self):
+        """Create a new project - prompt for name and directory."""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFileDialog
+
+        # Create dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("New Project")
+        dialog.setMinimumWidth(500)
+
+        layout = QVBoxLayout(dialog)
+
+        # Project name
+        layout.addWidget(QLabel("Project Name:"))
+        name_edit = QLineEdit()
+        name_edit.setPlaceholderText("Enter project name...")
+        layout.addWidget(name_edit)
+
+        layout.addSpacing(10)
+
+        # Directory selection
+        layout.addWidget(QLabel("Data Directory:"))
+        dir_layout = QHBoxLayout()
+        dir_edit = QLineEdit()
+        dir_edit.setPlaceholderText("Select directory containing data files...")
+        dir_edit.setReadOnly(True)
+        dir_layout.addWidget(dir_edit)
+
+        browse_btn = QPushButton("Browse...")
+        browse_btn.setMaximumWidth(100)
+        def browse_dir():
+            directory = QFileDialog.getExistingDirectory(dialog, "Select Data Directory")
+            if directory:
+                dir_edit.setText(directory)
+                # Auto-fill project name if empty
+                if not name_edit.text().strip():
+                    name_edit.setText(Path(directory).name)
+        browse_btn.clicked.connect(browse_dir)
+        dir_layout.addWidget(browse_btn)
+        layout.addLayout(dir_layout)
+
+        layout.addSpacing(20)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+
+        create_btn = QPushButton("Create Project")
+        create_btn.setDefault(True)
+        create_btn.clicked.connect(dialog.accept)
+        button_layout.addWidget(create_btn)
+
+        layout.addLayout(button_layout)
+
+        # Show dialog
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            project_name = name_edit.text().strip()
+            directory = dir_edit.text().strip()
+
+            if not project_name:
+                self._show_warning("Missing Information", "Please enter a project name.")
+                return
+
+            if not directory:
+                self._show_warning("Missing Information", "Please select a data directory.")
+                return
+
+            # Clear everything
+            self.discoveredFilesTable.setRowCount(0)
+            self.experimentsTreeWidget.clear()
+            self._discovered_files_data = []
+
+            # Set new project info
+            self._project_directory = directory
+            self.directoryPathEdit.setText(directory)
+            self.projectNameEdit.setText(project_name)
+            self.summaryLabel.setText("Summary: No files scanned")
+
+            self._log_status_message(f"✓ New project created: {project_name}", 2000)
+
+    def on_project_save(self):
+        """Save current project to data directory."""
+        if not self._project_directory:
+            self._show_warning("No Directory", "Please select a directory first.")
+            return
+
+        if not self._discovered_files_data:
+            self._show_warning("No Files", "Please scan for files first.")
+            return
+
+        # Get project name
+        project_name = self.projectNameEdit.text().strip()
+        if not project_name:
+            # Prompt for project name
+            from PyQt6.QtWidgets import QInputDialog
+            project_name, ok = QInputDialog.getText(
+                self, "Save Project", "Enter project name:",
+                text=Path(self._project_directory).name
+            )
+            if not ok or not project_name.strip():
+                return
+            project_name = project_name.strip()
+            self.projectNameEdit.setText(project_name)
+
+        try:
+            # Get experiments data (currently just empty, but ready for future)
+            experiments = []  # TODO: Collect from experimentsTreeWidget when implemented
+
+            # Save project
+            project_path = self.project_manager.save_project(
+                project_name,
+                Path(self._project_directory),
+                self._discovered_files_data,
+                experiments
+            )
+
+            self._show_info("Project Saved", f"Project saved to:\n{project_path}")
+            self._log_status_message(f"✓ Project saved: {project_name}", 3000)
+
+            # Update recent projects dropdown
+            self._populate_load_project_combo()
+
+        except Exception as e:
+            self._show_error("Save Failed", f"Failed to save project:\n{e}")
+            print(f"[project] Error saving: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def on_project_load(self, index):
+        """Load a project from recent projects list."""
+        if index <= 0:  # Skip the "Load Project..." placeholder
+            return
+
+        recent_projects = self.project_manager.get_recent_projects()
+        if index - 1 >= len(recent_projects):
+            return
+
+        project_info = recent_projects[index - 1]
+        project_path = Path(project_info['path'])
+
+        try:
+            # Try to load project
+            project_data = self.project_manager.load_project(project_path)
+
+        except FileNotFoundError:
+            # Project file was moved or deleted
+            response = self._ask_locate_project(project_info['name'], project_path)
+            if response == "locate":
+                # Ask user to locate the file
+                from PyQt6.QtWidgets import QFileDialog
+                new_path, _ = QFileDialog.getOpenFileName(
+                    self, "Locate Project File",
+                    str(project_path.parent),
+                    "PhysioMetrics Project (*.physiometrics)"
+                )
+                if not new_path:
+                    # Reset combo to placeholder
+                    self.loadProjectCombo.setCurrentIndex(0)
+                    return
+
+                new_path = Path(new_path)
+                try:
+                    # Load from new location
+                    project_data = self.project_manager.load_project(new_path)
+                    # Update path in recent projects
+                    self.project_manager.update_recent_project_path(project_path, new_path)
+                    self._populate_load_project_combo()
+                except Exception as e:
+                    self._show_error("Load Failed", f"Failed to load project:\n{e}")
+                    self.loadProjectCombo.setCurrentIndex(0)
+                    return
+            else:
+                # User cancelled
+                self.loadProjectCombo.setCurrentIndex(0)
+                return
+
+        except Exception as e:
+            self._show_error("Load Failed", f"Failed to load project:\n{e}")
+            self.loadProjectCombo.setCurrentIndex(0)
+            print(f"[project] Error loading: {e}")
+            import traceback
+            traceback.print_exc()
+            return
+
+        # Populate UI with loaded data
+        self._populate_ui_from_project(project_data)
+        self._log_status_message(f"✓ Loaded project: {project_data['project_name']}", 3000)
+
+        # Reset combo to placeholder after loading
+        self.loadProjectCombo.setCurrentIndex(0)
+
+    def _populate_load_project_combo(self):
+        """Populate the Load Project dropdown with recent projects."""
+        combo = self.loadProjectCombo
+        combo.blockSignals(True)  # Prevent triggering load during population
+        combo.clear()
+
+        # Add placeholder
+        combo.addItem("Load Project...")
+
+        # Add recent projects
+        recent_projects = self.project_manager.get_recent_projects()
+        for project_info in recent_projects:
+            combo.addItem(f"{project_info['name']}")
+
+        combo.blockSignals(False)
+
+    def _populate_ui_from_project(self, project_data):
+        """Populate UI with loaded project data."""
+        # Set project name and directory
+        self.projectNameEdit.setText(project_data['project_name'])
+        self._project_directory = str(project_data['data_directory'])
+        self.directoryPathEdit.setText(self._project_directory)
+
+        # Populate discovered files table
+        self._discovered_files_data = project_data['files']
+        table = self.discoveredFilesTable
+
+        # Disable updates for faster population
+        table.setUpdatesEnabled(False)
+        table.setRowCount(0)
+
+        # Count protocols and check if keywords need extraction
+        protocols = set()
+        need_keywords = any('keywords_display' not in f for f in self._discovered_files_data)
+
+        if need_keywords:
+            total_files = len(self._discovered_files_data)
+            # Show progress bar
+            self.projectProgressBar.setVisible(True)
+            self.projectProgressBar.setValue(0)
+            self.projectProgressBar.setFormat(f"Extracting keywords: 0/{total_files} (0%)")
+
+            self._log_status_message(f"Extracting path keywords for {total_files} files...", 0)
+            QApplication.processEvents()  # Update status message
+
+            # Extract keywords for files that don't have them
+            from core.fast_abf_reader import extract_path_keywords
+            base_dir = Path(self._project_directory)
+
+            for idx, file_data in enumerate(self._discovered_files_data):
+                if 'keywords_display' not in file_data:
+                    # Extract keywords
+                    file_path = file_data.get('file_path')
+                    if file_path and not Path(file_path).is_absolute():
+                        file_path = base_dir / file_path
+
+                    if file_path:
+                        path_info = extract_path_keywords(Path(file_path), base_dir)
+
+                        # Format keywords for display
+                        keywords_display = []
+                        if path_info['power_levels']:
+                            keywords_display.extend(path_info['power_levels'])
+                        if path_info['animal_ids']:
+                            keywords_display.extend([f"ID:{id}" for id in path_info['animal_ids']])
+                        if path_info['keywords']:
+                            keywords_display.extend(path_info['keywords'])
+
+                        file_data['path_keywords'] = path_info
+                        file_data['keywords_display'] = ', '.join(keywords_display) if keywords_display else ''
+
+                # Update progress every 50 files
+                if idx % 50 == 0 or idx == total_files - 1:
+                    progress_pct = int((idx + 1) / total_files * 100)
+                    self.projectProgressBar.setValue(progress_pct)
+                    self.projectProgressBar.setFormat(f"Extracting keywords: {idx + 1}/{total_files} ({progress_pct}%)")
+                    QApplication.processEvents()
+
+        # Show progress for table population
+        total_files = len(self._discovered_files_data)
+        self.projectProgressBar.setVisible(True)
+        self.projectProgressBar.setValue(0)
+        self.projectProgressBar.setFormat(f"Loading files: 0/{total_files} (0%)")
+        QApplication.processEvents()
+
+        # Populate table
+        for i, file_data in enumerate(self._discovered_files_data):
+            table.insertRow(i)
+            table.setItem(i, 0, QTableWidgetItem(file_data.get('file_name', '')))
+            table.setItem(i, 1, QTableWidgetItem(file_data.get('protocol', '')))
+            table.setItem(i, 2, QTableWidgetItem(str(file_data.get('channel_count', ''))))  # Channels
+            table.setItem(i, 3, QTableWidgetItem(file_data.get('keywords_display', '')))  # Path keywords
+            table.setItem(i, 4, QTableWidgetItem(''))  # Labels (manual tags)
+
+            file_size_mb = file_data.get('file_size_mb', 0)
+            table.setItem(i, 5, QTableWidgetItem(f"{file_size_mb:.2f}"))
+
+            if file_data.get('protocol'):
+                protocols.add(file_data['protocol'])
+
+            # Update progress every 50 files
+            if i % 50 == 0 or i == total_files - 1:
+                progress_pct = int((i + 1) / total_files * 100)
+                self.projectProgressBar.setValue(progress_pct)
+                self.projectProgressBar.setFormat(f"Loading files: {i + 1}/{total_files} ({progress_pct}%)")
+                QApplication.processEvents()
+
+        # Re-enable updates and resize
+        table.setUpdatesEnabled(True)
+        table.resizeColumnsToContents()
+
+        # Hide progress bar
+        self.projectProgressBar.setVisible(False)
+        self.projectProgressBar.setValue(0)
+
+        # Update summary
+        summary_text = f"Summary: {len(self._discovered_files_data)} ABF files | {len(protocols)} protocols"
+        self.summaryLabel.setText(summary_text)
+
+        # TODO: Load experiments when implemented
+        # self.experimentsTreeWidget.clear()
+        # for exp in project_data.get('experiments', []):
+        #     ...
+
+    def _ask_locate_project(self, project_name, expected_path):
+        """
+        Ask user if they want to locate a missing project file.
+
+        Returns:
+            "locate" if user wants to locate, "cancel" otherwise
+        """
+        from PyQt6.QtWidgets import QMessageBox
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Project Not Found")
+        msg.setText(f"Cannot find project '{project_name}'")
+        msg.setInformativeText(f"Expected location:\n{expected_path}\n\nWould you like to locate the project file?")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+
+        result = msg.exec()
+        if result == QMessageBox.StandardButton.Yes:
+            return "locate"
+        return "cancel"
 
 if __name__ == "__main__":
     from PyQt6.QtWidgets import QSplashScreen, QProgressBar, QVBoxLayout, QLabel, QWidget

@@ -52,12 +52,39 @@ class AppState:
     breath_by_sweep: Dict[int, Dict] = field(default_factory=dict)  # sweep -> {'onsets', 'offsets', 'expmins', 'expoffs'}
     sigh_by_sweep: Dict[int, np.ndarray] = field(default_factory=dict)  # sweep -> peak indices marked as sighs
 
-    # ML Training Data: ALL detected peaks with auto-labels
-    all_peaks_by_sweep: Dict[int, Dict] = field(default_factory=dict)  # sweep -> {'indices', 'labels', 'label_source', 'prominences'}
+    # ML Training Data: ALL detected peaks with labels
+    # Structure: sweep -> {
+    #   'indices': np.ndarray,              # Peak sample indices
+    #
+    #   # Breath vs Noise classification
+    #   'labels': np.ndarray,               # USER-EDITABLE labels (0=noise, 1=breath) - what gets displayed and edited
+    #   'label_source': np.ndarray,         # 'auto' or 'user' - tracks editing provenance
+    #   'labels_threshold_ro': np.ndarray,  # Read-only threshold predictions (for classifier switching)
+    #   'labels_xgboost_ro': np.ndarray,    # Read-only XGBoost predictions (for classifier switching)
+    #   'labels_rf_ro': np.ndarray,         # Read-only Random Forest predictions (for classifier switching)
+    #   'labels_mlp_ro': np.ndarray,        # Read-only MLP predictions (for classifier switching)
+    #
+    #   # Eupnea/Sniffing classification (only for breaths where labels==1)
+    #   'gmm_class': np.ndarray,            # USER-EDITABLE: -1=unclassified, 0=eupnea, 1=sniffing
+    #   'eupnea_sniff_source': np.ndarray,  # 'gmm', 'user_region', 'xgboost', etc.
+    #   'gmm_class_ro': np.ndarray,         # Read-only GMM predictions (for classifier switching)
+    #   'eupnea_sniff_xgboost_ro': np.ndarray,  # Read-only XGBoost predictions
+    #   'eupnea_sniff_rf_ro': np.ndarray,       # Read-only Random Forest predictions
+    #   'eupnea_sniff_mlp_ro': np.ndarray,      # Read-only MLP predictions
+    #
+    #   'prominences': np.ndarray,
+    # }
+    all_peaks_by_sweep: Dict[int, Dict] = field(default_factory=dict)
     all_breaths_by_sweep: Dict[int, Dict] = field(default_factory=dict)  # sweep -> {'onsets', 'offsets', 'expmins'} for ALL peaks (including noise)
     peak_metrics_by_sweep: Dict[int, List[Dict]] = field(default_factory=dict)  # sweep -> list of metric dicts for ORIGINAL auto-detected peaks (NEVER modified, for ML training)
     current_peak_metrics_by_sweep: Dict[int, List[Dict]] = field(default_factory=dict)  # sweep -> list of metric dicts for CURRENT edited peaks (for Y2 plotting, updated after edits)
     user_merge_decisions: Dict[int, List[Dict]] = field(default_factory=dict)  # sweep -> [{'peak1_idx', 'peak2_idx', 'kept_idx', 'removed_idx', 'timestamp'}] - tracks user merge decisions for ML training
+
+    # ML Models: Loaded models and their metadata
+    loaded_ml_models: Dict[str, Dict] = field(default_factory=dict)  # {'model1_xgboost': {'model': model_obj, 'metadata': {...}}, ...}
+    active_classifier: str = 'xgboost'  # Which classifier to use for display: 'threshold', 'xgboost', 'rf', 'mlp'
+    active_eupnea_sniff_classifier: str = 'xgboost'  # Which classifier for eupnea/sniff: 'gmm', 'xgboost', 'rf', 'mlp'
+    active_sigh_classifier: str = 'xgboost'  # Which classifier for sigh: 'manual', 'xgboost', 'rf', 'mlp'
     omitted_points: Dict[int, List[int]] = field(default_factory=dict)       # sweep -> sample idxs
     omitted_ranges: Dict[int, List[Tuple[int,int]]] = field(default_factory=dict)  # sweep -> [(i0,i1), ...]
     omitted_sweeps: set = field(default_factory=set)  # set of sweep indices to exclude

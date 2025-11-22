@@ -1451,9 +1451,29 @@ def compute_peak_candidate_metrics(y: np.ndarray,
             'te': float(te) if te is not None else None,
 
             # Probability metrics (from threshold model)
-            # Note: p_noise/p_breath are full-length arrays, sample at peak index
-            'p_noise': float(p_noise[pk_idx]) if p_noise is not None and pk_idx < len(p_noise) else None,
-            'p_breath': float(p_breath[pk_idx]) if p_breath is not None and pk_idx < len(p_breath) else None,
+            # Note: p_noise/p_breath are signal-length arrays, sample at peak index
+            'p_noise': (
+                float(p_noise[pk_idx])
+                if (p_noise is not None and pk_idx < len(p_noise) and not np.isnan(p_noise[pk_idx]))
+                else None
+            ),
+            'p_breath': (
+                float(p_breath[pk_idx])
+                if (p_breath is not None and pk_idx < len(p_breath) and not np.isnan(p_breath[pk_idx]))
+                else None
+            ),
+
+            # Edge case probability (uncertainty metric)
+            # p_edge = 4*p_noise*p_breath peaks at 1.0 when p_noise=0.5 (maximum uncertainty)
+            # Useful for identifying breaths near the classification boundary
+            'p_edge': (
+                float(4.0 * p_noise[pk_idx] * p_breath[pk_idx])
+                if (p_noise is not None and p_breath is not None and
+                    pk_idx < len(p_noise) and
+                    not np.isnan(p_noise[pk_idx]) and
+                    not np.isnan(p_breath[pk_idx]))
+                else None
+            ),
 
             # === NEIGHBOR COMPARISON FEATURES ===
 

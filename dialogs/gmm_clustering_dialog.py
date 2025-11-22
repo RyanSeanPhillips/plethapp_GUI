@@ -2182,9 +2182,13 @@ GMM is an unsupervised machine learning technique that automatically identifies 
             if all_peaks is None:
                 continue
 
-            # Initialize gmm_class array if it doesn't exist
+            # Initialize arrays if they don't exist
             if 'gmm_class' not in all_peaks:
                 all_peaks['gmm_class'] = np.full(len(all_peaks['indices']), -1, dtype=np.int8)
+            if 'gmm_class_ro' not in all_peaks:
+                all_peaks['gmm_class_ro'] = np.full(len(all_peaks['indices']), -1, dtype=np.int8)
+            if 'eupnea_sniff_source' not in all_peaks:
+                all_peaks['eupnea_sniff_source'] = np.array(['auto'] * len(all_peaks['indices']))
 
             # Find this peak in all_peaks_by_sweep
             peak_mask = all_peaks['indices'] == peak_sample_idx
@@ -2194,8 +2198,14 @@ GMM is an unsupervised machine learning technique that automatically identifies 
 
             # Get probability and classify
             sniff_prob = self.cluster_probabilities[i, self.sniffing_cluster_id]
-            gmm_class = 1 if sniff_prob >= confidence_threshold else 0
-            all_peaks['gmm_class'][peak_pos] = gmm_class
+            gmm_prediction = 1 if sniff_prob >= confidence_threshold else 0
+
+            # Store GMM prediction as read-only (for classifier switching)
+            all_peaks['gmm_class_ro'][peak_pos] = gmm_prediction
+
+            # Copy to user-editable array (will be used for display/export)
+            all_peaks['gmm_class'][peak_pos] = gmm_prediction
+            all_peaks['eupnea_sniff_source'][peak_pos] = 'gmm'
 
         # Collect all sniffing breaths (just breath indices, not time ranges yet)
         sniffing_breaths_by_sweep = {}  # sweep_idx -> list of breath indices

@@ -26,10 +26,13 @@ class ProminenceThresholdDialog(QDialog):
     """Interactive prominence threshold detection using Otsu's method."""
 
     def __init__(self, parent=None, y_data=None, sr_hz=None, current_prom=None, current_min_dist=None, current_height_threshold=None,
-                 percentile_cutoff=99, num_bins=200):
+                 percentile_cutoff=99, num_bins=200, skip_detection=False):
         super().__init__(parent)
         self.setWindowTitle("Auto-Detect Prominence Threshold")
         self.resize(1200, 700)  # 20% wider (1000 -> 1200)
+
+        # Store parent for later access
+        self.parent_ref = parent
 
         self.y_data = y_data
         self.sr_hz = sr_hz or 1000.0
@@ -73,8 +76,8 @@ class ProminenceThresholdDialog(QDialog):
 
         self._setup_ui()
 
-        # Detect peaks and calculate threshold
-        if y_data is not None and len(y_data) > 0:
+        # Detect peaks and calculate threshold (unless skip_detection=True for embedded display-only mode)
+        if not skip_detection and y_data is not None and len(y_data) > 0:
             self._detect_all_peaks()
             self._calculate_otsu_threshold()
 
@@ -180,7 +183,7 @@ class ProminenceThresholdDialog(QDialog):
         main_layout = QVBoxLayout(self)
 
         # Title and description
-        title = QLabel("<h2>Prominence Threshold Detection</h2>")
+        title = QLabel("<h2>Auto-Threshold Detection</h2>")
         main_layout.addWidget(title)
 
         desc = QLabel(
@@ -205,7 +208,7 @@ class ProminenceThresholdDialog(QDialog):
 
         # Threshold value row
         thresh_row = QHBoxLayout()
-        thresh_row.addWidget(QLabel("Optimal Prominence:"))
+        thresh_row.addWidget(QLabel("Optimal Threshold:"))
         self.lbl_threshold = QLabel("Calculating...")
         self.lbl_threshold.setStyleSheet("font-weight: bold; font-size: 14pt; color: #2a7fff;")
         thresh_row.addWidget(self.lbl_threshold)
@@ -254,6 +257,47 @@ class ProminenceThresholdDialog(QDialog):
 
         params_group.setLayout(params_layout)
         left_layout.addWidget(params_group)
+
+        # Classifier Selection (if state is available)
+        if hasattr(self.parent_ref, 'state') and self.parent_ref.state is not None:
+            classifier_group = QGroupBox("Breath Classifier")
+            classifier_layout = QVBoxLayout()
+
+            classifier_row = QHBoxLayout()
+            classifier_row.addWidget(QLabel("Algorithm:"))
+
+            from PyQt6.QtWidgets import QComboBox
+            self.classifier_combo = QComboBox()
+            self.classifier_combo.addItems(["Threshold", "XGBoost", "Random Forest", "MLP"])
+
+            # Set current selection based on state
+            if self.parent_ref.state.active_classifier == 'threshold':
+                self.classifier_combo.setCurrentText("Threshold")
+            elif self.parent_ref.state.active_classifier == 'xgboost':
+                self.classifier_combo.setCurrentText("XGBoost")
+            elif self.parent_ref.state.active_classifier == 'rf':
+                self.classifier_combo.setCurrentText("Random Forest")
+            elif self.parent_ref.state.active_classifier == 'mlp':
+                self.classifier_combo.setCurrentText("MLP")
+
+            self.classifier_combo.setToolTip("Select which classifier to use for breath detection")
+            self.classifier_combo.currentTextChanged.connect(lambda text: self._on_classifier_changed(text, self.parent_ref))
+            self.classifier_combo.setMaximumWidth(150)
+            classifier_row.addWidget(self.classifier_combo)
+            classifier_row.addStretch()
+            classifier_layout.addLayout(classifier_row)
+
+            # Status label for ML models
+            self.lbl_classifier_status = QLabel()
+            self.lbl_classifier_status.setWordWrap(True)
+            self.lbl_classifier_status.setStyleSheet("font-size: 9pt; color: #888;")
+            self._update_classifier_status(self.parent_ref)
+            classifier_layout.addWidget(self.lbl_classifier_status)
+
+            classifier_group.setLayout(classifier_layout)
+            left_layout.addWidget(classifier_group)
+        else:
+            self.classifier_combo = None
 
         # Histogram controls
         histogram_controls_group = QGroupBox("Histogram Controls")
@@ -868,6 +912,60 @@ class ProminenceThresholdDialog(QDialog):
 
         # Redraw plot with new y2 axis
         self._plot_histogram()
+
+    def _on_classifier_changed(self, text, parent):
+        """Handle classifier selection change."""
+        # Map display text to internal classifier name
+        classifier_map = {
+            "Threshold": "threshold",
+            "XGBoost": "xgboost",
+            "Random Forest": "rf",
+            "MLP": "mlp"
+        }
+
+        new_classifier = classifier_map.get(text, "threshold")
+
+        # Update state
+        if parent and hasattr(parent, 'state'):
+            parent.state.active_classifier = new_classifier
+            print(f"[Classifier] Switched to: {new_classifier}")
+
+            # Update status label
+            self._update_classifier_status(parent)
+
+            # Trigger re-plot in parent if available
+            if hasattr(parent, 'plot_current_data'):
+                parent.plot_current_data()
+
+    def _update_classifier_status(self, parent):
+        """Update the classifier status label."""
+        if not hasattr(self, 'lbl_classifier_status'):
+            return
+
+        if not parent or not hasattr(parent, 'state'):
+            self.lbl_classifier_status.setText("")
+            return
+
+        state = parent.state
+
+        if state.active_classifier == 'threshold':
+            self.lbl_classifier_status.setText("Using amplitude-based threshold")
+            self.lbl_classifier_status.setStyleSheet("font-size: 9pt; color: #888;")
+        else:
+            # Check if ML models are loaded
+            if state.loaded_ml_models:
+                model_key = f'model1_{state.active_classifier}'
+                if model_key in state.loaded_ml_models:
+                    metadata = state.loaded_ml_models[model_key]['metadata']
+                    accuracy = metadata.get('test_accuracy', 0)
+                    self.lbl_classifier_status.setText(f"ML model loaded ({accuracy:.1%} accuracy)")
+                    self.lbl_classifier_status.setStyleSheet("font-size: 9pt; color: #4ec9b0;")
+                else:
+                    self.lbl_classifier_status.setText(f"No {state.active_classifier.upper()} models loaded")
+                    self.lbl_classifier_status.setStyleSheet("font-size: 9pt; color: #ce9178;")
+            else:
+                self.lbl_classifier_status.setText("No ML models loaded")
+                self.lbl_classifier_status.setStyleSheet("font-size: 9pt; color: #ce9178;")
 
     def _plot_histogram(self):
         """Plot peak height histogram with draggable threshold lines."""

@@ -403,11 +403,11 @@ class EditingModes:
                     self.window.MergeBreathsButton.blockSignals(False)
                     self.window.MergeBreathsButton.setText("Merge Breaths")
 
-            self.window.addPeaksButton.setText("Add Peaks (ON) [Shift=Del, Ctrl=Sigh]")
+            self.window.addPeaksButton.setText("Toggle Breath (ON) [Right-click=Sigh]")
             self.window.plot_host.set_click_callback(self._on_plot_click_add_peak)
             self.window.plot_host.setCursor(Qt.CursorShape.CrossCursor)
         else:
-            self.window.addPeaksButton.setText("Add Peaks")
+            self.window.addPeaksButton.setText("Toggle Breath")
             if not getattr(self, "_delete_peaks_mode", False) and not getattr(self, "_add_sigh_mode", False):
                 self.window.plot_host.clear_click_callback()
                 self.window.plot_host.setCursor(Qt.CursorShape.ArrowCursor)
@@ -471,19 +471,18 @@ class EditingModes:
         if event.inaxes is None or xdata is None:
             return
 
-        # Check for modifier keys (but not if we're already in force mode to prevent recursion)
+        # Check for right-click or modifier keys (but not if we're already in force mode to prevent recursion)
         if _force_mode is None:
-            modifiers = QApplication.keyboardModifiers()
-            shift_held = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
-            ctrl_held = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
-
-            # Shift toggles to delete mode
-            if shift_held:
-                self._on_plot_click_delete_peak(xdata, ydata, event, _force_mode='delete')
+            # Right-click (button 3) toggles sigh
+            if hasattr(event, 'button') and event.button == 3:
+                self._on_plot_click_add_sigh(xdata, ydata, event, _force_mode='sigh')
                 return
 
-            # Ctrl switches to add sigh mode
-            if ctrl_held:
+            modifiers = QApplication.keyboardModifiers()
+            shift_held = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+
+            # Shift also switches to toggle sigh mode (alternative to right-click)
+            if shift_held:
                 self._on_plot_click_add_sigh(xdata, ydata, event, _force_mode='sigh')
                 return
 
@@ -538,21 +537,22 @@ class EditingModes:
                 QTimer.singleShot(2100, lambda: self.window._log_status_message("⚠️ Eupnea/sniffing detection out of date"))
             return
 
-        # Check current label
+        # Check current label and toggle it
         current_label = all_peaks['labels'][closest_idx]
 
         if current_label == 1:
-            # Peak is already labeled as a breath
-            print(f"[add-peak] Peak at {closest_peak_idx} is already labeled as breath")
-            self.window._log_status_message("✗ Peak already labeled as breath", 2000)
-            if getattr(self.window, 'eupnea_sniffing_out_of_date', False):
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(2100, lambda: self.window._log_status_message("⚠️ Eupnea/sniffing detection out of date"))
-            return
+            # Peak is currently a breath - toggle to noise (delete)
+            new_label = 0
+            action = "removed"
+            print(f"[toggle-breath] Toggling peak at sample {closest_peak_idx} from breath to noise (delete)")
+        else:
+            # Peak is currently noise - toggle to breath (add)
+            new_label = 1
+            action = "added"
+            print(f"[toggle-breath] Toggling peak at sample {closest_peak_idx} from noise to breath (add)")
 
-        # Toggle label from 0 (noise) to 1 (breath)
-        print(f"[add-peak] Toggling peak at sample {closest_peak_idx} from noise to breath")
-        self._toggle_peak_label(s, closest_peak_idx, new_label=1)
+        # Toggle the label
+        self._toggle_peak_label(s, closest_peak_idx, new_label=new_label)
 
         # Re-derive peaks_by_sweep from labels
         self._update_peaks_by_sweep_from_labels(s)
@@ -569,10 +569,9 @@ class EditingModes:
         if hasattr(st, 'current_peak_metrics_by_sweep'):
             try:
                 import core.metrics as metrics_mod
-                p_noise_all = metrics_mod.compute_p_noise(y, pks_new, st.sr_hz)
-                p_breath_all = 1.0 - p_noise_all if p_noise_all is not None else None
+                p_noise_all, p_breath_all = metrics_mod.compute_p_noise_p_breath_for_peaks(y, pks_new)
             except Exception as e:
-                print(f"[add-peak] Could not compute p_noise: {e}")
+                print(f"[add-peak] Could not compute p_noise/p_breath: {e}")
                 p_noise_all = None
                 p_breath_all = None
 
@@ -589,12 +588,13 @@ class EditingModes:
 
         # Log telemetry: manual edit
         from core import telemetry
-        telemetry.log_edit('add_peak',
+        telemetry_event = 'add_peak' if action == 'added' else 'delete_peak'
+        telemetry.log_edit(telemetry_event,
                           num_peaks_after=len(pks_new),
                           sweep_index=s)
 
         # Show success message
-        self.window._log_status_message("✓ Peak added", 1500)
+        self.window._log_status_message(f"✓ Peak {action}", 1500)
 
         # Recompute Y2 metric if selected
         if getattr(st, "y2_metric_key", None):
@@ -772,10 +772,9 @@ class EditingModes:
         if hasattr(st, 'current_peak_metrics_by_sweep'):
             try:
                 import core.metrics as metrics_mod
-                p_noise_all = metrics_mod.compute_p_noise(y, pks_new, st.sr_hz)
-                p_breath_all = 1.0 - p_noise_all if p_noise_all is not None else None
+                p_noise_all, p_breath_all = metrics_mod.compute_p_noise_p_breath_for_peaks(y, pks_new)
             except Exception as e:
-                print(f"[delete-peak] Could not compute p_noise: {e}")
+                print(f"[delete-peak] Could not compute p_noise/p_breath: {e}")
                 p_noise_all = None
                 p_breath_all = None
 
@@ -925,6 +924,25 @@ class EditingModes:
             print(f"[sigh] Added sigh at peak index {i_nearest_peak} (t={t_plot[i_nearest_peak]:.3f}s)")
 
         st.sigh_by_sweep[s] = np.array(sorted(current), dtype=int)
+
+        # Also update sigh_class and sigh_manual_ro arrays to keep them in sync
+        if s in st.all_peaks_by_sweep:
+            all_peaks = st.all_peaks_by_sweep[s]
+            if 'sigh_class' in all_peaks and 'indices' in all_peaks:
+                # Find the peak in the indices array
+                peak_mask = all_peaks['indices'] == i_nearest_peak
+                if np.any(peak_mask):
+                    # Toggle in sigh_class array
+                    if all_peaks['sigh_class'][peak_mask][0] == 1:
+                        all_peaks['sigh_class'][peak_mask] = 0  # Remove sigh label
+                    else:
+                        all_peaks['sigh_class'][peak_mask] = 1  # Add sigh label
+
+                    # Also update sigh_manual_ro to preserve this manual annotation
+                    if 'sigh_manual_ro' in all_peaks:
+                        all_peaks['sigh_manual_ro'][peak_mask] = all_peaks['sigh_class'][peak_mask]
+
+                    print(f"[sigh] Updated sigh_class and sigh_manual_ro for peak {i_nearest_peak}")
 
         # Redraw to see star(s)
         self.window.redraw_main_plot()
@@ -2701,10 +2719,9 @@ class EditingModes:
         if hasattr(st, 'current_peak_metrics_by_sweep'):
             try:
                 import core.metrics as metrics_mod
-                p_noise_all = metrics_mod.compute_p_noise(y, pks_new, st.sr_hz)
-                p_breath_all = 1.0 - p_noise_all if p_noise_all is not None else None
+                p_noise_all, p_breath_all = metrics_mod.compute_p_noise_p_breath_for_peaks(y, pks_new)
             except Exception as e:
-                print(f"[merge-peaks] Could not compute p_noise: {e}")
+                print(f"[merge-peaks] Could not compute p_noise/p_breath: {e}")
                 p_noise_all = None
                 p_breath_all = None
 
